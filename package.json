@@ -1,0 +1,17 @@
+{
+  "name": "sdr-platform",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --names \"BACK,FRONT\" --prefix-colors \"cyan,magenta\" \"npm run dev --prefix backend\" \"wait-on tcp:5000 && npm run dev --prefix frontend\"",
+    "dev:back": "npm run dev --prefix backend",
+    "dev:front": "npm run dev --prefix frontend"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.108.1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "wait-on": "^9.0.10"
+  }
+}
