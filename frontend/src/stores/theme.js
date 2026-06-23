@@ -11,14 +11,14 @@ export const useThemeStore = defineStore('theme', () => {
   function apply(key) {
     if (!THEMES[key]) return
     applyTheme(key)
-    vuetify.theme.global.name.value = key
+    vuetify.theme.change(key)
     current.value = key
     localStorage.setItem(STORAGE_KEY, key)
   }
 
   function init() {
     applyTheme(current.value)
-    vuetify.theme.global.name.value = current.value
+    vuetify.theme.change(current.value)
   }
 
   return { current, apply, init }

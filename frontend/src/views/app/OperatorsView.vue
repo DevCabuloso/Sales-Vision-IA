@@ -107,7 +107,7 @@
         <v-card-text>
           <v-row dense>
             <v-col cols="12" sm="6"><v-text-field v-model="editForm.name" label="Nome *" /></v-col>
-            <v-col cols="12" sm="6"><v-text-field v-model="editForm.email" label="Email *" type="email" :disabled="editMode" /></v-col>
+            <v-col cols="12" sm="6"><v-text-field v-model="editForm.email" label="Email *" type="email" /></v-col>
             <v-col v-if="!editMode" cols="12" sm="6">
               <v-text-field v-model="editForm.password" label="Senha *" :type="showPass ? 'text' : 'password'" :append-inner-icon="showPass ? 'mdi-eye-off' : 'mdi-eye'" @click:append-inner="showPass = !showPass" />
             </v-col>

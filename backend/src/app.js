@@ -18,6 +18,7 @@ import { contactsRouter } from './routes/contacts.js'
 import { labelsRouter } from './routes/labels.js'
 import { queuesRouter } from './routes/queues.js'
 import { businessHoursRouter } from './routes/business-hours.js'
+import { internalGroupsRouter } from './routes/internal-groups.js'
 
 export function createApp() {
   const app = express()
@@ -51,6 +52,7 @@ export function createApp() {
   app.use('/api/labels', labelsRouter)
   app.use('/api/queues', queuesRouter)
   app.use('/api/business-hours', businessHoursRouter)
+  app.use('/api/internal-groups', internalGroupsRouter)
   app.use('/webhooks', webhooksRouter)
 
   // 404

@@ -126,6 +126,12 @@ operatorsRouter.patch('/:id', requireAdmin, async (req, res) => {
     const update = { ...partial.data }
     if (update.role === 'admin') update.permissions = DEFAULT_PERMISSIONS
 
+    if (update.email) {
+      update.email = update.email.toLowerCase()
+      const existing = await supabase.from('users').select('id').eq('email', update.email).neq('id', req.params.id).limit(1)
+      if (existing.data?.length) return res.status(409).json({ error: 'Este e-mail já está em uso.' })
+    }
+
     const row = unwrap(
       await supabase.from('users').update(update)
         .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)

@@ -18,6 +18,7 @@ const routes = [
       { path: 'kanban',      name: 'kanban',       component: () => import('@/views/app/KanbanView.vue') },
       { path: 'chat',        name: 'chat',         component: () => import('@/views/app/ChatView.vue') },
       { path: 'chat/:id',    name: 'chat-lead',    component: () => import('@/views/app/ChatView.vue'), props: true },
+      { path: 'grupos',      name: 'grupos',       component: () => import('@/views/app/InternalGroupsView.vue') },
       { path: 'leads',       name: 'leads',        component: () => import('@/views/app/LeadsView.vue') },
       { path: 'agenda',      name: 'agenda',       component: () => import('@/views/app/AgendaView.vue') },
       { path: 'templates',   name: 'templates',    component: () => import('@/views/app/TemplatesView.vue') },

@@ -77,19 +77,63 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
 
 /**
  * Extrai mensagem de um webhook da Evolution (evento messages.upsert).
- * Retorna { from, text } ou null.
+ * Retorna { from, text, mediaType, instanceName } ou null.
  */
 export function parseWebhook(body) {
-  const data = body?.data || body
+  // Evolution v2 envia body.event; só processa mensagens recebidas
+  const event = body?.event
+  if (event && event !== 'messages.upsert') return null
+
+  const instanceName = body?.instance || body?.instanceName || null
+
+  // suporte a payload v2 (body.data) e legado (body direto); data pode ser array
+  const dataRaw = body?.data || body
+  const data = Array.isArray(dataRaw) ? dataRaw[0] : dataRaw
+
+  console.log('[evolution.parseWebhook] data keys:', Object.keys(data || {}).join(', '), '| fromMe:', data?.key?.fromMe, '| remoteJid:', data?.key?.remoteJid)
+
   const remoteJid = data?.key?.remoteJid
-  if (!remoteJid || data?.key?.fromMe) return null
-  // ignora mensagens de grupos (@g.us) e broadcasts (@broadcast)
+  if (!remoteJid) {
+    console.warn('[evolution.parseWebhook] sem remoteJid, descartando. body.data type:', Array.isArray(body?.data) ? 'array' : typeof body?.data)
+    return null
+  }
+  // descarta mensagens de grupos/broadcasts
   if (remoteJid.endsWith('@g.us') || remoteJid.endsWith('@broadcast')) return null
+
+  const fromMe = data?.key?.fromMe === true
+
+  const msg = data?.message || {}
+
+  // extrai texto cobrindo todos os tipos comuns da Evolution v2
   const text =
-    data?.message?.conversation ||
-    data?.message?.extendedTextMessage?.text ||
+    msg.conversation ||
+    msg.extendedTextMessage?.text ||
+    msg.imageMessage?.caption ||
+    msg.videoMessage?.caption ||
+    msg.documentMessage?.caption ||
+    msg.documentWithCaptionMessage?.message?.documentMessage?.caption ||
+    msg.buttonsResponseMessage?.selectedDisplayText ||
+    msg.listResponseMessage?.title ||
+    msg.templateButtonReplyMessage?.selectedDisplayText ||
+    msg.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
     ''
-  if (!text) return null
+
+  // tipo de mídia para registro
+  let mediaType = null
+  if (msg.imageMessage)    mediaType = 'image'
+  else if (msg.videoMessage)    mediaType = 'video'
+  else if (msg.audioMessage || msg.pttMessage) mediaType = 'audio'
+  else if (msg.documentMessage || msg.documentWithCaptionMessage) mediaType = 'document'
+  else if (msg.stickerMessage) mediaType = 'sticker'
+
+  // descarta se não há texto nem mídia reconhecida
+  if (!text && !mediaType) {
+    console.warn('[evolution.parseWebhook] mensagem sem texto/mídia reconhecida, tipo:', Object.keys(msg).join(', ') || '(vazio)')
+    return null
+  }
+
   const from = remoteJid.split('@')[0]
-  return { from, text }
+  const pushName = data?.pushName || null
+  const finalText = text || `[${mediaType || 'mensagem'}]`
+  return { from, text: finalText, mediaType, instanceName, fromMe, pushName }
 }

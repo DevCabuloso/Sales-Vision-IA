@@ -153,8 +153,9 @@ export async function listEvents(tenantId, { timeMin, timeMax, maxResults = 50 }
   return (data.items || []).map((e) => ({
     externalId: e.id,
     title: e.summary,
-    start: e.start?.dateTime || e.start?.date,
-    end: e.end?.dateTime || e.end?.date,
+    // bare date (all-day) → append T12:00:00 so JS parses as local noon, not UTC midnight
+    start: e.start?.dateTime || (e.start?.date ? e.start.date + 'T12:00:00' : null),
+    end:   e.end?.dateTime   || (e.end?.date   ? e.end.date   + 'T12:00:00' : null),
     meetingLink: e.hangoutLink || null,
     status: e.status,
   }));

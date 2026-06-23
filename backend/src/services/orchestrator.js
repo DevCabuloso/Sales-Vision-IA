@@ -8,21 +8,69 @@ import { isWithinBusinessHours, getOffMessage } from '../routes/business-hours.j
 /**
  * Processa uma mensagem recebida de um lead via WhatsApp.
  */
-export async function handleInboundMessage({ tenantId, from, text, provider }) {
+export async function handleInboundMessage({ tenantId, from, text, provider, instanceName, pushName }) {
+  // resolve channel_id pelo instance_name (se disponível)
+  let channelId = null
+  if (instanceName) {
+    try {
+      const chRows = unwrap(
+        await supabase.from('channels').select('id')
+          .eq('tenant_id', tenantId).eq('instance_name', instanceName).limit(1)
+      )
+      channelId = chRows?.[0]?.id || null
+    } catch { /* ignora */ }
+  }
+
   // 1) lead (upsert por telefone)
+  const upsertPayload = { tenant_id: tenantId, phone: from, name: pushName || from, updated_at: new Date().toISOString() }
+  if (channelId) upsertPayload.channel_id = channelId
+
   const lead = unwrap(
     await supabase.from('leads').upsert(
-      { tenant_id: tenantId, phone: from, name: from, updated_at: new Date().toISOString() },
+      upsertPayload,
       { onConflict: 'tenant_id,phone', ignoreDuplicates: false }
-    ).select('id, name, conversation_status').single()
+    ).select('id, name, assigned_to, conversation_status').single()
   )
 
-  // se estava resolvido, reabre como pendente
+  // atualiza o nome se ainda é o número e agora temos o pushName
+  if (pushName && lead.name === from) {
+    await supabase.from('leads').update({ name: pushName }).eq('id', lead.id)
+    lead.name = pushName
+  }
+
+  // garante channel_id atualizado se lead já existia
+  if (channelId) {
+    await supabase.from('leads').update({ channel_id: channelId }).eq('id', lead.id).neq('channel_id', channelId)
+  }
+
+  // auto-atribuição: se o canal tem usuário ou fila definidos, aplica ao lead
+  if (channelId) {
+    try {
+      const chRows = unwrap(
+        await supabase.from('channels').select('assigned_user_id, assigned_queue_id')
+          .eq('id', channelId).limit(1)
+      )
+      const ch = chRows?.[0]
+      if (ch?.assigned_user_id && !lead.assigned_to) {
+        await supabase.from('leads').update({ assigned_to: ch.assigned_user_id }).eq('id', lead.id)
+      }
+      if (ch?.assigned_queue_id && !lead.queue_id) {
+        await supabase.from('leads').update({ queue_id: ch.assigned_queue_id }).eq('id', lead.id)
+      }
+    } catch { /* ignora */ }
+  }
+
+  // se estava resolvido, reabre como pendente e marca o início da nova conversa
   if (lead.conversation_status === 'resolved') {
     await supabase.from('leads')
       .update({ conversation_status: 'pending', updated_at: new Date().toISOString() })
       .eq('id', lead.id)
     lead.conversation_status = 'pending'
+    // separador visual no histórico
+    await supabase.from('messages').insert({
+      tenant_id: tenantId, lead_id: lead.id, role: 'system',
+      text: '— Nova conversa iniciada —', provider,
+    })
   } else if (!lead.conversation_status) {
     await supabase.from('leads')
       .update({ conversation_status: 'pending' })
@@ -111,4 +159,39 @@ export async function handleInboundMessage({ tenantId, from, text, provider }) {
     .catch((e) => console.warn('[orchestrator] análise:', e.message))
 
   return { reply, scheduled }
+}
+
+/**
+ * Registra uma mensagem enviada diretamente pelo WhatsApp (fromMe=true).
+ * Salva como mensagem do operador sem acionar a IA.
+ */
+export async function handleOutboundMessage({ tenantId, to, text, provider, instanceName }) {
+  let channelId = null
+  if (instanceName) {
+    try {
+      const chRows = unwrap(
+        await supabase.from('channels').select('id')
+          .eq('tenant_id', tenantId).eq('instance_name', instanceName).limit(1)
+      )
+      channelId = chRows?.[0]?.id || null
+    } catch { /* ignora */ }
+  }
+
+  const upsertPayload = { tenant_id: tenantId, phone: to, name: to, updated_at: new Date().toISOString() }
+  if (channelId) upsertPayload.channel_id = channelId
+
+  const lead = unwrap(
+    await supabase.from('leads').upsert(
+      upsertPayload,
+      { onConflict: 'tenant_id,phone', ignoreDuplicates: false }
+    ).select('id').single()
+  )
+
+  await supabase.from('messages').insert({
+    tenant_id: tenantId,
+    lead_id: lead.id,
+    role: 'agent',
+    text,
+    provider,
+  })
 }

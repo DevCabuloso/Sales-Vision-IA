@@ -14,7 +14,7 @@ export async function requireAuth(req, res, next) {
     const payload = verifyToken(token)
     const rows = unwrap(
       await supabase.from('users')
-        .select('id, tenant_id, email, role, active')
+        .select('id, tenant_id, email, name, role, active')
         .eq('id', payload.sub)
         .limit(1)
     )
@@ -22,7 +22,7 @@ export async function requireAuth(req, res, next) {
     if (!u || !u.active) {
       return res.status(401).json({ error: 'Usuário inválido ou inativo.' })
     }
-    req.user = { id: u.id, role: u.role, tenantId: u.tenant_id, email: u.email }
+    req.user = { id: u.id, role: u.role, tenantId: u.tenant_id, email: u.email, name: u.name || u.email }
     next()
   } catch {
     return res.status(401).json({ error: 'Token inválido ou expirado.' })

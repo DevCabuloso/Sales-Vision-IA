@@ -5,20 +5,171 @@
       <div class="sidebar-header px-3 pt-3 pb-2">
         <div class="d-flex align-center justify-space-between mb-3">
           <span class="text-subtitle-1 font-weight-bold">Atendimentos</span>
-          <div class="d-flex ga-1">
-            <v-btn icon size="small" variant="text" :loading="loading" @click="loadConvs">
-              <v-icon icon="mdi-refresh" size="17" />
-            </v-btn>
-            <v-btn icon size="small" variant="text" @click="showFilters = !showFilters">
-              <v-badge v-if="activeFiltersCount" :content="activeFiltersCount" color="primary" floating>
-                <v-icon icon="mdi-filter-outline" size="17" />
-              </v-badge>
-              <v-icon v-else icon="mdi-filter-outline" size="17" />
-            </v-btn>
-            <v-btn icon size="small" variant="text" color="primary" @click="startDialog = true">
-              <v-tooltip activator="parent" location="bottom">Iniciar conversa avulsa</v-tooltip>
-              <v-icon icon="mdi-message-plus-outline" size="17" />
-            </v-btn>
+          <div class="d-flex ga-2 align-center">
+            <!-- Filtros dropdown -->
+            <v-menu location="bottom end" :close-on-content-click="false" max-height="480">
+              <template #activator="{ props }">
+                <v-btn
+                  v-bind="props"
+                  size="x-small" variant="outlined"
+                  :color="activeFiltersCount ? 'primary' : undefined"
+                  prepend-icon="mdi-tune-variant"
+                  style="text-transform:none; font-size:11px; height:26px"
+                >
+                  Filtros
+                  <span v-if="activeFiltersCount" class="filter-badge-count">{{ activeFiltersCount }}</span>
+                </v-btn>
+              </template>
+
+              <v-card
+                class="filter-dropdown-card"
+                width="268"
+                elevation="0"
+                style="background:rgb(var(--v-theme-surface));border:1px solid rgba(255,255,255,0.10);border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.55)"
+              >
+                <div class="fp-header">
+                  <span class="fp-title">Filtros</span>
+                  <v-btn size="x-small" variant="text" color="error" @click="clearFilters">Limpar tudo</v-btn>
+                </div>
+
+                <div class="fp-body">
+                  <!-- Visualização -->
+                  <div class="fp-item" @click="filterShowAll = !filterShowAll">
+                    <div class="fp-check" :class="{ checked: filterShowAll }" />
+                    <v-icon icon="mdi-eye-outline" size="15" style="opacity:.6; flex-shrink:0" />
+                    <span>Mostrar todos</span>
+                  </div>
+                  <div class="fp-item" @click="filterOnlyUnread = !filterOnlyUnread">
+                    <div class="fp-check" :class="{ checked: filterOnlyUnread }" />
+                    <v-icon icon="mdi-email-outline" size="15" style="opacity:.6; flex-shrink:0" />
+                    <span>Somente não lidos</span>
+                  </div>
+                  <div class="fp-item" @click="filterInvertOrder = !filterInvertOrder">
+                    <div class="fp-check" :class="{ checked: filterInvertOrder }" />
+                    <v-icon icon="mdi-swap-vertical" size="15" style="opacity:.6; flex-shrink:0" />
+                    <span>Inverter ordem geral</span>
+                  </div>
+
+                  <div class="fp-sep" />
+
+                  <!-- Status -->
+                  <div class="fp-section-label">STATUS</div>
+                  <div v-for="s in ['open','pending','resolved']" :key="s" class="fp-item" @click="toggleFilterStatus(s)">
+                    <div class="fp-check" :class="{ checked: filterStatuses.includes(s) }" />
+                    <span>{{ { open: 'Abertos', pending: 'Pendentes', resolved: 'Fechados' }[s] }}</span>
+                  </div>
+
+                  <div class="fp-sep" />
+
+                  <!-- Período -->
+                  <div class="fp-section-label">PERÍODO</div>
+                  <div class="fp-date-row">
+                    <span class="fp-date-label">De</span>
+                    <input type="date" v-model="filterDateFrom" class="fp-date-input" />
+                  </div>
+                  <div class="fp-date-row">
+                    <span class="fp-date-label">Até</span>
+                    <input type="date" v-model="filterDateTo" class="fp-date-input" />
+                  </div>
+
+                  <div class="fp-sep" />
+
+                  <!-- Filas -->
+                  <div class="fp-section-label">FILAS</div>
+                  <div v-for="stage in stageOptions" :key="stage" class="fp-item" @click="toggleFilterStage(stage)">
+                    <div class="fp-check" :class="{ checked: filterStages.includes(stage) }" />
+                    <span class="fp-dot" :style="{ background: stageColorHex(stage) }" />
+                    <span>{{ stage }}</span>
+                  </div>
+
+                  <div class="fp-sep" />
+
+                  <!-- Conexões -->
+                  <div class="fp-section-label">CONEXÕES</div>
+                  <div v-if="channelOptions.length">
+                    <div v-for="ch in channelOptions" :key="ch" class="fp-item" @click="toggleFilterChannel(ch)">
+                      <div class="fp-check" :class="{ checked: filterChannels.includes(ch) }" />
+                      <span>{{ ch }}</span>
+                    </div>
+                  </div>
+                  <div v-else class="fp-empty">Nenhuma conexão encontrada</div>
+
+                  <div class="fp-sep" />
+
+                  <!-- Usuário -->
+                  <div class="fp-section-label">USUÁRIO</div>
+                  <div class="px-3 pb-2">
+                    <v-select
+                      v-model="filterOperator"
+                      :items="[{ id: null, label: 'Todos' }, ...operatorOptions]"
+                      item-title="label" item-value="id"
+                      variant="outlined" density="compact" hide-details
+                    />
+                  </div>
+
+                  <div class="fp-sep" />
+
+                  <!-- Etiqueta -->
+                  <div class="fp-section-label">ETIQUETA</div>
+                  <div class="px-3 pb-2">
+                    <v-select
+                      v-model="filterLabel"
+                      :items="[{ title: 'Nenhuma', value: null }, ...labelOptions]"
+                      variant="outlined" density="compact" hide-details
+                    />
+                  </div>
+
+                  <div class="fp-sep" />
+
+                  <!-- Kanban -->
+                  <div class="fp-section-label">KANBAN</div>
+                  <div class="px-3 pb-3">
+                    <v-select
+                      v-model="filterKanban"
+                      :items="[{ title: 'Nenhuma', value: null }, ...stageOptions.map(s => ({ title: s, value: s }))]"
+                      variant="outlined" density="compact" hide-details
+                    />
+                  </div>
+                </div>
+              </v-card>
+            </v-menu>
+
+            <!-- Ações dropdown -->
+            <v-menu location="bottom end">
+              <template #activator="{ props }">
+                <v-btn
+                  v-bind="props"
+                  size="x-small" variant="outlined"
+                  prepend-icon="mdi-dots-horizontal"
+                  style="text-transform:none; font-size:11px; height:26px"
+                >Ações</v-btn>
+              </template>
+              <v-list
+                density="compact"
+                min-width="220"
+                class="py-1"
+                elevation="0"
+                style="background:rgb(var(--v-theme-surface));border:1px solid rgba(255,255,255,0.10);border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.55)"
+              >
+                <v-list-item
+                  :prepend-icon="selectMode ? 'mdi-checkbox-multiple-marked-outline' : 'mdi-checkbox-multiple-outline'"
+                  :title="selectMode ? 'Desativar seleção' : 'Selecionar múltiplos'"
+                  @click="toggleSelectMode"
+                />
+                <v-list-item
+                  prepend-icon="mdi-message-plus-outline"
+                  title="Iniciar conversa avulsa"
+                  @click="startDialog = true"
+                />
+                <v-list-item
+                  :prepend-icon="sortByUnread ? 'mdi-sort-clock-ascending-outline' : 'mdi-sort-descending'"
+                  :title="sortByUnread ? 'Ordem padrão' : 'Organizar por não respondido'"
+                  @click="sortByUnread = !sortByUnread"
+                />
+                <v-divider class="my-1" />
+                <v-list-item prepend-icon="mdi-refresh" title="Atualizar" @click="loadConvs" />
+              </v-list>
+            </v-menu>
           </div>
         </div>
 
@@ -33,16 +184,14 @@
           class="mb-2"
         />
 
-        <div v-if="showFilters" class="filter-panel mb-2">
-          <v-select v-model="filterStage" :items="stageOptions" label="Estágio Kanban" variant="outlined" density="compact" hide-details clearable class="mb-2" />
-          <v-select v-model="filterOperator" :items="operatorOptions" item-title="label" item-value="id" label="Operador" variant="outlined" density="compact" hide-details clearable />
-        </div>
-
-        <div v-if="filterStage || filterOperator" class="d-flex flex-wrap ga-1 mb-2">
-          <v-chip v-if="filterStage" size="x-small" closable color="primary" variant="tonal" @click:close="filterStage = null">{{ filterStage }}</v-chip>
-          <v-chip v-if="filterOperator" size="x-small" closable color="primary" variant="tonal" @click:close="filterOperator = null">
-            {{ operatorOptions.find(o => o.id === filterOperator)?.label }}
-          </v-chip>
+        <!-- active filter chips -->
+        <div v-if="activeFiltersCount" class="d-flex flex-wrap ga-1 mb-2">
+          <v-chip v-if="filterOnlyUnread" size="x-small" closable color="primary" variant="tonal" @click:close="filterOnlyUnread = false">Não lidos</v-chip>
+          <v-chip v-if="filterChannels.length" size="x-small" closable color="info" variant="tonal" @click:close="filterChannels = []">{{ filterChannels.length }} canal(is)</v-chip>
+          <v-chip v-if="filterOperator" size="x-small" closable color="secondary" variant="tonal" @click:close="filterOperator = null">{{ operatorOptions.find(o => o.id === filterOperator)?.label }}</v-chip>
+          <v-chip v-if="filterStages.length" size="x-small" closable color="warning" variant="tonal" @click:close="filterStages = []">{{ filterStages.length }} fila(s)</v-chip>
+          <v-chip v-if="filterLabel" size="x-small" closable color="success" variant="tonal" @click:close="filterLabel = null">{{ filterLabel }}</v-chip>
+          <v-chip v-if="filterDateFrom || filterDateTo" size="x-small" closable color="warning" variant="tonal" @click:close="filterDateFrom = ''; filterDateTo = ''">Período</v-chip>
         </div>
       </div>
 
@@ -58,10 +207,11 @@
         <div
           v-for="conv in filteredConvs" :key="conv.id"
           class="conv-item"
-          :class="{ active: currentLead?.id === conv.id, unread: conv.unread }"
-          @click="selectLead(conv)"
+          :class="{ active: currentLead?.id === conv.id, unread: conv.unread, 'select-mode': selectMode, 'selected': selectMode && selectedConvs.has(conv.id) }"
+          @click="selectMode ? toggleConvSelect(conv.id) : selectLead(conv)"
         >
-          <div class="status-dot" :class="convStatusColor(conv)" />
+          <div v-if="selectMode" class="conv-checkbox" :class="{ checked: selectedConvs.has(conv.id) }" />
+          <div v-else class="status-dot" :class="convStatusColor(conv)" />
           <div class="relative">
             <div class="conv-avatar" :style="{ background: avatarColor(conv) }">{{ (conv.name || conv.phone).slice(0, 2).toUpperCase() }}</div>
             <div v-if="conv.unread" class="unread-badge">{{ conv.unread > 9 ? '9+' : conv.unread }}</div>
@@ -73,10 +223,14 @@
               <span class="conv-time">{{ msgTimeAgo(conv.lastMessage?.created_at || conv.updated_at) }}</span>
             </div>
             <div class="conv-last">{{ conv.lastMessage?.text || 'Sem mensagens' }}</div>
+            <div v-if="conv.assigned_to" class="conv-assigned">
+              <v-icon icon="mdi-account-outline" size="10" />
+              {{ operatorName(conv.assigned_to) }}
+            </div>
             <div class="conv-row3">
               <v-chip v-if="conv.stage" size="x-small" variant="tonal" :color="stageColor(conv.stage)" class="conv-tag">{{ conv.stage }}</v-chip>
-              <v-chip v-if="channelLabel(conv)" size="x-small" variant="tonal" color="success" class="conv-tag">
-                <v-icon icon="mdi-whatsapp" size="10" class="mr-1" />{{ channelLabel(conv) }}
+              <v-chip size="x-small" variant="tonal" color="success" class="conv-tag">
+                <v-icon icon="mdi-whatsapp" size="10" class="mr-1" />{{ conv.channel_name || 'WhatsApp' }}
               </v-chip>
               <v-spacer />
               <v-btn v-if="conv.conversation_status === 'open'" size="x-small" color="error" variant="tonal" class="quick-btn" @click.stop="quickResolve(conv)">
@@ -92,6 +246,16 @@
         <div v-if="!filteredConvs.length" class="text-center pa-8" style="color:#6B7C88;font-size:13px">
           <v-icon icon="mdi-chat-outline" size="40" style="color:#3A4A55" class="d-block mx-auto mb-2" />
           Nenhuma conversa encontrada
+        </div>
+      </div>
+
+      <!-- Select mode toolbar -->
+      <div v-if="selectMode" class="select-toolbar">
+        <span class="select-count">{{ selectedConvs.size }} selecionado(s)</span>
+        <div class="d-flex ga-2">
+          <v-btn size="x-small" variant="tonal" color="error" prepend-icon="mdi-check-circle-outline" :disabled="!selectedConvs.size" @click="bulkResolve">Fechar</v-btn>
+          <v-btn size="x-small" variant="tonal" color="info" prepend-icon="mdi-swap-horizontal" :disabled="!selectedConvs.size" @click="bulkTransferDialog = true">Transferir</v-btn>
+          <v-btn size="x-small" variant="text" @click="toggleSelectMode">Cancelar</v-btn>
         </div>
       </div>
     </div>
@@ -235,7 +399,15 @@
             <div v-if="loadingMore" class="text-center py-3"><v-progress-circular size="20" indeterminate color="primary" /></div>
 
             <template v-for="msg in displayedMessages" :key="msg.id">
+              <!-- Separador de nova conversa -->
+              <div v-if="msg.role === 'system'" class="msg-separator">
+                <span class="msg-separator-line" />
+                <span class="msg-separator-text">{{ msg.text }}</span>
+                <span class="msg-separator-line" />
+              </div>
+              <!-- Mensagem normal -->
               <div
+                v-else
                 class="msg-wrapper"
                 :class="[msg.role, { 'msg-highlight': msgSearchQuery && msg.text?.toLowerCase().includes(msgSearchQuery.toLowerCase()) }]"
               >
@@ -307,6 +479,13 @@
                     {{ statusLabel(currentLead.conversation_status) }}
                   </v-chip>
                 </div>
+                <div class="contact-info-row">
+                  <v-icon icon="mdi-account-circle-outline" size="15" style="color:#9FB0BC" />
+                  <span>Responsável</span>
+                  <span class="ml-auto text-caption" :style="{ color: currentLead.assigned_to ? '#C4D4DF' : '#6B7C88' }">
+                    {{ assignedOperatorName }}
+                  </span>
+                </div>
                 <div v-if="currentLead.intention" class="contact-info-row">
                   <v-icon icon="mdi-lightbulb-outline" size="15" style="color:#9FB0BC" />
                   <span>Intenção</span>
@@ -350,14 +529,58 @@
                     :prepend-icon="currentLead.human_takeover ? 'mdi-robot-outline' : 'mdi-robot-off-outline'"
                     @click="toggleTransfer(!currentLead.human_takeover)"
                   >{{ currentLead.human_takeover ? 'Ativar Chatbot' : 'Desativar Chatbot' }}</v-btn>
+                  <v-btn
+                    size="small" variant="tonal" color="info" block
+                    prepend-icon="mdi-swap-horizontal"
+                    :disabled="currentLead.conversation_status !== 'open'"
+                    @click="transferDialog = true"
+                  >Transferir Atendimento</v-btn>
+                </div>
+              </div>
+
+              <!-- Logs de atendimento -->
+              <div class="mt-4">
+                <div class="text-caption mb-2" style="color:#9FB0BC;font-weight:600;letter-spacing:.5px">LOGS DE ATENDIMENTO</div>
+                <div v-if="ticketLogsLoading" class="d-flex justify-center py-2">
+                  <v-progress-circular size="18" width="2" indeterminate color="primary" />
+                </div>
+                <div v-else-if="!ticketLogs.length" class="text-caption" style="color:#6B7C88">Nenhum registro ainda.</div>
+                <div v-else class="ticket-log-list">
+                  <div v-for="log in ticketLogs" :key="log.id" class="ticket-log-item">
+                    <div class="ticket-log-dot" :style="{ background: logActionColor(log.action) }" />
+                    <div class="ticket-log-body">
+                      <div class="ticket-log-action">
+                        <v-icon :icon="logActionIcon(log.action)" size="12" :style="{ color: logActionColor(log.action) }" class="mr-1" />
+                        {{ logActionLabel(log.action) }}
+                        <span v-if="log.action === 'transferred' && log.to_user_name"> {{ log.to_user_name }}</span>
+                      </div>
+                      <div class="ticket-log-meta">
+                        {{ log.user_name || '—' }} · {{ formatTime(log.created_at) }}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
 
+        <!-- ——— Ticket bloqueado ——— -->
+        <div v-if="currentLead && currentLead.conversation_status !== 'open'" class="wa-blocked">
+          <template v-if="currentLead.conversation_status === 'resolved'">
+            <v-icon icon="mdi-lock-outline" size="18" style="opacity:.5" />
+            <span class="wa-blocked-text">Ticket encerrado. O cliente pode iniciar uma nova conversa.</span>
+            <v-btn size="small" color="warning" variant="tonal" prepend-icon="mdi-refresh" :loading="statusLoading" @click="reopenLead">Reabrir</v-btn>
+          </template>
+          <template v-else-if="currentLead.conversation_status === 'pending'">
+            <v-icon icon="mdi-clock-outline" size="18" style="opacity:.5" />
+            <span class="wa-blocked-text">Ticket pendente. Clique em Atender para responder.</span>
+            <v-btn size="small" color="primary" variant="tonal" prepend-icon="mdi-account-check" :loading="statusLoading" @click="attendLead">Atender</v-btn>
+          </template>
+        </div>
+
         <!-- ——— Input estilo WhatsApp ——— -->
-        <div class="wa-bar">
+        <div v-else class="wa-bar">
 
           <!-- Assinatura banner -->
           <div v-if="useSignature && signature" class="wa-signature-banner">
@@ -461,6 +684,61 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog: Transferir atendimento -->
+    <v-dialog v-model="transferDialog" max-width="400">
+      <v-card class="pa-6">
+        <div class="d-flex align-center ga-2 mb-1">
+          <v-icon icon="mdi-swap-horizontal" color="info" />
+          <span class="text-h6 font-weight-bold">Transferir Atendimento</span>
+        </div>
+        <div class="text-body-2 mb-4" style="color:#9FB0BC">Selecione o operador para receber este ticket.</div>
+        <v-select
+          v-model="transferUserId"
+          :items="operators.filter(o => o.id !== auth.user?.id)"
+          item-title="name"
+          item-value="id"
+          label="Operador"
+          variant="outlined"
+          density="compact"
+          prepend-inner-icon="mdi-account-outline"
+          no-data-text="Nenhum operador disponível"
+        >
+          <template #item="{ props: iProps, item }">
+            <v-list-item v-bind="iProps" :subtitle="item.raw.email">
+              <template #prepend>
+                <div class="transfer-avatar mr-2">{{ (item.raw.name || item.raw.email).slice(0, 2).toUpperCase() }}</div>
+              </template>
+            </v-list-item>
+          </template>
+        </v-select>
+        <div class="d-flex ga-3 justify-end mt-4">
+          <v-btn variant="text" @click="transferDialog = false; transferUserId = null">Cancelar</v-btn>
+          <v-btn color="info" :loading="transferLoading" :disabled="!transferUserId" prepend-icon="mdi-swap-horizontal" @click="doTransfer">Transferir</v-btn>
+        </div>
+      </v-card>
+    </v-dialog>
+
+    <!-- Dialog: transferência em massa -->
+    <v-dialog v-model="bulkTransferDialog" max-width="360">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Transferir {{ selectedConvs.size }} ticket(s)</v-card-title>
+        <v-card-text>
+          <v-select
+            v-model="bulkTransferUserId"
+            :items="operatorOptions"
+            item-title="label" item-value="id"
+            label="Transferir para"
+            variant="outlined" density="compact"
+          />
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="bulkTransferDialog = false">Cancelar</v-btn>
+          <v-btn color="info" :loading="bulkLoading" :disabled="!bulkTransferUserId" @click="bulkTransfer">Transferir</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-snackbar v-model="snack.show" :color="snack.color" timeout="3000">{{ snack.text }}</v-snackbar>
   </div>
 </template>
@@ -476,14 +754,33 @@ const route = useRoute()
 const auth  = useAuthStore()
 
 // ——— estado da sidebar ———
-const search         = ref('')
-const filterStage    = ref(null)
-const filterOperator = ref(null)
-const showFilters    = ref(false)
-const convs          = ref([])
-const operators      = ref([])
-const loading        = ref(false)
-const activeTab      = ref('open')
+const search             = ref('')
+const convs              = ref([])
+const operators          = ref([])
+const loading            = ref(false)
+const activeTab          = ref('open')
+
+// filtros
+const filterShowAll      = ref(false)
+const filterOnlyUnread   = ref(false)
+const filterInvertOrder  = ref(false)
+const filterStatuses     = ref(['open', 'pending', 'resolved'])
+const filterDateFrom     = ref('')
+const filterDateTo       = ref('')
+const filterChannels     = ref([])
+const filterStages       = ref([])
+const filterStage        = ref(null)  // mantido por compat (kanban select)
+const filterKanban       = ref(null)
+const filterOperator     = ref(null)
+const filterLabel        = ref(null)
+
+// select mode
+const selectMode         = ref(false)
+const selectedConvs      = ref(new Set())
+const sortByUnread       = ref(false)
+const bulkTransferDialog = ref(false)
+const bulkTransferUserId = ref(null)
+const bulkLoading        = ref(false)
 
 // ——— estado do chat ———
 const messages       = ref([])
@@ -521,6 +818,14 @@ const signature = computed(() => {
   const u = auth.user
   if (!u) return ''
   return u.name || u.email?.split('@')[0] || ''
+})
+
+const assignedOperatorName = computed(() => {
+  if (!currentLead.value?.assigned_to) return 'Sem responsável'
+  const op = operators.value.find((o) => o.id === currentLead.value.assigned_to)
+  if (op) return op.name || op.email
+  if (currentLead.value.assigned_to === auth.user?.id) return auth.user?.name || auth.user?.email || 'Você'
+  return 'Desconhecido'
 })
 const canSend = computed(() => !!inputText.value.trim() || !!attachedFile.value)
 
@@ -641,6 +946,15 @@ const starting    = ref(false)
 const snack       = reactive({ show: false, text: '', color: 'success' })
 const startForm   = reactive({ phone: '', name: '', message: '' })
 
+// ——— logs de atendimento ———
+const ticketLogs        = ref([])
+const ticketLogsLoading = ref(false)
+
+// ——— transferir atendimento ———
+const transferDialog  = ref(false)
+const transferUserId  = ref(null)
+const transferLoading = ref(false)
+
 // ——— tabs ———
 const tabs = [
   { key: 'open',     label: 'Abertos',   icon: 'mdi-chat-outline' },
@@ -649,18 +963,56 @@ const tabs = [
 ]
 const stageOptions = ['Novo Lead', 'Em Qualificação', 'Qualificado', 'Reunião Agendada', 'Vendido', 'Perdido']
 const operatorOptions = computed(() => operators.value.map((o) => ({ id: o.id, label: o.name || o.email })))
-const activeFiltersCount = computed(() => [filterStage.value, filterOperator.value].filter(Boolean).length)
+const channelOptions  = computed(() => [...new Set(convs.value.map((c) => c.channel_name || 'WhatsApp').filter(Boolean))])
+const labelOptions    = computed(() => availableLabels.value.map((l) => ({ title: l.name, value: l.name })))
+
+const activeFiltersCount = computed(() => {
+  let n = 0
+  if (filterShowAll.value)       n++
+  if (filterOnlyUnread.value)    n++
+  if (filterInvertOrder.value)   n++
+  if (filterChannels.value.length) n++
+  if (filterStages.value.length) n++
+  if (filterKanban.value)        n++
+  if (filterOperator.value)      n++
+  if (filterLabel.value)         n++
+  if (filterDateFrom.value || filterDateTo.value) n++
+  return n
+})
 
 function tabCount(key) { return convs.value.filter((c) => (c.conversation_status || 'pending') === key).length }
 
 const filteredConvs = computed(() => {
-  let list = convs.value.filter((c) => (c.conversation_status || 'pending') === activeTab.value)
+  let list = filterShowAll.value
+    ? convs.value.filter((c) => filterStatuses.value.includes(c.conversation_status || 'pending'))
+    : convs.value.filter((c) => (c.conversation_status || 'pending') === activeTab.value)
+
   if (search.value.trim()) {
     const q = search.value.toLowerCase()
-    list = list.filter((c) => (c.name || '').toLowerCase().includes(q) || (c.phone || '').toLowerCase().includes(q) || ticketNum(c.id).includes(q))
+    list = list.filter((c) =>
+      (c.name || '').toLowerCase().includes(q) ||
+      (c.phone || '').toLowerCase().includes(q) ||
+      ticketNum(c.id).includes(q)
+    )
   }
-  if (filterStage.value) list = list.filter((c) => c.stage === filterStage.value)
-  if (filterOperator.value) list = list.filter((c) => c.assigned_to === filterOperator.value)
+  if (filterOnlyUnread.value)    list = list.filter((c) => c.unread > 0)
+  if (filterChannels.value.length) list = list.filter((c) => filterChannels.value.includes(c.channel_name || 'WhatsApp'))
+  if (filterOperator.value)      list = list.filter((c) => c.assigned_to === filterOperator.value)
+  if (filterStages.value.length) list = list.filter((c) => filterStages.value.includes(c.stage))
+  if (filterKanban.value)        list = list.filter((c) => c.stage === filterKanban.value)
+  if (filterLabel.value)         list = list.filter((c) => (c.labels || []).includes(filterLabel.value))
+  if (filterDateFrom.value) {
+    const from = new Date(filterDateFrom.value)
+    list = list.filter((c) => new Date(c.updated_at || c.created_at) >= from)
+  }
+  if (filterDateTo.value) {
+    const to = new Date(filterDateTo.value); to.setHours(23, 59, 59)
+    list = list.filter((c) => new Date(c.updated_at || c.created_at) <= to)
+  }
+
+  if (sortByUnread.value)       list = [...list].sort((a, b) => (b.unread || 0) - (a.unread || 0))
+  else if (filterInvertOrder.value) list = [...list].reverse()
+
   return list
 })
 
@@ -679,7 +1031,12 @@ function avatarColor(conv) {
   return AVATAR_COLORS[idx]
 }
 function ticketNum(id) { if (!id) return '0000'; return String(parseInt(id.replace(/-/g, '').slice(-6), 16) % 100000).padStart(4, '0') }
-function channelLabel(conv) { return conv.lastMessage?.role === 'lead' ? 'Baileys' : null }
+function operatorName(userId) {
+  if (!userId) return ''
+  if (userId === auth.user?.id) return auth.user?.name || auth.user?.email || 'Você'
+  const op = operators.value.find((o) => o.id === userId)
+  return op ? (op.name || op.email) : ''
+}
 function convStatusColor(conv) { return { open: 'dot-open', pending: 'dot-pending', resolved: 'dot-resolved' }[conv.conversation_status] || 'dot-pending' }
 function stageColor(s) { return { 'Novo Lead': 'secondary', 'Em Qualificação': 'info', 'Qualificado': 'success', 'Reunião Agendada': 'warning', 'Vendido': 'purple', 'Perdido': 'error' }[s] || 'primary' }
 function scoreColor(s) { if (s >= 70) return 'success'; if (s >= 40) return 'warning'; return 'error' }
@@ -693,6 +1050,65 @@ function msgTimeAgo(d) {
 function formatTime(d) { if (!d) return ''; return new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
 
 // ——— novas funções de acesso rápido ———
+
+// ——— filter helpers ———
+function toggleFilterStatus(s) {
+  const idx = filterStatuses.value.indexOf(s)
+  if (idx >= 0) filterStatuses.value.splice(idx, 1)
+  else filterStatuses.value.push(s)
+}
+function toggleFilterStage(s) {
+  const idx = filterStages.value.indexOf(s)
+  if (idx >= 0) filterStages.value.splice(idx, 1)
+  else filterStages.value.push(s)
+}
+function toggleFilterChannel(ch) {
+  const idx = filterChannels.value.indexOf(ch)
+  if (idx >= 0) filterChannels.value.splice(idx, 1)
+  else filterChannels.value.push(ch)
+}
+function clearFilters() {
+  filterShowAll.value = false; filterOnlyUnread.value = false; filterInvertOrder.value = false
+  filterStatuses.value = ['open', 'pending', 'resolved']
+  filterDateFrom.value = ''; filterDateTo.value = ''
+  filterChannels.value = []; filterStages.value = []
+  filterKanban.value = null; filterOperator.value = null; filterLabel.value = null
+  sortByUnread.value = false
+}
+function stageColorHex(s) {
+  return { 'Novo Lead':'#64748B','Em Qualificação':'#06B6D4','Qualificado':'#10B981','Reunião Agendada':'#F59E0B','Vendido':'#8B5CF6','Perdido':'#EF4444' }[s] || '#6366F1'
+}
+
+// ——— select mode ———
+function toggleSelectMode() {
+  selectMode.value = !selectMode.value
+  selectedConvs.value = new Set()
+}
+function toggleConvSelect(id) {
+  const next = new Set(selectedConvs.value)
+  if (next.has(id)) next.delete(id); else next.add(id)
+  selectedConvs.value = next
+}
+async function bulkResolve() {
+  bulkLoading.value = true
+  try {
+    await Promise.all([...selectedConvs.value].map((id) => api.resolveChat(id)))
+    selectedConvs.value = new Set()
+    selectMode.value = false
+    await loadConvs()
+    toast(`${selectedConvs.value.size || 'Tickets'} finalizados.`)
+  } catch (e) { toast(e.message, 'error') } finally { bulkLoading.value = false }
+}
+async function bulkTransfer() {
+  if (!bulkTransferUserId.value) return
+  bulkLoading.value = true
+  try {
+    await Promise.all([...selectedConvs.value].map((id) => api.transferTicketTo(id, bulkTransferUserId.value)))
+    bulkTransferDialog.value = false; selectedConvs.value = new Set(); selectMode.value = false
+    await loadConvs()
+    toast('Tickets transferidos.')
+  } catch (e) { toast(e.message, 'error') } finally { bulkLoading.value = false }
+}
 
 function toggleMsgSearch() {
   showMsgSearch.value = !showMsgSearch.value
@@ -734,12 +1150,70 @@ async function selectLead(lead) {
   currentLead.value = lead
   messages.value = []
   oldestMsgId.value = null
+  ticketLogs.value = []
   openedAt[lead.id] = Date.now()
   showContactPanel.value = false
   showMsgSearch.value = false
   msgSearchQuery.value = ''
   await loadMessages()
   scrollToBottom()
+  loadTicketLogs()
+}
+
+async function loadTicketLogs() {
+  if (!currentLead.value) return
+  ticketLogsLoading.value = true
+  try { ticketLogs.value = await api.getTicketLogs(currentLead.value.id) }
+  catch { /* silencioso */ }
+  finally { ticketLogsLoading.value = false }
+}
+
+function logActionLabel(action) {
+  return {
+    opened:      'Atendimento iniciado',
+    closed:      'Atendimento finalizado',
+    pending:     'Retornado à fila',
+    reopened:    'Ticket reaberto',
+    transferred: 'Transferido para',
+    new_conversation: 'Nova conversa iniciada',
+  }[action] || action
+}
+function logActionIcon(action) {
+  return {
+    opened:      'mdi-play-circle-outline',
+    closed:      'mdi-check-circle-outline',
+    pending:     'mdi-clock-outline',
+    reopened:    'mdi-refresh',
+    transferred: 'mdi-swap-horizontal',
+    new_conversation: 'mdi-message-plus-outline',
+  }[action] || 'mdi-information-outline'
+}
+function logActionColor(action) {
+  return {
+    opened:      '#10B981',
+    closed:      '#6B7C88',
+    pending:     '#F59E0B',
+    reopened:    '#6366F1',
+    transferred: '#00C2FF',
+    new_conversation: '#8B5CF6',
+  }[action] || '#9FB0BC'
+}
+
+async function doTransfer() {
+  if (!transferUserId.value || !currentLead.value) return
+  transferLoading.value = true
+  try {
+    const { lead, to } = await api.transferTicketTo(currentLead.value.id, transferUserId.value)
+    currentLead.value.assigned_to = lead.assigned_to
+    currentLead.value.conversation_status = lead.conversation_status
+    syncConv(currentLead.value.id, { assigned_to: lead.assigned_to, conversation_status: lead.conversation_status })
+    await loadMessages()
+    await loadTicketLogs()
+    transferDialog.value = false
+    transferUserId.value = null
+    toast(`Transferido para ${to.name || to.email}`)
+  } catch (e) { toast(e.message, 'error') }
+  finally { transferLoading.value = false }
 }
 
 async function loadMessages(before) {
@@ -876,15 +1350,37 @@ function resetStartForm() { startForm.phone = ''; startForm.name = ''; startForm
 const { onMessage } = useMessageRealtime()
 onMessage((msg) => {
   if (msg.lead_id === currentLead.value?.id) {
-    // já está na conversa aberta — só acrescenta
     messages.value.push(msg)
     scrollToBottom()
     syncConv(msg.lead_id, { lastMessage: msg })
   } else {
-    // outra conversa recebeu mensagem — atualiza sidebar
     loadConvs()
   }
 })
+
+// ——— polling: busca mensagens novas a cada 5s ———
+let pollTimer = null
+let convsTimer = null
+
+async function pollNewMessages() {
+  if (!currentLead.value) return
+  const lastTs = messages.value.length ? messages.value[messages.value.length - 1].created_at : null
+  try {
+    const params = lastTs ? { after: lastTs } : { limit: 50 }
+    const { messages: newMsgs } = await http.get(`/chat/${currentLead.value.id}/messages`, { params }).then((r) => r.data)
+    if (!lastTs) {
+      messages.value = newMsgs
+    } else if (newMsgs.length) {
+      const existingIds = new Set(messages.value.map((m) => m.id))
+      const fresh = newMsgs.filter((m) => !existingIds.has(m.id))
+      if (fresh.length) {
+        messages.value.push(...fresh)
+        scrollToBottom()
+        loadConvs()
+      }
+    }
+  } catch { /* silencioso */ }
+}
 
 // ——— realtime: mudanças de leads (status, estágio, etc.) ———
 useRealtime('leads', auth.user?.tenantId, () => loadConvs())
@@ -893,13 +1389,17 @@ function closeEmojiOnOutside() { showEmojiPicker.value = false }
 
 onMounted(() => {
   loadConvs()
-  loadOperators()
+  loadOperators() 
   loadLabels()
   document.addEventListener('click', closeEmojiOnOutside)
+  pollTimer  = setInterval(pollNewMessages, 3000)
+  convsTimer = setInterval(loadConvs, 5000)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', closeEmojiOnOutside)
+  if (pollTimer)  clearInterval(pollTimer)
+  if (convsTimer) clearInterval(convsTimer)
 })
 </script>
 
@@ -920,7 +1420,83 @@ onUnmounted(() => {
   display: flex; flex-direction: column;
 }
 .sidebar-header { border-bottom: 1px solid rgba(255,255,255,0.06); }
-.filter-panel { background: rgba(255,255,255,0.03); border-radius: 10px; padding: 10px; }
+/* filter badge */
+.filter-badge-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #EF4444; color: white; font-size: 9px; font-weight: 700;
+  border-radius: 10px; min-width: 16px; height: 16px; padding: 0 4px;
+  margin-left: 4px;
+}
+
+/* select mode */
+.select-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-top: 1px solid rgba(255,255,255,0.07);
+  background: rgba(99,102,241,0.08); flex-shrink: 0;
+}
+.select-count { font-size: 12px; font-weight: 600; color: #A5B4FC; }
+.conv-item.selected { background: rgba(99,102,241,0.08) !important; }
+.conv-checkbox {
+  width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0; margin-top: 12px;
+  border: 1.5px solid rgba(255,255,255,0.25); background: transparent; transition: all 0.15s;
+}
+.conv-checkbox.checked {
+  background: #6366F1; border-color: #6366F1;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/%3E%3C/svg%3E");
+  background-size: 12px; background-repeat: no-repeat; background-position: center;
+}
+
+/* ———— FILTER DROPDOWN CARD ———— */
+.filter-dropdown-card {
+  background: rgb(var(--v-theme-surface)) !important;
+  border: 1px solid rgba(255,255,255,0.10) !important;
+  border-radius: 12px !important;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.45) !important;
+}
+.fp-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px 8px; border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+}
+.fp-title { font-size: 13px; font-weight: 700; color: var(--text-primary, #E2E8F0); }
+.fp-body { overflow-y: auto; padding: 6px 0; max-height: 400px; }
+.fp-section-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;
+  color: var(--text-muted, #6B7C88); padding: 6px 16px 4px;
+}
+.fp-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 16px; cursor: pointer; transition: background 0.12s;
+  font-size: 13px; color: var(--text-primary, #E2E8F0);
+  user-select: none;
+}
+.fp-item:hover { background: rgba(255,255,255,0.05); }
+.fp-check {
+  width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0;
+  border: 1.5px solid rgba(255,255,255,0.25); background: rgba(255,255,255,0.04); transition: all 0.15s;
+}
+.fp-check.checked {
+  background: #6366F1; border-color: #6366F1;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/%3E%3C/svg%3E");
+  background-size: 12px; background-repeat: no-repeat; background-position: center;
+}
+.fp-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.fp-sep { height: 1px; background: rgba(255,255,255,0.07); margin: 6px 0; }
+.fp-empty { font-size: 12px; color: var(--text-muted, #6B7C88); padding: 4px 16px; }
+.fp-date-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 16px;
+}
+.fp-date-label { font-size: 12px; color: var(--text-muted, #6B7C88); width: 24px; flex-shrink: 0; }
+.fp-date-input {
+  flex: 1; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px; padding: 5px 8px; font-size: 12px; color: var(--text-primary, #E2E8F0);
+  outline: none; color-scheme: dark;
+}
+.fp-date-input:focus { border-color: rgba(99,102,241,0.6); }
+.fp-select { margin: 4px 16px; }
+
 .sidebar-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
 .tab-btn {
   flex: 1; padding: 9px 2px;
@@ -956,7 +1532,8 @@ onUnmounted(() => {
 .conv-row1 { display:flex; align-items:center; gap:4px; margin-bottom:2px; }
 .conv-name { font-size:13px; font-weight:600; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .conv-ticket,.conv-time { font-size:10px; color:#6B7C88; flex-shrink:0; }
-.conv-last { font-size:11px; color:#6B7C88; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:5px; }
+.conv-last { font-size:11px; color:#6B7C88; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:3px; }
+.conv-assigned { display:flex; align-items:center; gap:3px; font-size:10px; color:#9FB0BC; margin-bottom:4px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .conv-row3 { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
 .conv-tag { font-size:9px!important; height:16px!important; }
 .quick-btn { height:20px!important; min-width:24px!important; padding:0!important; }
@@ -1013,6 +1590,13 @@ onUnmounted(() => {
 
 /* ———— MENSAGENS ———— */
 .chat-messages { flex:1; overflow-y:auto; padding:20px 16px; display:flex; flex-direction:column; gap:8px; }
+.msg-separator {
+  display: flex; align-items: center; gap: 10px;
+  margin: 12px 16px; color: #6B7C88;
+}
+.msg-separator-line { flex: 1; height: 1px; background: rgba(255,255,255,0.07); }
+.msg-separator-text { font-size: 11px; white-space: nowrap; }
+
 .msg-wrapper { display:flex; }
 .msg-wrapper.lead { justify-content:flex-start; }
 .msg-wrapper.ai, .msg-wrapper.agent { justify-content:flex-end; }
@@ -1064,6 +1648,36 @@ onUnmounted(() => {
   border:1px solid;
 }
 .contact-label-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+
+/* ———— LOGS DE ATENDIMENTO ———— */
+.ticket-log-list { display: flex; flex-direction: column; gap: 8px; }
+.ticket-log-item { display: flex; align-items: flex-start; gap: 8px; }
+.ticket-log-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 5px;
+}
+.ticket-log-body { flex: 1; min-width: 0; }
+.ticket-log-action { font-size: 12px; color: #C4D4DF; line-height: 1.4; }
+.ticket-log-meta { font-size: 10px; color: #6B7C88; margin-top: 1px; }
+
+/* ———— TRANSFER AVATAR ———— */
+.transfer-avatar {
+  width: 28px; height: 28px; border-radius: 50%; background: rgba(99,102,241,0.2);
+  color: #818CF8; font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+
+/* ———— TICKET BLOQUEADO ———— */
+.wa-blocked {
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.02);
+}
+.wa-blocked-text {
+  flex: 1; font-size: 12px; color: #6B7C88;
+  min-width: 0;
+}
 
 /* ———— INPUT WHATSAPP ———— */
 .wa-bar {

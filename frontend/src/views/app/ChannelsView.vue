@@ -48,6 +48,7 @@
               </button>
             </template>
             <v-list density="compact" min-width="210" class="glass">
+              <v-list-item prepend-icon="mdi-cog-outline"      title="Configurar"              @click="openSettings(ch)" />
               <v-list-item prepend-icon="mdi-pencil-outline"   title="Renomear"               @click="openRename(ch)" />
               <v-list-item prepend-icon="mdi-star-outline"     title="Definir como padrão"    @click="setDefault(ch)" :disabled="ch.is_default" />
               <v-list-item prepend-icon="mdi-refresh"          title="Verificar status"        @click="refreshStatus(ch)" />
@@ -206,6 +207,93 @@
           <v-spacer />
           <v-btn variant="text" @click="deleteDialog = false">Cancelar</v-btn>
           <v-btn color="error" :loading="deleting" @click="deleteChannel">Excluir</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Configurar Canal -->
+    <v-dialog v-model="settingsDialog" max-width="540" scrollable>
+      <v-card class="glass" border>
+        <v-card-title class="text-h6 font-weight-bold pa-4 pb-2">
+          <v-icon icon="mdi-cog-outline" class="mr-2" size="20" />
+          Configurar — {{ settingsTarget?.name }}
+        </v-card-title>
+
+        <v-divider />
+
+        <v-card-text class="pa-4" style="max-height:70vh">
+
+          <!-- Nome -->
+          <div class="cfg-section-title">Geral</div>
+          <v-text-field
+            v-model="cfg.name"
+            label="Nome do canal"
+            variant="outlined"
+            density="compact"
+            class="mb-4"
+          />
+
+          <!-- Despedida -->
+          <div class="cfg-section-title">Mensagem de Despedida</div>
+          <v-textarea
+            v-model="cfg.goodbye_message"
+            label="Mensagem enviada ao finalizar o atendimento"
+            variant="outlined"
+            density="compact"
+            rows="2"
+            auto-grow
+            placeholder="Foi um prazer atendê-lo! Qualquer dúvida, estamos à disposição."
+            class="mb-4"
+          />
+
+          <!-- Atribuição -->
+          <div class="cfg-section-title">Atribuição Automática</div>
+          <p class="text-caption mb-3" style="color:var(--text-muted)">
+            Novos leads neste canal serão automaticamente atribuídos ao usuário ou fila selecionada.
+          </p>
+          <v-radio-group v-model="cfg.assignType" inline hide-details class="mb-3">
+            <v-radio label="Nenhuma" value="none" color="primary" />
+            <v-radio label="Usuário" value="user" color="primary" />
+            <v-radio label="Fila" value="queue" color="primary" />
+          </v-radio-group>
+
+          <v-expand-transition>
+            <v-select
+              v-if="cfg.assignType === 'user'"
+              v-model="cfg.assigned_user_id"
+              :items="settingsUsers"
+              item-title="name"
+              item-value="id"
+              label="Selecionar usuário"
+              variant="outlined"
+              density="compact"
+              clearable
+              class="mb-4"
+            />
+          </v-expand-transition>
+          <v-expand-transition>
+            <v-select
+              v-if="cfg.assignType === 'queue'"
+              v-model="cfg.assigned_queue_id"
+              :items="settingsQueues"
+              item-title="name"
+              item-value="id"
+              label="Selecionar fila"
+              variant="outlined"
+              density="compact"
+              clearable
+              class="mb-4"
+            />
+          </v-expand-transition>
+
+          <v-alert v-if="settingsError" type="error" variant="tonal" density="compact" :text="settingsError" class="mt-1" />
+        </v-card-text>
+
+        <v-divider />
+        <v-card-actions class="px-4 py-3">
+          <v-spacer />
+          <v-btn variant="text" @click="settingsDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" :loading="savingSettings" @click="saveSettings">Salvar</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -390,6 +478,60 @@ async function deleteChannel() {
   } catch (e) { toast(e.message, 'error') } finally { deleting.value = false }
 }
 
+// ── configurar ──
+const settingsDialog  = ref(false)
+const settingsTarget  = ref(null)
+const savingSettings  = ref(false)
+const settingsError   = ref('')
+const settingsUsers   = ref([])
+const settingsQueues  = ref([])
+const cfg = reactive({
+  name: '',
+  goodbye_message: '',
+  assignType: 'none',
+  assigned_user_id: null,
+  assigned_queue_id: null,
+})
+
+async function openSettings(ch) {
+  settingsTarget.value  = ch
+  settingsError.value   = ''
+  cfg.name              = ch.name || ''
+  cfg.goodbye_message   = ch.goodbye_message || ''
+  cfg.assigned_user_id  = ch.assigned_user_id || null
+  cfg.assigned_queue_id = ch.assigned_queue_id || null
+  cfg.assignType = ch.assigned_queue_id ? 'queue' : ch.assigned_user_id ? 'user' : 'none'
+  settingsDialog.value  = true
+
+  try {
+    const [ops, queuesData] = await Promise.all([
+      api.listOperators(),
+      api.listQueues(),
+    ])
+    settingsUsers.value  = ops.operators || ops || []
+    settingsQueues.value = queuesData.queues || queuesData || []
+  } catch { /* ignora */ }
+}
+
+async function saveSettings() {
+  settingsError.value = ''
+  if (!cfg.name.trim()) { settingsError.value = 'Nome obrigatório.'; return }
+  savingSettings.value = true
+  try {
+    const payload = {
+      name:              cfg.name.trim(),
+      goodbye_message:   cfg.goodbye_message || null,
+      assigned_user_id:  cfg.assignType === 'user'  ? cfg.assigned_user_id  : null,
+      assigned_queue_id: cfg.assignType === 'queue' ? cfg.assigned_queue_id : null,
+    }
+    const { channel } = await api.updateChannelSettings(settingsTarget.value.id, payload)
+    const idx = channels.value.findIndex((c) => c.id === settingsTarget.value.id)
+    if (idx !== -1) channels.value[idx] = { ...channels.value[idx], ...channel }
+    settingsDialog.value = false
+    toast('Configurações salvas.')
+  } catch (e) { settingsError.value = e.message } finally { savingSettings.value = false }
+}
+
 // ── formatos ──
 function formatDate(d) {
   if (!d) return '—'
@@ -400,7 +542,6 @@ function formatDate(d) {
 async function load() {
   try {
     channels.value = await api.listChannels()
-    channels.value.forEach((ch) => refreshStatus(ch, true))
   } catch (e) { toast(e.message, 'error') }
 }
 onMounted(load)
@@ -424,6 +565,12 @@ onUnmounted(() => { clearTimeout(qrTimer); clearInterval(pollTimer); clearInterv
   white-space: nowrap; transition: opacity .15s;
 }
 .ch-new-btn:hover { opacity: .88; }
+
+.cfg-section-title {
+  font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+  color: var(--text-muted); margin-bottom: 10px; margin-top: 4px;
+  display: flex; align-items: center; gap: 8px;
+}
 
 /* Grid */
 .ch-grid {

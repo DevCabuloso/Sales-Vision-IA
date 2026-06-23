@@ -95,7 +95,7 @@
                 <v-icon v-if="queueForm.color === c" icon="mdi-check" size="14" color="white" />
               </div>
             </div>
-            <div class="text-body-2 mb-2">Operadores</div>
+            <div class="text-body-2 mb-2">Usuários</div>
             <div class="d-flex flex-wrap ga-2">
               <v-checkbox v-for="op in allOperators" :key="op.id" :label="op.name || op.email" :value="op.id" v-model="queueForm.operator_ids" color="primary" hide-details density="compact" />
             </div>

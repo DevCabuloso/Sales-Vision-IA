@@ -57,8 +57,17 @@
           <button class="toggle-btn" :class="{ active: tab === 'register' }" @click="tab = 'register'">Registrar</button>
         </div>
 
-        <!-- Erro -->
-        <div v-if="error" class="form-error">
+        <!-- Conta suspensa -->
+        <div v-if="suspended" class="form-suspended">
+          <v-icon icon="mdi-lock-outline" size="18" />
+          <div>
+            <div class="suspended-title">Conta suspensa</div>
+            <div class="suspended-body">O acesso desta conta foi bloqueado pelo administrador. Entre em contato com o suporte para reativação.</div>
+          </div>
+        </div>
+
+        <!-- Erro genérico -->
+        <div v-else-if="error" class="form-error">
           <v-icon icon="mdi-alert-circle-outline" size="15" />
           {{ error }}
         </div>
@@ -142,8 +151,9 @@ const accessType = ref('user')
 const email = ref('')
 const password = ref('')
 const showPw = ref(false)
-const error = ref('')
-const loading = ref(false)
+const error     = ref('')
+const suspended = ref(false)
+const loading   = ref(false)
 const regName = ref('')
 const regEmail = ref('')
 const regPassword = ref('')
@@ -172,12 +182,19 @@ function particleStyle(i) {
 
 async function submit() {
   error.value = ''
+  suspended.value = false
   if (!email.value || !password.value) { error.value = 'Preencha e-mail e senha.'; return }
   loading.value = true
   try {
     const u = await auth.login(email.value, password.value)
     router.push(u.role === 'owner' ? '/admin/overview' : '/dashboard')
-  } catch (e) { error.value = e.message } finally { loading.value = false }
+  } catch (e) {
+    if (e.message?.toLowerCase().includes('suspens')) {
+      suspended.value = true
+    } else {
+      error.value = e.message
+    }
+  } finally { loading.value = false }
 }
 
 async function register() {
@@ -320,6 +337,15 @@ async function register() {
   background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2);
   color: #F87171; font-size: 13px; border-radius: 10px; padding: 10px 14px;
 }
+
+/* Conta suspensa */
+.form-suspended {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3);
+  color: #FCD34D; border-radius: 10px; padding: 14px;
+}
+.suspended-title { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
+.suspended-body  { font-size: 12px; opacity: .85; line-height: 1.5; }
 
 /* Campos */
 .fields { display: flex; flex-direction: column; gap: 14px; }

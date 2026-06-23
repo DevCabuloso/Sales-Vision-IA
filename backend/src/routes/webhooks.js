@@ -2,9 +2,12 @@ import { Router } from 'express'
 import { config } from '../config/index.js'
 import { supabase, unwrap } from '../db/supabase.js'
 import { meta, evolution } from '../services/whatsapp/index.js'
-import { handleInboundMessage } from '../services/orchestrator.js'
+import { handleInboundMessage, handleOutboundMessage } from '../services/orchestrator.js'
 
 export const webhooksRouter = Router()
+
+// GET /webhooks/ping — para testar se o servidor está acessível
+webhooksRouter.get('/ping', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }))
 
 // ════════════════════════════════════════════════
 // META — verificação do webhook (GET) e recebimento (POST)
@@ -52,13 +55,32 @@ webhooksRouter.post('/meta', async (req, res) => {
 webhooksRouter.post('/evolution/:tenantId', async (req, res) => {
   res.sendStatus(200)
   try {
+    const event = req.body?.event || '(sem event)'
+    console.log(`[webhook evolution] tenant=${req.params.tenantId} event=${event}`)
+
     const parsed = evolution.parseWebhook(req.body)
     if (!parsed) return
+    console.log(`[webhook evolution] mensagem de ${parsed.from} via ${parsed.instanceName} fromMe=${parsed.fromMe}: "${parsed.text?.slice(0, 60)}"`)
+
+    if (parsed.fromMe) {
+      await handleOutboundMessage({
+        tenantId: req.params.tenantId,
+        to: parsed.from,
+        text: parsed.text,
+        provider: 'evolution',
+        instanceName: parsed.instanceName,
+      })
+      return
+    }
+
     await handleInboundMessage({
       tenantId: req.params.tenantId,
       from: parsed.from,
       text: parsed.text,
+      mediaType: parsed.mediaType,
       provider: 'evolution',
+      instanceName: parsed.instanceName,
+      pushName: parsed.pushName,
     })
   } catch (e) {
     console.error('[webhook evolution]', e.message)

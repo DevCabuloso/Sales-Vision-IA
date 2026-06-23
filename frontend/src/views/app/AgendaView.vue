@@ -139,7 +139,18 @@ const monthLabel = computed(() => cursor.value.toLocaleString('pt-BR', { month: 
 // ——— helpers de data ———
 function toKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
 
-function apptKey(a) { if (!a.startTime) return null; return toKey(new Date(a.startTime)) }
+// bare date strings (YYYY-MM-DD) vindas de eventos all-day do Google Calendar são interpretadas
+// pelo JS como UTC midnight, o que causa shift de 1 dia em fuso UTC-3. Parseamos como local noon.
+function parseDt(s) {
+  if (!s) return new Date()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split('-').map(Number)
+    return new Date(y, m - 1, d, 12, 0, 0)
+  }
+  return new Date(s)
+}
+
+function apptKey(a) { if (!a.startTime) return null; return toKey(parseDt(a.startTime)) }
 
 // ——— grid do calendário ———
 const calendarDays = computed(() => {
@@ -200,21 +211,21 @@ const monthAppts = computed(() => {
   const month = cursor.value.getMonth()
   return appts.value.filter((a) => {
     if (!a.startTime) return false
-    const d = new Date(a.startTime)
+    const d = parseDt(a.startTime)
     return d.getFullYear() === year && d.getMonth() === month
-  }).sort((a, b) => new Date(a.startTime) - new Date(b.startTime))
+  }).sort((a, b) => parseDt(a.startTime) - parseDt(b.startTime))
 })
 
 // ——— helpers visuais ———
 function statusColor(s) { return { scheduled: 'info', confirmed: 'success', completed: 'secondary', cancelled: 'error' }[s] || 'info' }
 function statusLabel(s) { return { scheduled: 'Agendada', confirmed: 'Confirmada', completed: 'Concluída', cancelled: 'Cancelada' }[s] || s }
 
-function formatTime(d) { if (!d) return '—'; return new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
+function formatTime(d) { if (!d) return '—'; return parseDt(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
 function formatRange(start, end) {
   if (!start) return '—'
-  const s = new Date(start)
+  const s = parseDt(start)
   let txt = s.toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-  if (end) txt += ' – ' + new Date(end).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  if (end) txt += ' – ' + parseDt(end).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
   return txt
 }
 

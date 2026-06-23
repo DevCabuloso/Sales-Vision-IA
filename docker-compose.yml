@@ -18,6 +18,9 @@ services:
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/integrations/google/callback}
       META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v21.0}
       META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-sdr-verify}
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      BACKEND_URL: ${BACKEND_URL}
     ports:
       - "3000:3000"
 
@@ -31,4 +34,4 @@ services:
     depends_on:
       - backend
     ports:
-      - "8080:80"
+      - "80:80"

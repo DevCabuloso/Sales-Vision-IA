@@ -9,11 +9,17 @@ export const adminRouter = Router()
 adminRouter.use(requireAuth, requireOwner)
 
 const featuresSchema = z.object({
-  feat_meta_api: z.boolean().optional(),
+  feat_meta_api:      z.boolean().optional(),
   feat_evolution_api: z.boolean().optional(),
-  feat_hybrid: z.boolean().optional(),
-  feat_google_cal: z.boolean().optional(),
-  feat_broadcast: z.boolean().optional(),
+  feat_hybrid:        z.boolean().optional(),
+  feat_google_cal:    z.boolean().optional(),
+  feat_broadcast:     z.boolean().optional(),
+  feat_kanban:        z.boolean().optional(),
+  feat_agenda:        z.boolean().optional(),
+  feat_contacts:      z.boolean().optional(),
+  feat_ia_config:     z.boolean().optional(),
+  feat_operators:     z.boolean().optional(),
+  feat_custom_apis:   z.boolean().optional(),
 }).partial()
 
 // ── Clientes ──────────────────────────────────────────────────────────────────
@@ -63,11 +69,17 @@ adminRouter.post('/clients', async (req, res) => {
 
   const { data: tenant, error: tErr } = await supabase.from('tenants').insert({
     name: d.name, slug: d.slug, plan: d.plan, status: 'active',
-    feat_meta_api: f.feat_meta_api ?? false,
-    feat_evolution_api: f.feat_evolution_api ?? false,
-    feat_hybrid: f.feat_hybrid ?? false,
-    feat_google_cal: f.feat_google_cal ?? true,
-    feat_broadcast: f.feat_broadcast ?? true,
+    feat_meta_api:      f.feat_meta_api      ?? false,
+    feat_evolution_api: f.feat_evolution_api  ?? false,
+    feat_hybrid:        f.feat_hybrid         ?? false,
+    feat_google_cal:    f.feat_google_cal     ?? true,
+    feat_broadcast:     f.feat_broadcast      ?? true,
+    feat_kanban:        f.feat_kanban         ?? true,
+    feat_agenda:        f.feat_agenda         ?? true,
+    feat_contacts:      f.feat_contacts       ?? true,
+    feat_ia_config:     f.feat_ia_config      ?? true,
+    feat_operators:     f.feat_operators      ?? true,
+    feat_custom_apis:   f.feat_custom_apis    ?? false,
     max_leads: d.max_leads ?? 1000,
   }).select().single()
 
@@ -225,7 +237,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
 
   const rows = unwrap(
     await supabase.from('users')
-      .update({ ...parsed.data, updated_at: new Date().toISOString() })
+      .update({ ...parsed.data })
       .eq('id', req.params.id)
       .neq('role', 'owner')
       .select('id, email, name, role, active')
@@ -249,7 +261,7 @@ adminRouter.post('/users/:id/reset-password', async (req, res) => {
   const hash = await hashPassword(password)
   const rows = unwrap(
     await supabase.from('users')
-      .update({ password_hash: hash, updated_at: new Date().toISOString() })
+      .update({ password_hash: hash })
       .eq('id', req.params.id)
       .neq('role', 'owner')
       .select('id')
@@ -306,7 +318,7 @@ adminRouter.post('/owners/:id/reset-password', async (req, res) => {
   const hash = await hashPassword(password)
   const rows = unwrap(
     await supabase.from('users')
-      .update({ password_hash: hash, updated_at: new Date().toISOString() })
+      .update({ password_hash: hash })
       .eq('id', req.params.id).eq('role', 'owner').select('id')
   )
   if (!rows.length) return res.status(404).json({ error: 'Superadmin não encontrado.' })

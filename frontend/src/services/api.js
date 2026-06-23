@@ -159,6 +159,21 @@ export const api = {
   revalidateChannelWebhook: (id) => http.post(`/channels/${id}/revalidate-webhook`).then((r) => r.data),
   disconnectChannel: (id) => http.post(`/channels/${id}/disconnect`).then((r) => r.data),
   deleteChannel: (id) => http.delete(`/channels/${id}`).then((r) => r.data),
+  updateChannelSettings: (id, payload) => http.patch(`/channels/${id}/settings`, payload).then((r) => r.data),
+
+  // queues
+  listQueues: () => http.get('/queues').then((r) => r.data),
+  createQueue: (payload) => http.post('/queues', payload).then((r) => r.data),
+  updateQueue: (id, payload) => http.patch(`/queues/${id}`, payload).then((r) => r.data),
+  deleteQueue: (id) => http.delete(`/queues/${id}`).then((r) => r.data),
+
+  // internal groups
+  listInternalGroups: () => http.get('/internal-groups').then((r) => r.data),
+  createInternalGroup: (payload) => http.post('/internal-groups', payload).then((r) => r.data),
+  updateInternalGroup: (id, payload) => http.patch(`/internal-groups/${id}`, payload).then((r) => r.data),
+  deleteInternalGroup: (id) => http.delete(`/internal-groups/${id}`).then((r) => r.data),
+  listInternalMessages: (groupId, params) => http.get(`/internal-groups/${groupId}/messages`, { params }).then((r) => r.data),
+  sendInternalMessage: (groupId, text) => http.post(`/internal-groups/${groupId}/messages`, { text }).then((r) => r.data),
 
   // chat — status de atendimento
   attendChat: (id) => http.post(`/chat/${id}/attend`).then((r) => r.data),
@@ -166,6 +181,8 @@ export const api = {
   reopenChat: (id) => http.post(`/chat/${id}/reopen`).then((r) => r.data),
   startChat: (payload) => http.post('/chat/start', payload).then((r) => r.data),
   listChatOperators: () => http.get('/chat/operators').then((r) => r.data.operators),
+  getTicketLogs: (id) => http.get(`/chat/${id}/logs`).then((r) => r.data.logs),
+  transferTicketTo: (id, userId) => http.post(`/chat/${id}/transfer-to`, { userId }).then((r) => r.data),
 
   // admin — monitoramento
   adminMonitoring: (params) =>

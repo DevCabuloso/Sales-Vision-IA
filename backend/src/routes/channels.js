@@ -140,6 +140,27 @@ channelsRouter.get('/:id/status', requireAuth, requireTenant, async (req, res) =
   }
 })
 
+// PATCH /api/channels/:id/settings — salvar configurações completas
+channelsRouter.patch('/:id/settings', requireAuth, requireTenant, async (req, res) => {
+  const { name, goodbye_message, assigned_user_id, assigned_queue_id } = req.body || {}
+  try {
+    const update = { updated_at: new Date().toISOString() }
+    if (name              !== undefined) update.name               = name?.trim() || null
+    if (goodbye_message   !== undefined) update.goodbye_message    = goodbye_message || null
+    if (assigned_user_id  !== undefined) update.assigned_user_id   = assigned_user_id || null
+    if (assigned_queue_id !== undefined) update.assigned_queue_id  = assigned_queue_id || null
+
+    const rows = unwrap(
+      await supabase.from('channels')
+        .update(update)
+        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
+        .select()
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
+    res.json({ channel: rows[0] })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // PATCH /api/channels/:id — renomear canal
 channelsRouter.patch('/:id', requireAuth, requireTenant, async (req, res) => {
   const { name } = req.body || {}
@@ -204,19 +225,23 @@ channelsRouter.post('/:id/revalidate-webhook', requireAuth, requireTenant, async
     )
     if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
 
-    const webhookUrl = `${config.backendUrl}/api/webhooks/evolution/${req.user.tenantId}`
+    const webhookUrl = `${config.backendUrl}/webhooks/evolution/${req.user.tenantId}`
+    // Evolution API v2 espera body aninhado em { webhook: { ... } } com camelCase
     const r = await evoFetch(`/webhook/set/${rows[0].instance_name}`, {
       method: 'POST',
       body: JSON.stringify({
-        url: webhookUrl,
-        webhook_by_events: false,
-        webhook_base64: false,
-        events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'MESSAGES_UPDATE'],
+        webhook: {
+          enabled: true,
+          url: webhookUrl,
+          webhookByEvents: false,
+          webhookBase64: false,
+          events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'MESSAGES_UPDATE', 'SEND_MESSAGE'],
+        },
       }),
     })
     if (!r.ok) {
       const err = await r.json().catch(() => ({}))
-      throw new Error(err.message || `Evolution erro ${r.status}`)
+      throw new Error(err.message || err.error || `Evolution erro ${r.status}`)
     }
     res.json({ revalidated: true, webhookUrl })
   } catch (e) {

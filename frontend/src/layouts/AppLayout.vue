@@ -134,6 +134,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale.js'
 import { api } from '@/services/api'
 import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
 
@@ -157,37 +158,41 @@ async function toggleAI() {
 onMounted(loadAIStatus)
 
 const isAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
-function hasPerm(key) {
-  if (isAdmin.value) return true
-  const perms = auth.user?.permissions
-  return !perms || perms[key] !== false
+const locale  = useLocaleStore()
+const t       = (k) => locale.t(k)
+
+function feat(key) {
+  const f = auth.user?.features
+  if (!f) return true  // owner ou sem features = acesso total
+  return f[key] !== false
 }
 
 const navMain = computed(() => [
-  { title: 'Dashboard',  icon: 'mdi-view-dashboard-outline',  to: '/dashboard' },
-  { title: 'CRM Kanban', icon: 'mdi-view-column-outline',     to: '/kanban' },
-  { title: 'Chat SDR',   icon: 'mdi-chat-outline',            to: '/chat' },
-  { title: 'Contatos',   icon: 'mdi-contacts-outline',        to: '/contatos' },
-  { title: 'Leads',      icon: 'mdi-account-multiple-outline',to: '/leads' },
-  { title: 'Agenda',     icon: 'mdi-calendar-clock-outline',  to: '/agenda' },
-].filter((i) => !i.perm || hasPerm(i.perm)))
+  { title: t('nav.dashboard'),  icon: 'mdi-view-dashboard-outline',  to: '/dashboard' },
+  { title: t('nav.kanban'),     icon: 'mdi-view-column-outline',     to: '/kanban',   show: feat('kanban') },
+  { title: t('nav.chat'),       icon: 'mdi-chat-outline',            to: '/chat' },
+  { title: t('nav.grupos'),     icon: 'mdi-account-group-outline',   to: '/grupos' },
+  { title: t('nav.contatos'),   icon: 'mdi-contacts-outline',        to: '/contatos', show: feat('contacts') },
+  { title: t('nav.leads'),      icon: 'mdi-account-multiple-outline',to: '/leads' },
+  { title: t('nav.agenda'),     icon: 'mdi-calendar-clock-outline',  to: '/agenda',   show: feat('agenda') },
+].filter((i) => i.show !== false))
 
 const navTools = computed(() => [
-  { title: 'Templates',  icon: 'mdi-file-document-multiple-outline', to: '/templates' },
-  { title: 'Broadcast',  icon: 'mdi-bullhorn-outline',               to: '/broadcast' },
-  { title: 'Operadores', icon: 'mdi-account-group-outline',          to: '/operadores' },
-].filter((i) => (!i.perm || hasPerm(i.perm)) && (!i.adminOnly || isAdmin.value)))
+  { title: t('nav.templates'),  icon: 'mdi-file-document-multiple-outline', to: '/templates' },
+  { title: t('nav.broadcast'),  icon: 'mdi-bullhorn-outline',               to: '/broadcast',  show: feat('broadcast') },
+  { title: t('nav.usuarios'),   icon: 'mdi-account-group-outline',          to: '/operadores', show: feat('operators') },
+].filter((i) => i.show !== false))
 
 const navSystem = computed(() => {
   if (!isAdmin.value) return []
   return [
-    { title: 'Atendimento',   icon: 'mdi-headset',            to: '/atendimento' },
-    { title: 'Canais',        icon: 'mdi-cellphone-wireless', to: '/canais' },
-    { title: 'IA Config',     icon: 'mdi-robot-outline',      to: '/ia-config' },
-    { title: 'APIs Externas', icon: 'mdi-api',                to: '/apis' },
-    { title: 'Integrações',   icon: 'mdi-puzzle-outline',     to: '/integracoes' },
-    { title: 'Configurações', icon: 'mdi-cog-outline',        to: '/configuracoes' },
-  ]
+    { title: t('nav.atendimento'),   icon: 'mdi-headset',            to: '/atendimento' },
+    { title: t('nav.canais'),        icon: 'mdi-cellphone-wireless', to: '/canais',       show: feat('evolution') || feat('meta_api') },
+    { title: t('nav.ia'),            icon: 'mdi-robot-outline',      to: '/ia-config',    show: feat('ia_config') },
+    { title: t('nav.apis'),          icon: 'mdi-api',                to: '/apis',         show: feat('custom_apis') },
+    { title: t('nav.integracoes'),   icon: 'mdi-puzzle-outline',     to: '/integracoes',  show: feat('google_cal') || feat('meta_api') },
+    { title: t('nav.configuracoes'), icon: 'mdi-cog-outline',        to: '/configuracoes' },
+  ].filter((i) => i.show !== false)
 })
 
 const tenantName = computed(() => auth.user?.tenantName || auth.user?.tenantSlug || 'Minha Operação')

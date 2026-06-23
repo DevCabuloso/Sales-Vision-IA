@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import ws from 'ws'
 import { config } from '../config/index.js'
 
 if (!config.supabase.url || !config.supabase.serviceKey) {
@@ -9,7 +10,10 @@ if (!config.supabase.url || !config.supabase.serviceKey) {
 export const supabase = createClient(
   config.supabase.url,
   config.supabase.serviceKey,
-  { auth: { persistSession: false, autoRefreshToken: false } }
+  {
+    auth: { persistSession: false, autoRefreshToken: false },
+    realtime: { transport: ws },
+  }
 )
 
 /** Helper: lança erro padronizado quando o supabase retorna { error }. */

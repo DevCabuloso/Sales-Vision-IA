@@ -40,7 +40,9 @@ authRouter.post('/login', async (req, res) => {
     let tenant = null
     if (user.tenant_id) {
       const t = unwrap(
-        await supabase.from('tenants').select('name, slug, status').eq('id', user.tenant_id).limit(1)
+        await supabase.from('tenants')
+          .select('name, slug, status, feat_meta_api, feat_evolution_api, feat_hybrid, feat_google_cal, feat_broadcast, feat_kanban, feat_agenda, feat_contacts, feat_ia_config, feat_operators, feat_custom_apis')
+          .eq('id', user.tenant_id).limit(1)
       )
       tenant = t?.[0] || null
     }
@@ -67,6 +69,19 @@ authRouter.post('/login', async (req, res) => {
         tenantSlug: tenant?.slug || null,
         permissions: user.permissions || null,
         is_restricted: user.is_restricted || false,
+        features: tenant ? {
+          meta_api:    tenant.feat_meta_api    ?? false,
+          evolution:   tenant.feat_evolution_api ?? false,
+          hybrid:      tenant.feat_hybrid       ?? false,
+          google_cal:  tenant.feat_google_cal   ?? true,
+          broadcast:   tenant.feat_broadcast    ?? true,
+          kanban:      tenant.feat_kanban       ?? true,
+          agenda:      tenant.feat_agenda       ?? true,
+          contacts:    tenant.feat_contacts     ?? true,
+          ia_config:   tenant.feat_ia_config    ?? true,
+          operators:   tenant.feat_operators    ?? true,
+          custom_apis: tenant.feat_custom_apis  ?? false,
+        } : null,
       },
     })
   } catch (e) {

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <clipPath id="rounded">
+      <rect width="36" height="36" rx="10" ry="10"/>
+    </clipPath>
+  </defs>
+  <rect width="36" height="36" rx="10" ry="10" fill="url(#bg)"/>
+  <!-- mdi-robot-happy-outline scaled from 24px viewBox to fit inside 36px with padding -->
+  <g clip-path="url(#rounded)" transform="translate(6,6) scale(1)">
+    <path fill="white" d="
+      M17.5 15.5C17.5 16.6 16.6 17.5 15.5 17.5
+        C14.4 17.5 13.5 16.6 13.5 15.5
+        C13.5 14.4 14.4 13.5 15.5 13.5
+        C16.6 13.5 17.5 14.4 17.5 15.5Z
+      M8.5 13.5C7.4 13.5 6.5 14.4 6.5 15.5
+        C6.5 16.6 7.4 17.5 8.5 17.5
+        C9.6 17.5 10.5 16.6 10.5 15.5
+        C10.5 14.4 9.6 13.5 8.5 13.5Z
+      M22 10V22H2V10H5V7
+        C5 4.24 7.24 2 10 2H14
+        C16.76 2 19 4.24 19 7V10H22Z
+      M12 4C9.79 4 8 5.79 8 8H16C16 5.79 14.21 4 12 4Z
+      M4 12V20H20V12H4Z
+      M9 17.5C9 17.5 9.5 19 12 19C14.5 19 15 17.5 15 17.5H9Z
+    " fill-rule="evenodd"/>
+  </g>
+</svg>

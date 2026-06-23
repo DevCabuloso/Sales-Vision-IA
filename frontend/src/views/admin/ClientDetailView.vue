@@ -326,11 +326,17 @@ const roles = [
 ]
 
 const featureDefs = [
-  { key: 'feat_meta_api', label: 'Meta API (WhatsApp Oficial)' },
   { key: 'feat_evolution_api', label: 'Evolution API' },
-  { key: 'feat_hybrid', label: 'Modo híbrido' },
-  { key: 'feat_google_cal', label: 'Google Calendar' },
-  { key: 'feat_broadcast', label: 'Campanhas em massa' },
+  { key: 'feat_meta_api',      label: 'Meta API (WhatsApp Oficial)' },
+  { key: 'feat_hybrid',        label: 'Modo Híbrido (IA + Humano)' },
+  { key: 'feat_google_cal',    label: 'Google Calendar' },
+  { key: 'feat_broadcast',     label: 'Campanhas em massa (Broadcast)' },
+  { key: 'feat_kanban',        label: 'CRM Kanban' },
+  { key: 'feat_agenda',        label: 'Agenda / Reuniões' },
+  { key: 'feat_contacts',      label: 'Módulo de Contatos' },
+  { key: 'feat_ia_config',     label: 'Configuração de IA' },
+  { key: 'feat_operators',     label: 'Gestão de Operadores' },
+  { key: 'feat_custom_apis',   label: 'APIs Externas' },
 ]
 
 function toast(text, color = 'success') {

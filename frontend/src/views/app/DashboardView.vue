@@ -4,7 +4,7 @@
     <!-- ═══ HEADER ═══ -->
     <div class="dash-header">
       <div class="dash-title-row">
-        <span class="dash-eyebrow">PAINEL SDR · VISÃO COMERCIAL</span>
+        <span class="dash-eyebrow">PAINEL SDR · VISÃO COMERCIAL — Bem-vindo, {{ auth.user?.name }}!</span>
         <div class="dash-live">
           <span class="live-dot" />
           ao vivo
@@ -20,9 +20,6 @@
         </div>
         <div class="stat-value">{{ loading ? '—' : s.value }}</div>
         <div class="stat-label">{{ s.label }}</div>
-        <div v-if="s.hint" class="stat-hint">
-          <span class="hint-arrow">↑</span> {{ s.hint }}
-        </div>
       </div>
     </div>
 
@@ -33,10 +30,6 @@
       <div class="panel">
         <div class="panel-head">
           <span class="panel-title">Reuniões agendadas por mês</span>
-          <span class="panel-growth">
-            <v-icon icon="mdi-trending-up" size="14" />
-            +{{ growthPct }}% em {{ monthBars.length }} meses
-          </span>
         </div>
 
         <div v-if="loading" class="panel-loading">
@@ -188,25 +181,21 @@ const cards = computed(() => [
       const d = new Date(l.createdAt); const t = new Date()
       return d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate()
     }).length,
-    hint: '+18%',
   },
   {
     label: 'Conversas ativas',
     icon: 'mdi-message-outline',
     value: leads.value.filter((l) => l.conversation_status === 'open').length,
-    hint: '+9%',
   },
   {
     label: 'Qualificados',
     icon: 'mdi-check-circle-outline',
     value: leads.value.filter((l) => (l.score ?? 0) >= 70).length,
-    hint: '+24%',
   },
   {
     label: 'Reuniões agendadas',
     icon: 'mdi-calendar-check-outline',
-    value: appts.value.filter((a) => new Date(a.startTime) > new Date()).length,
-    hint: '+12%',
+    value: appts.value.filter((a) => parseDt(a.startTime) > new Date()).length,
   },
 ])
 
@@ -219,7 +208,7 @@ const monthBars = computed(() => {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
     const next = new Date(d.getFullYear(), d.getMonth() + 1, 1)
     const count = appts.value.filter((a) => {
-      const s = new Date(a.startTime)
+      const s = parseDt(a.startTime)
       return s >= d && s < next
     }).length
     bars.push({ label: monthNames[d.getMonth()], count })
@@ -280,8 +269,8 @@ const funnel = computed(() => {
 // ── reuniões / leads ──
 const nextAppts = computed(() =>
   [...appts.value]
-    .filter((a) => new Date(a.startTime) > new Date())
-    .sort((a, b) => new Date(a.startTime) - new Date(b.startTime))
+    .filter((a) => parseDt(a.startTime) > new Date())
+    .sort((a, b) => parseDt(a.startTime) - parseDt(b.startTime))
     .slice(0, 5)
 )
 const recentLeads = computed(() =>
@@ -291,9 +280,18 @@ const recentLeads = computed(() =>
 )
 
 // ── formatação ──
-function formatTime(d) { return d ? new Date(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—' }
-function apptDay(d)    { return d ? new Date(d).getDate() : '—' }
-function apptMon(d)    { return d ? new Date(d).toLocaleString('pt-BR', { month: 'short' }).replace('.', '') : '' }
+// bare date strings (all-day Google Calendar) são UTC midnight → shift de 1 dia em UTC-3
+function parseDt(s) {
+  if (!s) return new Date()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split('-').map(Number)
+    return new Date(y, m - 1, d, 12, 0, 0)
+  }
+  return new Date(s)
+}
+function formatTime(d) { return d ? parseDt(d).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—' }
+function apptDay(d)    { return d ? parseDt(d).getDate() : '—' }
+function apptMon(d)    { return d ? parseDt(d).toLocaleString('pt-BR', { month: 'short' }).replace('.', '') : '' }
 function relativeTime(d) {
   if (!d) return ''
   const m = Math.floor((Date.now() - new Date(d)) / 60000)
@@ -375,10 +373,6 @@ useRealtime('appointments', auth.user?.tenantId, refresh)
   font-variant-numeric: tabular-nums;
 }
 .stat-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
-.stat-hint {
-  font-size: 11px; font-weight: 700; color: #10B981; margin-top: 2px;
-}
-.hint-arrow { font-size: 10px; }
 
 /* ─── Grids ─── */
 .main-grid {

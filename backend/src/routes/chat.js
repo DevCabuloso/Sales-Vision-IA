@@ -12,13 +12,25 @@ chatRouter.use(requireAuth, requireTenant)
 
 const isManager = (role) => role === 'owner' || role === 'admin'
 
+async function logTicketEvent(tenantId, leadId, userId, userName, action, toUserId = null, toUserName = null) {
+  await supabase.from('ticket_logs').insert({
+    tenant_id: tenantId,
+    lead_id: leadId,
+    user_id: userId,
+    user_name: userName,
+    action,
+    to_user_id: toUserId,
+    to_user_name: toUserName,
+  })
+}
+
 // GET /api/chat — lista conversas
 chatRouter.get('/', async (req, res) => {
   try {
     const { stage, assigned_to } = req.query
 
     let q = supabase.from('leads')
-      .select('id, name, phone, stage, human_takeover, conversation_status, assigned_to, updated_at')
+      .select('id, name, phone, stage, human_takeover, conversation_status, assigned_to, channel_id, updated_at')
       .eq('tenant_id', req.user.tenantId)
       .order('updated_at', { ascending: false })
       .limit(300)
@@ -41,11 +53,23 @@ chatRouter.get('/', async (req, res) => {
       if (!lastByLead[m.lead_id]) lastByLead[m.lead_id] = m
     }
 
-    // operadores só veem seus próprios atendimentos abertos + todos os pendentes/fechados
-    let result = leads.map((l) => ({ ...l, lastMessage: lastByLead[l.id] || null }))
+    // busca nomes dos canais
+    const channels = unwrap(
+      await supabase.from('channels').select('id, name').eq('tenant_id', req.user.tenantId)
+    )
+    const channelById = Object.fromEntries((channels || []).map((c) => [c.id, c.name]))
+
+    let result = leads.map((l) => ({
+      ...l,
+      lastMessage: lastByLead[l.id] || null,
+      channel_name: l.channel_id ? (channelById[l.channel_id] || null) : null,
+    }))
+
+    // Agentes veem: tickets pendentes (fila) + seus próprios (open/resolved)
+    // Admins/owners veem tudo
     if (!isManager(req.user.role)) {
       result = result.filter((l) =>
-        l.conversation_status !== 'open' || l.assigned_to === req.user.id
+        l.conversation_status === 'pending' || l.assigned_to === req.user.id
       )
     }
 
@@ -55,7 +79,7 @@ chatRouter.get('/', async (req, res) => {
   }
 })
 
-// GET /api/chat/operators — lista operadores para o filtro
+// GET /api/chat/operators — lista operadores para o filtro/transferência
 chatRouter.get('/operators', async (req, res) => {
   try {
     const rows = unwrap(
@@ -90,13 +114,14 @@ chatRouter.post('/start', async (req, res) => {
         .select('id, name, phone, stage, conversation_status, assigned_to').single()
     )
 
-    // garante status correto se lead já existia
     await supabase.from('leads').update({
       conversation_status: 'open',
       human_takeover: true,
       assigned_to: req.user.id,
       updated_at: new Date().toISOString(),
     }).eq('id', lead.id)
+
+    await logTicketEvent(req.user.tenantId, lead.id, req.user.id, req.user.name, 'opened')
 
     if (message?.trim()) {
       await supabase.from('messages').insert({
@@ -122,16 +147,34 @@ chatRouter.post('/start', async (req, res) => {
 
 // GET /api/chat/:leadId/messages
 chatRouter.get('/:leadId/messages', async (req, res) => {
-  const { limit = 50, before } = req.query
+  const { limit = 50, before, after } = req.query
   try {
     let q = supabase.from('messages').select('id, role, text, provider, is_human_takeover, created_at')
       .eq('lead_id', req.params.leadId)
       .eq('tenant_id', req.user.tenantId)
-      .order('created_at', { ascending: false })
+      .order('created_at', { ascending: !!after })
       .limit(Number(limit))
     if (before) q = q.lt('id', Number(before))
+    if (after) q = q.gt('created_at', after)
     const rows = unwrap(await q)
-    res.json({ messages: rows.reverse() })
+    res.json({ messages: after ? rows : rows.reverse() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/chat/:leadId/logs — histórico de atendimento
+chatRouter.get('/:leadId/logs', async (req, res) => {
+  try {
+    const rows = unwrap(
+      await supabase.from('ticket_logs')
+        .select('id, user_id, user_name, action, to_user_id, to_user_name, created_at')
+        .eq('lead_id', req.params.leadId)
+        .eq('tenant_id', req.user.tenantId)
+        .order('created_at', { ascending: false })
+        .limit(50)
+    )
+    res.json({ logs: rows })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -145,11 +188,15 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   try {
     const leadRows = unwrap(
-      await supabase.from('leads').select('id, phone, human_takeover')
+      await supabase.from('leads').select('id, phone, human_takeover, conversation_status')
         .eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
     )
     if (!leadRows.length) return res.status(404).json({ error: 'Lead não encontrado.' })
     const lead = leadRows[0]
+
+    if (lead.conversation_status !== 'open') {
+      return res.status(403).json({ error: 'Ticket não está aberto. Atenda ou reabra antes de enviar mensagens.' })
+    }
 
     const row = unwrap(
       await supabase.from('messages').insert({
@@ -182,11 +229,15 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' })
   try {
     const leadRows = unwrap(
-      await supabase.from('leads').select('id, phone, human_takeover')
+      await supabase.from('leads').select('id, phone, human_takeover, conversation_status')
         .eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
     )
     if (!leadRows.length) return res.status(404).json({ error: 'Lead não encontrado.' })
     const lead = leadRows[0]
+
+    if (lead.conversation_status !== 'open') {
+      return res.status(403).json({ error: 'Ticket não está aberto.' })
+    }
 
     const caption = req.body.caption || ''
     const filename = req.file.originalname || 'arquivo'
@@ -222,7 +273,7 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
   }
 })
 
-// POST /api/chat/:leadId/transfer
+// POST /api/chat/:leadId/transfer — IA ↔ humano
 chatRouter.post('/:leadId/transfer', async (req, res) => {
   const { human_takeover } = req.body
   try {
@@ -246,6 +297,49 @@ chatRouter.post('/:leadId/transfer', async (req, res) => {
   }
 })
 
+// POST /api/chat/:leadId/transfer-to — transferir para outro operador
+chatRouter.post('/:leadId/transfer-to', async (req, res) => {
+  const { userId } = req.body
+  if (!userId) return res.status(400).json({ error: 'userId obrigatório.' })
+  try {
+    // busca o operador destino
+    const opRows = unwrap(
+      await supabase.from('users').select('id, name, email')
+        .eq('id', userId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!opRows.length) return res.status(404).json({ error: 'Operador não encontrado.' })
+    const toUser = opRows[0]
+
+    const row = unwrap(
+      await supabase.from('leads').update({
+        assigned_to: userId,
+        conversation_status: 'open',
+        human_takeover: true,
+        updated_at: new Date().toISOString(),
+      }).eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId)
+        .select('id, conversation_status, assigned_to').single()
+    )
+
+    await supabase.from('messages').insert({
+      tenant_id: req.user.tenantId,
+      lead_id: req.params.leadId,
+      role: 'system',
+      text: `— Atendimento transferido para ${toUser.name || toUser.email} —`,
+    })
+
+    await logTicketEvent(
+      req.user.tenantId, req.params.leadId,
+      req.user.id, req.user.name,
+      'transferred',
+      toUser.id, toUser.name || toUser.email
+    )
+
+    res.json({ lead: row, to: toUser })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // POST /api/chat/:leadId/attend
 chatRouter.post('/:leadId/attend', async (req, res) => {
   try {
@@ -260,10 +354,11 @@ chatRouter.post('/:leadId/attend', async (req, res) => {
     await supabase.from('messages').insert({
       tenant_id: req.user.tenantId,
       lead_id: req.params.leadId,
-      role: 'agent',
-      text: '— Atendimento iniciado —',
+      role: 'system',
+      text: `— Atendimento iniciado por ${req.user.name} —`,
       is_human_takeover: true,
     })
+    await logTicketEvent(req.user.tenantId, req.params.leadId, req.user.id, req.user.name, 'opened')
     res.json({ lead: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -281,6 +376,13 @@ chatRouter.post('/:leadId/reopen', async (req, res) => {
         updated_at: new Date().toISOString(),
       }).eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId).select('id, conversation_status').single()
     )
+    await supabase.from('messages').insert({
+      tenant_id: req.user.tenantId,
+      lead_id: req.params.leadId,
+      role: 'system',
+      text: `— Ticket reaberto por ${req.user.name} —`,
+    })
+    await logTicketEvent(req.user.tenantId, req.params.leadId, req.user.id, req.user.name, 'reopened')
     res.json({ lead: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -301,10 +403,11 @@ chatRouter.post('/:leadId/return-to-queue', async (req, res) => {
     await supabase.from('messages').insert({
       tenant_id: req.user.tenantId,
       lead_id: req.params.leadId,
-      role: 'agent',
-      text: '— Ticket retornado à fila de pendentes —',
+      role: 'system',
+      text: `— Ticket retornado à fila por ${req.user.name} —`,
       is_human_takeover: false,
     })
+    await logTicketEvent(req.user.tenantId, req.params.leadId, req.user.id, req.user.name, 'pending')
     res.json({ lead: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -325,10 +428,11 @@ chatRouter.post('/:leadId/resolve', async (req, res) => {
     await supabase.from('messages').insert({
       tenant_id: req.user.tenantId,
       lead_id: req.params.leadId,
-      role: 'agent',
-      text: '— Atendimento finalizado —',
+      role: 'system',
+      text: `— Atendimento finalizado por ${req.user.name} —`,
       is_human_takeover: false,
     })
+    await logTicketEvent(req.user.tenantId, req.params.leadId, req.user.id, req.user.name, 'closed')
     res.json({ lead: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
