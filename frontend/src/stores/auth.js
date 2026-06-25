@@ -54,5 +54,12 @@ export const useAuthStore = defineStore('auth', () => {
     if (u) { user.value = u; userStore.set(u) }
   }
 
-  return { user, token, isAuthenticated, isOwner, login, loginSuperAdmin, register, logout, hydrate }
+  function impersonate(t, u) {
+    token.value = t
+    user.value = u
+    tokenStore.set(t)
+    userStore.set(u)
+  }
+
+  return { user, token, isAuthenticated, isOwner, login, loginSuperAdmin, register, logout, hydrate, impersonate }
 })

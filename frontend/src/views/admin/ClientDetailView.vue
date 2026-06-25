@@ -36,6 +36,15 @@
           >
             {{ client.status === 'suspended' ? 'Reativar' : 'Suspender' }}
           </v-btn>
+          <v-btn
+            color="secondary"
+            variant="tonal"
+            prepend-icon="mdi-login-variant"
+            :loading="impersonating"
+            @click="doImpersonate"
+          >
+            Acessar plataforma
+          </v-btn>
         </div>
       </div>
 
@@ -292,6 +301,7 @@ const router = useRouter()
 const loading = ref(true)
 const saving = ref(false)
 const deleting = ref(false)
+const impersonating = ref(false)
 const savingKey = ref(null)
 const confirmDelete = ref(false)
 
@@ -523,6 +533,19 @@ async function doDeleteUser() {
     toast(e.message, 'error')
   } finally {
     saving.value = false
+  }
+}
+
+async function doImpersonate() {
+  impersonating.value = true
+  try {
+    const { token, user } = await api.adminImpersonate(props.id)
+    const u = btoa(encodeURIComponent(JSON.stringify(user)))
+    window.open(`/impersonate?token=${token}&u=${u}`, '_blank')
+  } catch (e) {
+    toast(e.message, 'error')
+  } finally {
+    impersonating.value = false
   }
 }
 

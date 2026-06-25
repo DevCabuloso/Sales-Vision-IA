@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import jwt from 'jsonwebtoken'
 import { supabase, unwrap } from '../db/supabase.js'
 import { hashPassword } from '../services/auth.js'
 import { requireAuth, requireOwner } from '../middleware/auth.js'
@@ -333,6 +334,65 @@ adminRouter.delete('/owners/:id', async (req, res) => {
     await supabase.from('users').delete().eq('id', req.params.id).eq('role', 'owner')
   )
   res.json({ deleted: true })
+})
+
+// ── Impersonation ─────────────────────────────────────────────────────────────
+
+adminRouter.post('/clients/:id/impersonate', async (req, res) => {
+  const tenantId = req.params.id
+
+  const tenants = unwrap(
+    await supabase.from('tenants')
+      .select('name, slug, feat_meta_api, feat_evolution_api, feat_hybrid, feat_google_cal, feat_broadcast, feat_kanban, feat_agenda, feat_contacts, feat_ia_config, feat_operators, feat_custom_apis')
+      .eq('id', tenantId).limit(1)
+  )
+  if (!tenants.length) return res.status(404).json({ error: 'Cliente não encontrado.' })
+  const tenant = tenants[0]
+
+  const admins = unwrap(
+    await supabase.from('users')
+      .select('id, email, name, role, permissions, is_restricted')
+      .eq('tenant_id', tenantId)
+      .eq('role', 'admin')
+      .eq('active', true)
+      .limit(1)
+  )
+  if (!admins.length) return res.status(404).json({ error: 'Nenhum administrador ativo encontrado para este cliente.' })
+  const adminUser = admins[0]
+
+  const token = jwt.sign(
+    { sub: adminUser.id, role: adminUser.role, tenantId },
+    config.jwt.secret,
+    { expiresIn: '1h' }
+  )
+
+  res.json({
+    token,
+    user: {
+      id: adminUser.id,
+      email: adminUser.email,
+      name: adminUser.name,
+      role: adminUser.role,
+      tenantId,
+      tenantName: tenant.name,
+      tenantSlug: tenant.slug,
+      permissions: adminUser.permissions || null,
+      is_restricted: adminUser.is_restricted || false,
+      features: {
+        meta_api:    tenant.feat_meta_api      ?? false,
+        evolution:   tenant.feat_evolution_api ?? false,
+        hybrid:      tenant.feat_hybrid        ?? false,
+        google_cal:  tenant.feat_google_cal    ?? true,
+        broadcast:   tenant.feat_broadcast     ?? true,
+        kanban:      tenant.feat_kanban        ?? true,
+        agenda:      tenant.feat_agenda        ?? true,
+        contacts:    tenant.feat_contacts      ?? true,
+        ia_config:   tenant.feat_ia_config     ?? true,
+        operators:   tenant.feat_operators     ?? true,
+        custom_apis: tenant.feat_custom_apis   ?? false,
+      },
+    },
+  })
 })
 
 // ── Monitoramento ─────────────────────────────────────────────────────────────

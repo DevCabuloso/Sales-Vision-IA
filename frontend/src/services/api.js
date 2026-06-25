@@ -116,6 +116,8 @@ export const api = {
   adminUpdateFeatures: (id, features) => http.patch(`/admin/clients/${id}/features`, features).then((r) => r.data.client),
   adminUpdateStatus: (id, status) => http.patch(`/admin/clients/${id}/status`, { status }).then((r) => r.data.client),
   adminDeleteClient: (id) => http.delete(`/admin/clients/${id}`).then((r) => r.data),
+  adminImpersonate: (clientId) =>
+    http.post(`/admin/clients/${clientId}/impersonate`).then((r) => r.data),
 
   // admin — usuários
   adminUsers: (tenantId) =>
