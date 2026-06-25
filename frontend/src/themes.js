@@ -21,7 +21,7 @@ export const THEMES = {
     label: 'Cyberpunk', dark: false,
     preview: ['#ffee00', '#ff7598', '#75d1f0'],
     colors: { primary: '#FF7598', secondary: '#75D1F0', accent: '#FFEE00', success: '#35BDB2', info: '#75D1F0', warning: '#FF7598', error: '#FF3F3F', background: '#fffce0', surface: '#FFFFFF' },
-    css: { '--app-bg': '#fffce0', '--glow-1': 'rgba(255,117,152,0.15)', '--glow-2': 'rgba(117,209,240,0.10)', '--glass-bg': 'rgba(255,252,224,0.85)', '--glass-border': '#e0d800', '--scrollbar': '#cc9b00' },
+    css: { '--app-bg': '#fffce0', '--glow-1': 'rgba(255,117,152,0.15)', '--glow-2': 'rgba(117,209,240,0.10)', '--glass-bg': 'rgba(255,252,224,0.85)', '--glass-border': '#e0d800', '--scrollbar': '#cc9b00', '--border-subtle': 'rgba(180,160,0,0.30)', '--border-medium': 'rgba(180,160,0,0.50)', '--panel-hover': 'rgba(224,216,0,0.08)', '--item-hover': 'rgba(224,216,0,0.06)' },
   },
   coffee: {
     label: 'Coffee', dark: true,
@@ -84,14 +84,14 @@ export const THEME_GROUPS = {
   Claro: ['corporate', 'emerald', 'cupcake', 'winter'],
 }
 
-const DARK_EXTRA  = { '--text-primary':'#F1F5F9','--text-secondary':'#9FB0BC','--text-muted':'#6B7C88','--text-faint':'#3A4A55','--border-subtle':'rgba(255,255,255,0.06)','--border-medium':'rgba(255,255,255,0.1)','--panel-bg':'rgba(255,255,255,0.03)','--panel-hover':'rgba(255,255,255,0.04)','--item-hover':'rgba(255,255,255,0.035)' }
-const LIGHT_EXTRA = { '--text-primary':'#0F172A','--text-secondary':'#475569','--text-muted':'#64748B','--text-faint':'#94A3B8','--border-subtle':'rgba(0,0,0,0.07)','--border-medium':'rgba(0,0,0,0.12)','--panel-bg':'rgba(0,0,0,0.03)','--panel-hover':'rgba(0,0,0,0.04)','--item-hover':'rgba(0,0,0,0.03)' }
+const DARK_EXTRA  = { '--text-primary':'#F1F5F9','--text-secondary':'#9FB0BC','--text-muted':'#6B7C88','--text-faint':'#3A4A55','--border-subtle':'rgba(255,255,255,0.06)','--border-medium':'rgba(255,255,255,0.1)','--panel-bg':'rgba(255,255,255,0.03)','--panel-hover':'rgba(255,255,255,0.04)','--item-hover':'rgba(255,255,255,0.035)','--sep':'rgba(255,255,255,0.07)','--sep-md':'rgba(255,255,255,0.11)' }
+const LIGHT_EXTRA = { '--text-primary':'#0F172A','--text-secondary':'#475569','--text-muted':'#64748B','--text-faint':'#94A3B8','--border-subtle':'rgba(0,0,0,0.18)','--border-medium':'rgba(0,0,0,0.28)','--panel-bg':'rgba(0,0,0,0.03)','--panel-hover':'rgba(0,0,0,0.06)','--item-hover':'rgba(0,0,0,0.04)','--sep':'rgba(0,0,0,0.14)','--sep-md':'rgba(0,0,0,0.22)' }
 
 export function applyTheme(key) {
   const t = THEMES[key]
   if (!t) return
   const root = document.documentElement
   const extra = t.dark ? DARK_EXTRA : LIGHT_EXTRA
-  Object.entries({ ...t.css, ...extra }).forEach(([prop, val]) => root.style.setProperty(prop, val))
+  Object.entries({ ...extra, ...t.css }).forEach(([prop, val]) => root.style.setProperty(prop, val))
   root.setAttribute('data-theme-dark', t.dark ? '1' : '0')
 }

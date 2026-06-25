@@ -116,6 +116,7 @@
           <v-icon icon="mdi-menu" size="20" />
         </button>
         <div class="bar-spacer" />
+        <NotificationBell />
         <ThemeSwitcher />
       </header>
 
@@ -131,12 +132,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale.js'
 import { api } from '@/services/api'
 import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
+import NotificationBell from '@/components/NotificationBell.vue'
+import { useNotificationsStore } from '@/stores/notifications'
 
 const router = useRouter()
 const route  = useRoute()
@@ -149,13 +152,16 @@ const rail       = ref(false)
 const aiEnabled  = ref(true)
 const togglingAI = ref(false)
 
+const notifStore = useNotificationsStore()
+
 async function loadAIStatus() { try { const d = await api.getAIStatus(); aiEnabled.value = d.ai_enabled } catch { /* */ } }
 async function toggleAI() {
   togglingAI.value = true
   try { const d = await api.toggleAI(); aiEnabled.value = d.ai_enabled } catch { /* */ }
   finally { togglingAI.value = false }
 }
-onMounted(loadAIStatus)
+onMounted(() => { loadAIStatus(); notifStore.startPolling() })
+onUnmounted(() => notifStore.stopPolling())
 
 const isAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
 const locale  = useLocaleStore()

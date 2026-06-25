@@ -89,7 +89,7 @@
 
         <div v-if="history.length" class="mb-4">
           <p class="text-caption mb-2" style="color:#9FB0BC">Histórico:</p>
-          <div v-for="h in history" :key="h.id" class="d-flex align-center ga-2 py-1 text-caption" style="border-bottom:1px solid rgba(255,255,255,0.05);color:#9FB0BC">
+          <div v-for="h in history" :key="h.id" class="d-flex align-center ga-2 py-1 text-caption" :style="{ borderBottom: '1px solid var(--sep)', color: 'var(--text-muted)' }">
             <v-icon icon="mdi-arrow-right" size="12" />
             <span>{{ h.from_stage || '—' }} → <strong>{{ h.to_stage }}</strong></span>
             <span class="ml-auto">{{ formatDate(h.changed_at) }}</span>
@@ -162,13 +162,13 @@ onMounted(load)
 
 <style scoped>
 .kanban-board { display:flex; gap:16px; overflow-x:auto; padding-bottom:16px; min-height:calc(100vh - 200px); }
-.kanban-col { min-width:240px; width:240px; flex-shrink:0; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.07); border-radius:14px; display:flex; flex-direction:column; }
-.kanban-header { padding:12px 14px 10px; border-radius:14px 14px 0 0; background:rgba(255,255,255,0.03); }
+.kanban-col { min-width:240px; width:240px; flex-shrink:0; background:var(--panel-bg); border:1px solid var(--sep); border-radius:14px; display:flex; flex-direction:column; }
+.kanban-header { padding:12px 14px 10px; border-radius:14px 14px 0 0; background:var(--panel-bg); }
 .kanban-cards { flex:1; padding:10px; display:flex; flex-direction:column; gap:10px; overflow-y:auto; }
-.kanban-card { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:12px; cursor:grab; transition:all 0.15s ease; }
-.kanban-card:hover { background:rgba(255,255,255,0.07); border-color:rgba(255,255,255,0.14); transform:translateY(-1px); }
+.kanban-card { background:var(--item-hover); border:1px solid var(--sep); border-radius:10px; padding:12px; cursor:grab; transition:all 0.15s ease; }
+.kanban-card:hover { background:var(--panel-hover); border-color:var(--sep-md); transform:translateY(-1px); }
 .kanban-card:active { cursor:grabbing; }
 .kanban-empty { flex:1; display:flex; align-items:center; justify-content:center; padding:24px; }
 .lead-avatar { width:30px; height:30px; border-radius:8px; background:rgba(99,102,241,0.15); font-size:11px; font-weight:700; color:#818CF8; display:flex; align-items:center; justify-content:center; }
-.intention-tag { color:#9FB0BC; background:rgba(255,255,255,0.05); border-radius:4px; padding:2px 6px; display:inline-block; font-size:11px; margin-top:4px; }
+.intention-tag { color:var(--text-muted); background:var(--panel-bg); border-radius:4px; padding:2px 6px; display:inline-block; font-size:11px; margin-top:4px; }
 </style>

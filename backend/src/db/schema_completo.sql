@@ -27,9 +27,13 @@ CREATE TABLE IF NOT EXISTS tenants (
   feat_broadcast     BOOLEAN     NOT NULL DEFAULT true,
   max_leads          INTEGER     NOT NULL DEFAULT 1000,
   notes              TEXT,
+  op_settings        JSONB       NOT NULL DEFAULT '{}'::jsonb,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Migração: adicionar op_settings em banco existente
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS op_settings JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- ─── USERS ──────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (

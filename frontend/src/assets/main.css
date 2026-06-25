@@ -5,6 +5,10 @@
   --glass-bg: rgba(29,35,42,0.80);
   --glass-border: #2d3748;
   --scrollbar: #2d3748;
+  --sep: rgba(255,255,255,0.07);
+  --sep-md: rgba(255,255,255,0.11);
+  --border-subtle: rgba(255,255,255,0.06);
+  --border-medium: rgba(255,255,255,0.10);
 }
 
 * { box-sizing: border-box; }
@@ -32,3 +36,16 @@ html, body, #app { height: 100%; margin: 0; }
 
 .fade-enter-active, .fade-leave-active { transition: opacity .25s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ─── Bordas visíveis em temas claros ─── */
+/* Vuetify dividers */
+[data-theme-dark="0"] .v-divider { opacity: 0.6 !important; }
+
+/* Bordas de separação em qualquer elemento com borda definida via rgba branco (dark-designed) */
+/* A propriedade border-color sem !important é sobreposta por estilos scoped — usamos especificidade alta */
+html[data-theme-dark="0"] *:not(.v-btn):not(.v-chip):not([class*="badge"]):not([class*="status"]) {
+  --sep: rgba(0,0,0,0.14);
+  --sep-md: rgba(0,0,0,0.22);
+  --border-subtle: rgba(0,0,0,0.18);
+  --border-medium: rgba(0,0,0,0.28);
+}

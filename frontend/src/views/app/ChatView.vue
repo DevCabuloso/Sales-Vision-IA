@@ -25,7 +25,7 @@
                 class="filter-dropdown-card"
                 width="268"
                 elevation="0"
-                style="background:rgb(var(--v-theme-surface));border:1px solid rgba(255,255,255,0.10);border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.55)"
+                style="background:rgb(var(--v-theme-surface));border:1px solid var(--sep-md);border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.55)"
               >
                 <div class="fp-header">
                   <span class="fp-title">Filtros</span>
@@ -149,7 +149,7 @@
                 min-width="220"
                 class="py-1"
                 elevation="0"
-                style="background:rgb(var(--v-theme-surface));border:1px solid rgba(255,255,255,0.10);border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.55)"
+                style="background:rgb(var(--v-theme-surface));border:1px solid var(--sep-md);border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.55)"
               >
                 <v-list-item
                   :prepend-icon="selectMode ? 'mdi-checkbox-multiple-marked-outline' : 'mdi-checkbox-multiple-outline'"
@@ -1409,17 +1409,17 @@ onUnmounted(() => {
   height: calc(100vh - 80px);
   border-radius: 16px;
   overflow: hidden;
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid var(--sep-md);
 }
 
 /* ———— SIDEBAR ———— */
 .chat-sidebar {
   width: 330px; min-width: 280px;
   background: rgba(255,255,255,0.02);
-  border-right: 1px solid rgba(255,255,255,0.07);
+  border-right: 1px solid var(--sep);
   display: flex; flex-direction: column;
 }
-.sidebar-header { border-bottom: 1px solid rgba(255,255,255,0.06); }
+.sidebar-header { border-bottom: 1px solid var(--sep); }
 /* filter badge */
 .filter-badge-count {
   display: inline-flex; align-items: center; justify-content: center;
@@ -1431,7 +1431,7 @@ onUnmounted(() => {
 /* select mode */
 .select-toolbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 12px; border-top: 1px solid rgba(255,255,255,0.07);
+  padding: 8px 12px; border-top: 1px solid var(--sep);
   background: rgba(99,102,241,0.08); flex-shrink: 0;
 }
 .select-count { font-size: 12px; font-weight: 600; color: #A5B4FC; }
@@ -1449,14 +1449,14 @@ onUnmounted(() => {
 /* ———— FILTER DROPDOWN CARD ———— */
 .filter-dropdown-card {
   background: rgb(var(--v-theme-surface)) !important;
-  border: 1px solid rgba(255,255,255,0.10) !important;
+  border: 1px solid var(--sep-md) !important;
   border-radius: 12px !important;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0,0,0,0.45) !important;
 }
 .fp-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 14px 8px; border-bottom: 1px solid rgba(255,255,255,0.08);
+  padding: 12px 14px 8px; border-bottom: 1px solid var(--sep);
   background: rgba(255,255,255,0.03);
 }
 .fp-title { font-size: 13px; font-weight: 700; color: var(--text-primary, #E2E8F0); }
@@ -1482,7 +1482,7 @@ onUnmounted(() => {
   background-size: 12px; background-repeat: no-repeat; background-position: center;
 }
 .fp-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.fp-sep { height: 1px; background: rgba(255,255,255,0.07); margin: 6px 0; }
+.fp-sep { height: 1px; background: var(--sep); margin: 6px 0; }
 .fp-empty { font-size: 12px; color: var(--text-muted, #6B7C88); padding: 4px 16px; }
 .fp-date-row {
   display: flex; align-items: center; gap: 8px;
@@ -1490,14 +1490,14 @@ onUnmounted(() => {
 }
 .fp-date-label { font-size: 12px; color: var(--text-muted, #6B7C88); width: 24px; flex-shrink: 0; }
 .fp-date-input {
-  flex: 1; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+  flex: 1; background: rgba(255,255,255,0.06); border: 1px solid var(--sep-md);
   border-radius: 6px; padding: 5px 8px; font-size: 12px; color: var(--text-primary, #E2E8F0);
   outline: none; color-scheme: dark;
 }
 .fp-date-input:focus { border-color: rgba(99,102,241,0.6); }
 .fp-select { margin: 4px 16px; }
 
-.sidebar-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; }
+.sidebar-tabs { display: flex; border-bottom: 1px solid var(--sep); flex-shrink: 0; }
 .tab-btn {
   flex: 1; padding: 9px 2px;
   font-size: 11px; font-weight: 600; color: #6B7C88;
@@ -1516,7 +1516,7 @@ onUnmounted(() => {
 /* ———— CONV ITEM ———— */
 .conv-item {
   display:flex; align-items:flex-start; gap:9px; padding:10px 12px 8px;
-  cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.04); transition:background 0.15s; position:relative;
+  cursor:pointer; border-bottom:1px solid var(--sep); transition:background 0.15s; position:relative;
 }
 .conv-item:hover { background:rgba(255,255,255,0.035); }
 .conv-item.active { background:rgba(99,102,241,0.1); border-left:3px solid #6366F1; padding-left:9px; }
@@ -1546,7 +1546,7 @@ onUnmounted(() => {
 .chat-header {
   display:flex; flex-direction:column; gap:8px;
   padding:10px 16px 0;
-  border-bottom:1px solid rgba(255,255,255,0.08);
+  border-bottom:1px solid var(--sep-md);
   background:rgba(255,255,255,0.02);
 }
 .header-avatar { width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:white; }
@@ -1576,13 +1576,13 @@ onUnmounted(() => {
 .qa-btn.success:hover:not(:disabled) { background: rgba(16,185,129,0.1); }
 .qa-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-.qa-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.08); margin: 0 2px; flex-shrink: 0; }
+.qa-divider { width: 1px; height: 18px; background: var(--sep); margin: 0 2px; flex-shrink: 0; }
 
 /* ———— BUSCA DE MENSAGENS ———— */
 .msg-search-bar {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 0 10px;
-  border-top: 1px solid rgba(255,255,255,0.05);
+  border-top: 1px solid var(--sep);
 }
 
 /* ———— CORPO (mensagens + painel) ———— */
@@ -1594,7 +1594,7 @@ onUnmounted(() => {
   display: flex; align-items: center; gap: 10px;
   margin: 12px 16px; color: #6B7C88;
 }
-.msg-separator-line { flex: 1; height: 1px; background: rgba(255,255,255,0.07); }
+.msg-separator-line { flex: 1; height: 1px; background: var(--sep); }
 .msg-separator-text { font-size: 11px; white-space: nowrap; }
 
 .msg-wrapper { display:flex; }
@@ -1619,13 +1619,13 @@ onUnmounted(() => {
 .contact-panel {
   width: 260px; flex-shrink: 0;
   background: rgba(255,255,255,0.02);
-  border-left: 1px solid rgba(255,255,255,0.07);
+  border-left: 1px solid var(--sep);
   display: flex; flex-direction: column;
   overflow-y: auto;
 }
 .contact-panel-header {
   display:flex; align-items:center; justify-content:space-between;
-  padding:12px 14px; border-bottom:1px solid rgba(255,255,255,0.07);
+  padding:12px 14px; border-bottom:1px solid var(--sep);
   flex-shrink: 0;
 }
 .contact-panel-body { padding:16px; }
@@ -1638,7 +1638,7 @@ onUnmounted(() => {
 .contact-info-row {
   display:flex; align-items:center; gap:8px;
   padding:8px 0; font-size:12px; color:#9FB0BC;
-  border-bottom:1px solid rgba(255,255,255,0.05);
+  border-bottom:1px solid var(--sep);
 }
 .contact-intention { font-size:11px; color:#9FB0BC; padding:4px 0 8px; line-height:1.5; }
 .contact-label-chip {
@@ -1671,7 +1671,7 @@ onUnmounted(() => {
   flex-shrink: 0;
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 12px 16px;
-  border-top: 1px solid rgba(255,255,255,0.06);
+  border-top: 1px solid var(--sep);
   background: rgba(255,255,255,0.02);
 }
 .wa-blocked-text {
@@ -1683,7 +1683,7 @@ onUnmounted(() => {
 .wa-bar {
   flex-shrink: 0;
   padding: 8px 12px 10px;
-  border-top: 1px solid rgba(255,255,255,0.08);
+  border-top: 1px solid var(--sep-md);
   background: rgba(255,255,255,0.02);
   position: relative;
 }
@@ -1725,7 +1725,7 @@ onUnmounted(() => {
   min-height: 40px; max-height: 120px;
   padding: 10px 14px;
   background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid var(--sep-md);
   border-radius: 22px;
   color: #F1F5F9; font-size: 14px; font-family: inherit;
   resize: none; outline: none; line-height: 1.45;
