@@ -5,8 +5,14 @@ import { api, tokenStore } from '@/services/api'
 const USER_KEY = 'sdr_user'
 
 const userStore = {
-  get: () => { try { return JSON.parse(localStorage.getItem(USER_KEY)) } catch { return null } },
+  get: () => {
+    try {
+      const v = sessionStorage.getItem(USER_KEY) || localStorage.getItem(USER_KEY)
+      return v ? JSON.parse(v) : null
+    } catch { return null }
+  },
   set: (u) => u ? localStorage.setItem(USER_KEY, JSON.stringify(u)) : localStorage.removeItem(USER_KEY),
+  setSession: (u) => u ? sessionStorage.setItem(USER_KEY, JSON.stringify(u)) : sessionStorage.removeItem(USER_KEY),
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -47,7 +53,9 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
     user.value = null
     tokenStore.set(null)
+    tokenStore.setSession(null)
     userStore.set(null)
+    userStore.setSession(null)
   }
 
   function hydrate(u) {
@@ -57,8 +65,8 @@ export const useAuthStore = defineStore('auth', () => {
   function impersonate(t, u) {
     token.value = t
     user.value = u
-    tokenStore.set(t)
-    userStore.set(u)
+    tokenStore.setSession(t)
+    userStore.setSession(u)
   }
 
   return { user, token, isAuthenticated, isOwner, login, loginSuperAdmin, register, logout, hydrate, impersonate }

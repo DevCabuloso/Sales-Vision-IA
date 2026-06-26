@@ -65,6 +65,12 @@ const router = createRouter({
 router.beforeEach((to) => {
   const auth = useAuthStore()
 
+  // Root URL: limpa a sessão da aba atual e vai sempre para login
+  if (to.path === '/') {
+    auth.logout()
+    return { name: 'login' }
+  }
+
   if (to.meta.requiresAuth && !auth.isAuthenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }

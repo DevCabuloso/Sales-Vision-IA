@@ -5,9 +5,15 @@ const TOKEN_KEY = 'sdr_token'
 
 export const http = axios.create({ baseURL: API_BASE })
 
+// sessionStorage tem prioridade (sessões de impersonação por aba)
+// localStorage é o fallback para login normal (compartilhado entre abas)
+function getToken() {
+  return sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY)
+}
+
 // injeta o Bearer token em toda requisição
 http.interceptors.request.use((cfg) => {
-  const token = localStorage.getItem(TOKEN_KEY)
+  const token = getToken()
   if (token) cfg.headers.Authorization = `Bearer ${token}`
   return cfg
 })
@@ -18,16 +24,17 @@ http.interceptors.response.use(
   (err) => {
     const msg = err.response?.data?.error || err.message || 'Erro de rede'
     if (err.response?.status === 401) {
+      sessionStorage.removeItem(TOKEN_KEY)
       localStorage.removeItem(TOKEN_KEY)
-      // deixa o router redirecionar
     }
     return Promise.reject(new Error(msg))
   }
 )
 
 export const tokenStore = {
-  get: () => localStorage.getItem(TOKEN_KEY),
+  get: getToken,
   set: (v) => (v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY)),
+  setSession: (v) => (v ? sessionStorage.setItem(TOKEN_KEY, v) : sessionStorage.removeItem(TOKEN_KEY)),
 }
 
 // ─── Endpoints (espelham o backend Express existente) ───
