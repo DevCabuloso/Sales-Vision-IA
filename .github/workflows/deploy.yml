@@ -32,7 +32,16 @@ jobs:
             cd frontend && npm install && npm run build && cd ..
 
             echo ">>> Reiniciando backend..."
-            pm2 restart backend --update-env
+            pm2 describe backend > /dev/null 2>&1 \
+              && pm2 restart backend --update-env \
+              || pm2 start /opt/sdr-platform/backend/src/server.js \
+                   --name backend \
+                   --interpreter node \
+                   --cwd /opt/sdr-platform/backend \
+                   --env production
+
+            sleep 3
+            pm2 status backend
 
             echo ">>> Reload do Nginx..."
             systemctl reload nginx
