@@ -1241,6 +1241,7 @@ async function selectLead(lead) {
   showContactPanel.value = false
   showMsgSearch.value = false
   msgSearchQuery.value = ''
+  syncConv(lead.id, { unread: 0 })
   if (isMobile.value) mobilePanel.value = 'chat'
   await loadMessages()
   scrollToBottom()
@@ -1450,11 +1451,14 @@ const { onMessage } = useMessageRealtime()
 let reloadConvsTimeout = null
 onMessage((msg) => {
   if (msg.lead_id === currentLead.value?.id) {
-    messages.value.push(msg)
-    scrollToBottom()
-    syncConv(msg.lead_id, { lastMessage: msg })
+    const exists = messages.value.some((m) => m.id === msg.id)
+    if (!exists) {
+      messages.value.push(msg)
+      scrollToBottom()
+    }
+    syncConv(msg.lead_id, { lastMessage: msg, unread: msg.role === 'lead' ? 1 : 0 })
   } else {
-    // Debounce: evita múltiplos loadConvs() por rajada de mensagens
+    syncConv(msg.lead_id, { lastMessage: msg, unread: msg.role === 'lead' ? 1 : 0 })
     clearTimeout(reloadConvsTimeout)
     reloadConvsTimeout = setTimeout(loadConvs, 500)
   }
@@ -1462,6 +1466,7 @@ onMessage((msg) => {
 
 // ——— polling: busca mensagens novas do lead atual a cada 3s (fallback do realtime) ———
 let pollTimer = null
+let convsPollTimer = null
 
 async function pollNewMessages() {
   if (!currentLead.value) return
@@ -1494,11 +1499,13 @@ onMounted(() => {
   loadLabels()
   document.addEventListener('click', closeEmojiOnOutside)
   pollTimer = setInterval(pollNewMessages, 3000)
+  convsPollTimer = setInterval(loadConvs, 10000)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', closeEmojiOnOutside)
   if (pollTimer) clearInterval(pollTimer)
+  if (convsPollTimer) clearInterval(convsPollTimer)
   clearTimeout(reloadConvsTimeout)
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop()

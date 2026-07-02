@@ -78,6 +78,7 @@ chatRouter.get('/', async (req, res) => {
       ...l,
       lastMessage: lastByLead[l.id] || null,
       channel_name: l.channel_id ? (channelById[l.channel_id] || null) : null,
+      unread: lastByLead[l.id]?.role === 'lead' ? 1 : 0,
     }))
 
     if (!isManager(req.user.role)) {
