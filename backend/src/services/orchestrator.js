@@ -219,6 +219,19 @@ export async function handleOutboundMessage({ tenantId, to, text, provider, inst
     ).select('id').single()
   )
 
+  // Evita duplicata quando a IA envia via Evolution e o webhook fromMe volta imediatamente
+  const cutoff = new Date(Date.now() - 15000).toISOString()
+  const existing = unwrap(
+    await supabase.from('messages')
+      .select('id')
+      .eq('tenant_id', tenantId)
+      .eq('lead_id', lead.id)
+      .eq('text', text)
+      .gte('created_at', cutoff)
+      .limit(1)
+  )
+  if (existing?.length) return
+
   await supabase.from('messages').insert({
     tenant_id: tenantId,
     lead_id: lead.id,
