@@ -2,7 +2,7 @@
   <div class="ig-layout">
 
     <!-- ══ SIDEBAR ══ -->
-    <aside class="ig-sidebar">
+    <aside class="ig-sidebar" :class="{ 'mobile-hidden': isMobile && mobilePanel === 'chat' }">
 
       <!-- Header -->
       <div class="ig-sidebar-header">
@@ -56,7 +56,7 @@
     </aside>
 
     <!-- ══ CHAT AREA ══ -->
-    <div class="ig-chat-area">
+    <div class="ig-chat-area" :class="{ 'mobile-hidden': isMobile && mobilePanel === 'list' }">
 
       <!-- Vazio -->
       <div v-if="!activeGroup" class="ig-chat-empty">
@@ -72,6 +72,7 @@
         <!-- Header -->
         <div class="ig-chat-header">
           <div class="d-flex align-center gap-3">
+            <v-btn v-if="isMobile" icon="mdi-arrow-left" variant="text" size="small" @click="mobilePanel = 'list'" />
             <div class="ig-avatar" :style="{ background: avatarColor(activeGroup.name) }">
               {{ initials(activeGroup.name) }}
             </div>
@@ -292,6 +293,10 @@ import { useAuthStore } from '@/stores/auth'
 const auth    = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
 
+const isMobile    = ref(window.innerWidth < 768)
+const mobilePanel = ref('list')
+function onResize() { isMobile.value = window.innerWidth < 768 }
+
 const AVATAR_COLORS = ['#6366F1','#8B5CF6','#EC4899','#14B8A6','#F59E0B','#10B981','#3B82F6','#EF4444']
 function avatarColor(name) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) % AVATAR_COLORS.length; return AVATAR_COLORS[Math.abs(h)] }
 
@@ -337,6 +342,7 @@ async function selectGroup(g) {
   activeGroup.value = g
   messages.value = []
   loadingMsgs.value = true
+  if (isMobile.value) mobilePanel.value = 'chat'
   try {
     const { messages: msgs } = await api.listInternalMessages(g.id)
     messages.value = msgs
@@ -489,10 +495,12 @@ onMounted(async () => {
   await loadUsers()
   pollTimer   = setInterval(pollMessages, 3000)
   groupsTimer = setInterval(loadGroups,  8000)
+  window.addEventListener('resize', onResize)
 })
 onUnmounted(() => {
   if (pollTimer)   clearInterval(pollTimer)
   if (groupsTimer) clearInterval(groupsTimer)
+  window.removeEventListener('resize', onResize)
 })
 </script>
 
@@ -503,6 +511,13 @@ onUnmounted(() => {
   border-radius: 16px;
   overflow: hidden;
   border: 1px solid rgba(255,255,255,0.08);
+}
+
+@media (max-width: 767px) {
+  .ig-layout { height: calc(100vh - 128px); border-radius: 8px; }
+  .mobile-hidden { display: none !important; }
+  .ig-sidebar { width: 100% !important; min-width: 0 !important; }
+  .ig-chat-area { width: 100%; }
 }
 
 /* ── Sidebar ── */

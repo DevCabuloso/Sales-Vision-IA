@@ -12,6 +12,7 @@
     </div>
 
     <v-card class="glass" border>
+      <div style="overflow-x:auto">
       <v-data-table
         :headers="headers"
         :items="filtered"
@@ -43,6 +44,7 @@
           <div class="py-8 text-center" style="color:#6B7C88">Nenhum lead encontrado.</div>
         </template>
       </v-data-table>
+      </div>
     </v-card>
 
     <v-dialog v-model="dialog" max-width="460">

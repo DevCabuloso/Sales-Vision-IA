@@ -353,6 +353,7 @@ useRealtime('appointments', auth.user?.tenantId, refresh)
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
 }
 @media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2,1fr); } }
+@media (max-width: 480px) { .stat-grid { grid-template-columns: 1fr; } }
 
 .stat-card {
   background: var(--panel-bg);

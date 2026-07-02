@@ -1,7 +1,12 @@
 <template>
   <div class="app-shell">
+    <!-- Backdrop mobile -->
+    <transition name="fade-fast">
+      <div v-if="drawerOpen && isMobile" class="sidebar-backdrop" @click="drawerOpen = false" />
+    </transition>
+
     <!-- ═══════════════════ SIDEBAR ═══════════════════ -->
-    <aside class="sidebar" :class="{ collapsed: rail }">
+    <aside class="sidebar" :class="{ collapsed: rail && !isMobile, 'drawer-open': drawerOpen, mobile: isMobile }">
 
       <!-- Logo -->
       <div class="sidebar-logo">
@@ -15,11 +20,20 @@
           </div>
         </transition>
         <v-btn
+          v-if="!isMobile"
           class="collapse-btn"
           :icon="rail ? 'mdi-chevron-right' : 'mdi-chevron-left'"
           variant="text"
           size="x-small"
           @click="rail = !rail"
+        />
+        <v-btn
+          v-if="isMobile"
+          class="collapse-btn"
+          icon="mdi-close"
+          variant="text"
+          size="x-small"
+          @click="drawerOpen = false"
         />
       </div>
 
@@ -112,7 +126,7 @@
     <!-- ═══════════════════ APP BAR ═══════════════════ -->
     <div class="main-area">
       <header class="app-bar">
-        <button class="menu-btn" @click="rail = !rail">
+        <button class="menu-btn" @click="isMobile ? (drawerOpen = !drawerOpen) : (rail = !rail)">
           <v-icon icon="mdi-menu" size="20" />
         </button>
         <div class="bar-spacer" />
@@ -120,19 +134,31 @@
         <ThemeSwitcher />
       </header>
 
-      <main class="main-content">
+      <main class="main-content" :class="{ 'has-bottom-nav': isMobile }">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
             <component :is="Component" />
           </transition>
         </router-view>
       </main>
+
+      <!-- Bottom navigation (mobile) -->
+      <nav v-if="isMobile" class="bottom-nav">
+        <button v-for="item in bottomNavItems" :key="item.to" class="bottom-nav-item" :class="{ active: isActive(item.to) }" @click="navigate(item.to)">
+          <v-icon :icon="item.icon" size="22" />
+          <span>{{ item.title }}</span>
+        </button>
+        <button class="bottom-nav-item" @click="drawerOpen = true">
+          <v-icon icon="mdi-dots-horizontal" size="22" />
+          <span>Mais</span>
+        </button>
+      </nav>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale.js'
@@ -145,7 +171,18 @@ const router = useRouter()
 const route  = useRoute()
 const auth   = useAuthStore()
 
-function navigate(to) { router.push(to) }
+const isMobile   = ref(window.innerWidth < 768)
+const drawerOpen = ref(false)
+
+function onResize() {
+  isMobile.value = window.innerWidth < 768
+  if (!isMobile.value) drawerOpen.value = false
+}
+
+function navigate(to) {
+  router.push(to)
+  if (isMobile.value) drawerOpen.value = false
+}
 function isActive(to) { return route.path === to || route.path.startsWith(to + '/') }
 
 const rail       = ref(false)
@@ -160,8 +197,15 @@ async function toggleAI() {
   try { const d = await api.toggleAI(); aiEnabled.value = d.ai_enabled } catch { /* */ }
   finally { togglingAI.value = false }
 }
-onMounted(() => { loadAIStatus(); notifStore.startPolling() })
-onUnmounted(() => notifStore.stopPolling())
+onMounted(() => {
+  loadAIStatus()
+  notifStore.startPolling()
+  window.addEventListener('resize', onResize)
+})
+onUnmounted(() => {
+  notifStore.stopPolling()
+  window.removeEventListener('resize', onResize)
+})
 
 const isAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
 const locale  = useLocaleStore()
@@ -203,6 +247,13 @@ const navSystem = computed(() => {
 
 const tenantName = computed(() => auth.user?.tenantName || auth.user?.tenantSlug || 'Minha Operação')
 const initials   = computed(() => (auth.user?.email || '?').slice(0, 2).toUpperCase())
+
+const bottomNavItems = computed(() => [
+  { title: 'Dashboard', icon: 'mdi-view-dashboard-outline', to: '/dashboard' },
+  { title: 'Chat',      icon: 'mdi-chat-outline',           to: '/chat' },
+  { title: 'Kanban',    icon: 'mdi-view-column-outline',    to: '/kanban' },
+  { title: 'Leads',     icon: 'mdi-account-multiple-outline', to: '/leads' },
+])
 
 async function logout() { await auth.logout(); router.push('/login') }
 </script>
@@ -389,4 +440,66 @@ async function logout() { await auth.logout(); router.push('/login') }
 .fade-leave-active { transition: opacity 0.2s ease; }
 .fade-enter-from,
 .fade-leave-to { opacity: 0; }
+
+/* ═══ MOBILE ═══ */
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    height: 100vh;
+    width: 240px !important;
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.25s cubic-bezier(.4,0,.2,1);
+    box-shadow: 4px 0 24px rgba(0,0,0,0.3);
+  }
+  .sidebar.drawer-open {
+    transform: translateX(0);
+  }
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 199;
+  }
+  .main-content {
+    padding: 12px;
+  }
+  .main-content.has-bottom-nav {
+    padding-bottom: 72px;
+  }
+}
+
+/* ═══ BOTTOM NAV ═══ */
+.bottom-nav {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  background: var(--app-bg);
+  border-top: 1px solid var(--border-subtle);
+  z-index: 100;
+  padding: 0 4px;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.bottom-nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  border-radius: 8px;
+  transition: all 0.15s;
+  font-size: 10px;
+  font-weight: 500;
+}
+.bottom-nav-item.active { color: #818CF8; }
+.bottom-nav-item:active { background: var(--panel-hover); }
 </style>

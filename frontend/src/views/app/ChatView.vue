@@ -1,7 +1,7 @@
 <template>
   <div class="chat-layout">
     <!-- ———————— SIDEBAR ———————— -->
-    <div class="chat-sidebar">
+    <div class="chat-sidebar" :class="{ 'mobile-hidden': isMobile && mobilePanel === 'chat' }">
       <div class="sidebar-header px-3 pt-3 pb-2">
         <div class="d-flex align-center justify-space-between mb-3">
           <span class="text-subtitle-1 font-weight-bold">Atendimentos</span>
@@ -265,7 +265,7 @@
     </div>
 
     <!-- ———————— ÁREA DE CHAT ———————— -->
-    <div class="chat-area">
+    <div class="chat-area" :class="{ 'mobile-hidden': isMobile && mobilePanel === 'list' }">
       <div v-if="!currentLead" class="chat-empty">
         <v-icon icon="mdi-chat-processing-outline" size="72" style="color:#2A3A45;opacity:.6" />
         <p class="mt-4 text-body-2" style="color:#6B7C88">Selecione um atendimento</p>
@@ -280,6 +280,7 @@
           <!-- Linha 1: info do contato + status -->
           <div class="d-flex align-center justify-space-between flex-wrap ga-2 w-100">
             <div class="d-flex align-center ga-3">
+              <v-btn v-if="isMobile" icon="mdi-arrow-left" variant="text" size="small" @click="mobilePanel = 'list'" />
               <div class="header-avatar" :style="{ background: avatarColor(currentLead) }">
                 {{ (currentLead.name || currentLead.phone).slice(0, 2).toUpperCase() }}
               </div>
@@ -833,6 +834,13 @@ const deleteLoading = ref(false)
 const bulkTransferUserId = ref(null)
 const bulkLoading        = ref(false)
 
+// ——— mobile ———
+const isMobile    = ref(window.innerWidth < 768)
+const mobilePanel = ref('list') // 'list' | 'chat'
+function onResize() { isMobile.value = window.innerWidth < 768 }
+onMounted(() => window.addEventListener('resize', onResize))
+onUnmounted(() => window.removeEventListener('resize', onResize))
+
 // ——— estado do chat ———
 const messages       = ref([])
 const currentLead    = ref(null)
@@ -1233,6 +1241,7 @@ async function selectLead(lead) {
   showContactPanel.value = false
   showMsgSearch.value = false
   msgSearchQuery.value = ''
+  if (isMobile.value) mobilePanel.value = 'chat'
   await loadMessages()
   scrollToBottom()
   loadTicketLogs()
@@ -1506,6 +1515,16 @@ onUnmounted(() => {
   border-radius: 16px;
   overflow: hidden;
   border: 1px solid var(--sep-md);
+}
+
+@media (max-width: 767px) {
+  .chat-layout {
+    height: calc(100vh - 128px);
+    border-radius: 8px;
+  }
+  .mobile-hidden { display: none !important; }
+  .chat-sidebar { width: 100% !important; min-width: 0 !important; }
+  .chat-area { width: 100%; }
 }
 
 /* ———— SIDEBAR ———— */

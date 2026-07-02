@@ -19,6 +19,7 @@
     </div>
 
     <v-card class="glass" border>
+      <div style="overflow-x:auto">
       <v-data-table :headers="headers" :items="contacts" :loading="loading" item-value="id" class="bg-transparent" :items-per-page="25">
         <template #item.name="{ item }">
           <div class="d-flex align-center ga-3 py-1">
@@ -54,6 +55,7 @@
           <div class="py-8 text-center" style="color:#6B7C88">Nenhum contato encontrado.</div>
         </template>
       </v-data-table>
+      </div>
     </v-card>
 
     <!-- Dialog: criar/editar -->
