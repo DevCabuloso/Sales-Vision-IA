@@ -72,6 +72,29 @@ export function createApp() {
     }
   })
 
+  // Diagnóstico público — ver últimas msgs e leads sem login
+  app.get('/api/diag', async (req, res) => {
+    if (req.query.key !== 'sdr2025') return res.status(403).json({ error: 'Chave inválida.' })
+    try {
+      const { supabase, unwrap } = await import('./db/supabase.js')
+      const msgs = unwrap(
+        await supabase.from('messages')
+          .select('id, tenant_id, lead_id, role, text, created_at')
+          .order('created_at', { ascending: false })
+          .limit(20)
+      )
+      const leads = unwrap(
+        await supabase.from('leads')
+          .select('id, tenant_id, name, phone, conversation_status, updated_at')
+          .order('updated_at', { ascending: false })
+          .limit(20)
+      )
+      res.json({ v: 2, messages: msgs, leads })
+    } catch (e) {
+      res.status(500).json({ error: String(e.message) })
+    }
+  })
+
   app.use('/api/auth/login', authLimiter)
   app.use('/api/auth/register', authLimiter)
 

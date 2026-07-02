@@ -810,7 +810,7 @@ const loading            = ref(false)
 const activeTab          = ref('open')
 
 // filtros
-const filterShowAll      = ref(false)
+const filterShowAll      = ref(true)
 const filterOnlyUnread   = ref(false)
 const filterInvertOrder  = ref(false)
 const filterStatuses     = ref(['open', 'pending', 'resolved'])
