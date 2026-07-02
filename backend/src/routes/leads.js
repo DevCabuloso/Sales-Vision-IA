@@ -56,7 +56,7 @@ leadsRouter.post('/', async (req, res) => {
   const { data, error } = await supabase.from('leads').insert({
     tenant_id: req.user.tenantId,
     name: d.name || null,
-    phone: d.phone.trim(),
+    phone: d.phone.replace(/\D/g, ''),
     stage: d.stage || 'Novo Lead',
     intention: d.intention || null,
     interests: d.interests || [],

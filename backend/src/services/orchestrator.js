@@ -22,7 +22,13 @@ export function invalidateTenantCache(tenantId) { _cache.delete(`tenant:${tenant
 /**
  * Processa uma mensagem recebida de um lead via WhatsApp.
  */
-export async function handleInboundMessage({ tenantId, from, text, provider, instanceName, pushName }) {
+/** Normaliza número de telefone: só dígitos, sem espaços/traços/+. */
+function normalizePhone(raw) {
+  return (raw || '').replace(/\D/g, '')
+}
+
+export async function handleInboundMessage({ tenantId, from: rawFrom, text, provider, instanceName, pushName }) {
+  const from = normalizePhone(rawFrom)
   // resolve channel_id pelo instance_name (se disponível)
   let channelId = null
   if (instanceName) {
@@ -202,7 +208,8 @@ export async function handleInboundMessage({ tenantId, from, text, provider, ins
  * Registra uma mensagem enviada diretamente pelo WhatsApp (fromMe=true).
  * Salva como mensagem do operador sem acionar a IA.
  */
-export async function handleOutboundMessage({ tenantId, to, text, provider, instanceName }) {
+export async function handleOutboundMessage({ tenantId, to: rawTo, text, provider, instanceName }) {
+  const to = normalizePhone(rawTo)
   let channelId = null
   if (instanceName) {
     try {
