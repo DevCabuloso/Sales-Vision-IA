@@ -93,6 +93,29 @@ chatRouter.get('/', async (req, res) => {
   }
 })
 
+// GET /api/chat/debug-recent — últimas 20 mensagens do tenant (debug)
+chatRouter.get('/debug-recent', async (req, res) => {
+  try {
+    const msgs = unwrap(
+      await supabase.from('messages')
+        .select('id, lead_id, role, text, created_at')
+        .eq('tenant_id', req.user.tenantId)
+        .order('created_at', { ascending: false })
+        .limit(20)
+    )
+    const leads = unwrap(
+      await supabase.from('leads')
+        .select('id, name, phone, conversation_status')
+        .eq('tenant_id', req.user.tenantId)
+        .order('updated_at', { ascending: false })
+        .limit(20)
+    )
+    res.json({ messages: msgs, leads })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // GET /api/chat/operators
 chatRouter.get('/operators', async (req, res) => {
   try {

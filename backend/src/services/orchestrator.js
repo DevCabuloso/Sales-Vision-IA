@@ -91,11 +91,16 @@ export async function handleInboundMessage({ tenantId, from, text, provider, ins
       .eq('id', lead.id)
   }
 
+  console.log(`[orchestrator] lead upserted: id=${lead.id} phone=${from} status=${lead.conversation_status}`)
+
   // 2) salva mensagem + logUsage em paralelo
-  await Promise.all([
-    supabase.from('messages').insert({ tenant_id: tenantId, lead_id: lead.id, role: 'lead', text, provider }),
+  const [msgResult] = await Promise.all([
+    supabase.from('messages').insert({ tenant_id: tenantId, lead_id: lead.id, role: 'lead', text, provider }).select('id'),
     logUsage(tenantId, null, 'message_received', { provider }),
   ])
+  const savedId = msgResult?.data?.[0]?.id || '(sem id)'
+  console.log(`[orchestrator] mensagem salva: id=${savedId} lead_id=${lead.id} text="${text?.slice(0, 40)}"`)
+  if (msgResult?.error) console.error('[orchestrator] ERRO ao salvar mensagem:', msgResult.error.message)
 
   // 3) histórico + tenant + horário comercial em paralelo
   // tenant e horário são cacheados por 5 min (mudam raramente)
