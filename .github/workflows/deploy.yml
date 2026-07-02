@@ -1,0 +1,40 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Deploy no servidor
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/sdr-platform
+
+            echo ">>> Atualizando código..."
+            git pull origin main
+
+            echo ">>> Instalando dependências do backend..."
+            cd backend && npm install --production && cd ..
+
+            echo ">>> Instalando dependências do frontend..."
+            cd frontend && npm install && npm run build && cd ..
+
+            echo ">>> Reiniciando backend..."
+            pm2 restart backend --update-env
+
+            echo ">>> Reload do Nginx..."
+            systemctl reload nginx
+
+            echo ">>> Deploy concluído!"

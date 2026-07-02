@@ -124,14 +124,22 @@ export async function runAgent({ tenantId, tenantName, history }) {
           })
           result = { busy }
         } else if (call.function.name === 'agendar_reuniao') {
-          const ev = await createEvent(tenantId, {
-            summary: args.titulo,
-            description: 'Reunião agendada automaticamente pelo SDR IA.',
-            start: args.inicio,
-            end: args.fim,
+          const busy = await getFreeBusy(tenantId, {
+            timeMin: args.inicio,
+            timeMax: args.fim,
           })
-          scheduled = { ...ev, title: args.titulo, start: args.inicio, end: args.fim }
-          result = { ok: true, meetingLink: ev.meetingLink }
+          if (busy.length > 0) {
+            result = { ok: false, conflito: true, error: 'Este horário já está ocupado na agenda. Informe o lead e sugira outro horário disponível.' }
+          } else {
+            const ev = await createEvent(tenantId, {
+              summary: args.titulo,
+              description: 'Reunião agendada automaticamente pelo SDR IA.',
+              start: args.inicio,
+              end: args.fim,
+            })
+            scheduled = { ...ev, title: args.titulo, start: args.inicio, end: args.fim }
+            result = { ok: true, meetingLink: ev.meetingLink }
+          }
         } else {
           result = { error: 'ferramenta desconhecida' }
         }

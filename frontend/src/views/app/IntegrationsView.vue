@@ -118,7 +118,8 @@ const metaForm = reactive({ phoneNumberId: '', accessToken: '', wabaId: '' })
 const evoForm = reactive({ baseUrl: '', instance: '', apiKey: '' })
 const googleSetupForm = reactive({ clientId: '', clientSecret: '' })
 
-const webhookUrl = computed(() => `${window.location.origin}/webhooks/evolution/${auth.user?.tenantId || '<tenant_id>'}`)
+const backendOrigin = import.meta.env.VITE_BACKEND_URL || window.location.origin
+const webhookUrl = computed(() => `${backendOrigin}/webhooks/evolution/${auth.user?.tenantId || '<tenant_id>'}`)
 
 async function loadStatus() {
   try { const g = await api.googleStatus(); google.connected = !!g.connected; google.email = g.email || null } catch { /* */ }
