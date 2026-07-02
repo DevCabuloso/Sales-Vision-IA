@@ -366,6 +366,14 @@ adminRouter.post('/clients/:id/impersonate', async (req, res) => {
     { expiresIn: '1h' }
   )
 
+  // Registro de auditoria de impersonação
+  supabase.from('usage_events').insert({
+    tenant_id: tenantId,
+    user_id: req.user.id,
+    event: 'impersonate',
+    meta: { owner_id: req.user.id, target_tenant: tenantId, target_user: adminUser.id },
+  }).catch((e) => console.warn('[impersonate] falha no log de auditoria:', e.message))
+
   res.json({
     token,
     user: {
@@ -481,7 +489,6 @@ adminRouter.get('/settings', async (req, res) => {
       },
       supabase: {
         configured: !!(config.supabase.url && config.supabase.serviceKey),
-        url: config.supabase.url || null,
       },
     },
   })

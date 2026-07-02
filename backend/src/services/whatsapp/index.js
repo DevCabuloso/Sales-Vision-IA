@@ -25,10 +25,19 @@ async function hasConnectedChannel(tenantId) {
 
 export async function sendMedia(tenantId, to, opts) {
   const f = await getTenantFlags(tenantId)
-  if (f.feat_evolution_api || f.feat_hybrid || (!f.feat_meta_api && await hasConnectedChannel(tenantId))) {
+  if (f.feat_hybrid) {
+    try {
+      return await meta.sendMedia(tenantId, to, opts)
+    } catch (e) {
+      console.warn(`[whatsapp] híbrido: Meta falhou para mídia (${e.message}), tentando Evolution`)
+      return await evolution.sendMedia(tenantId, to, opts)
+    }
+  }
+  if (f.feat_meta_api) return meta.sendMedia(tenantId, to, opts)
+  if (f.feat_evolution_api || await hasConnectedChannel(tenantId)) {
     return evolution.sendMedia(tenantId, to, opts)
   }
-  throw new Error('Envio de mídia disponível apenas via Evolution API.')
+  throw new Error('Nenhum provider de WhatsApp habilitado para este cliente.')
 }
 
 export async function sendText(tenantId, to, body) {

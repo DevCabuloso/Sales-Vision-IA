@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
 import { supabase, unwrap } from '../db/supabase.js';
 import { encrypt, decryptJSON } from './crypto.js';
@@ -38,14 +39,15 @@ async function makeOAuthClientForTenant(tenantId) {
   return new google.auth.OAuth2(clientId, clientSecret, config.google.redirectUri);
 }
 
-/** Gera a URL de consentimento. O state carrega o tenantId. */
+/** Gera a URL de consentimento. O state é um JWT assinado (previne CSRF). */
 export async function getAuthUrl(tenantId) {
   const oauth2 = await makeOAuthClientForTenant(tenantId);
+  const state = jwt.sign({ tenantId }, config.jwt.secret, { expiresIn: '10m' });
   return oauth2.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     scope: config.google.scopes,
-    state: tenantId,
+    state,
   });
 }
 
@@ -62,13 +64,21 @@ export async function handleCallback(code, tenantId) {
     primaryEmail = data.id || null;
   } catch { /* ignora */ }
 
+  // Preserva meta.setup (credenciais OAuth do tenant) ao fazer upsert
+  const existing = unwrap(
+    await supabase.from('integrations')
+      .select('meta')
+      .eq('tenant_id', tenantId).eq('provider', 'google_calendar').limit(1)
+  );
+  const existingMeta = existing?.[0]?.meta || {};
+
   unwrap(
     await supabase.from('integrations').upsert({
       tenant_id: tenantId,
       provider: 'google_calendar',
       status: 'connected',
       credentials: encrypt(tokens),
-      meta: { calendarId: 'primary', email: primaryEmail },
+      meta: { ...existingMeta, calendarId: 'primary', email: primaryEmail },
       connected_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }, { onConflict: 'tenant_id,provider' })
@@ -140,7 +150,7 @@ export async function createEvent(tenantId, { summary, description, start, end, 
 }
 
 /** Lista eventos num intervalo. */
-export async function listEvents(tenantId, { timeMin, timeMax, maxResults = 50 } = {}) {
+export async function listEvents(tenantId, { timeMin, timeMax, maxResults = 50, showDeleted = false } = {}) {
   const { calendar, calendarId } = await getCalendarClient(tenantId);
   const { data } = await calendar.events.list({
     calendarId,
@@ -149,6 +159,7 @@ export async function listEvents(tenantId, { timeMin, timeMax, maxResults = 50 }
     maxResults,
     singleEvents: true,
     orderBy: 'startTime',
+    showDeleted,
   });
   return (data.items || []).map((e) => ({
     externalId: e.id,

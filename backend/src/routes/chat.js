@@ -5,7 +5,20 @@ import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { logUsage } from '../services/usage.js'
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 64 * 1024 * 1024 } })
+const ALLOWED_MIMETYPES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/webm',
+  'video/mp4', 'video/webm',
+  'application/pdf',
+])
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 64 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, ALLOWED_MIMETYPES.has(file.mimetype))
+  },
+})
 
 export const chatRouter = Router()
 chatRouter.use(requireAuth, requireTenant)
@@ -42,10 +55,13 @@ chatRouter.get('/', async (req, res) => {
     if (!leads.length) return res.json({ leads: [] })
 
     const leadIds = leads.map((l) => l.id)
+
+    // Limita a 1500 mensagens (5 por lead em média) para obter a última de cada um
     const msgs = unwrap(
       await supabase.from('messages').select('lead_id, text, role, created_at')
         .in('lead_id', leadIds)
         .order('created_at', { ascending: false })
+        .limit(1500)
     )
 
     const lastByLead = {}
@@ -53,7 +69,6 @@ chatRouter.get('/', async (req, res) => {
       if (!lastByLead[m.lead_id]) lastByLead[m.lead_id] = m
     }
 
-    // busca nomes dos canais
     const channels = unwrap(
       await supabase.from('channels').select('id, name').eq('tenant_id', req.user.tenantId)
     )
@@ -65,8 +80,6 @@ chatRouter.get('/', async (req, res) => {
       channel_name: l.channel_id ? (channelById[l.channel_id] || null) : null,
     }))
 
-    // Agentes veem: tickets pendentes (fila) + seus próprios (open/resolved)
-    // Admins/owners veem tudo
     if (!isManager(req.user.role)) {
       result = result.filter((l) =>
         l.conversation_status === 'pending' || l.assigned_to === req.user.id
@@ -79,7 +92,7 @@ chatRouter.get('/', async (req, res) => {
   }
 })
 
-// GET /api/chat/operators — lista operadores para o filtro/transferência
+// GET /api/chat/operators
 chatRouter.get('/operators', async (req, res) => {
   try {
     const rows = unwrap(
@@ -113,13 +126,6 @@ chatRouter.post('/start', async (req, res) => {
       }, { onConflict: 'tenant_id,phone', ignoreDuplicates: false })
         .select('id, name, phone, stage, conversation_status, assigned_to').single()
     )
-
-    await supabase.from('leads').update({
-      conversation_status: 'open',
-      human_takeover: true,
-      assigned_to: req.user.id,
-      updated_at: new Date().toISOString(),
-    }).eq('id', lead.id)
 
     await logTicketEvent(req.user.tenantId, lead.id, req.user.id, req.user.name, 'opened')
 
@@ -163,7 +169,7 @@ chatRouter.get('/:leadId/messages', async (req, res) => {
   }
 })
 
-// GET /api/chat/:leadId/logs — histórico de atendimento
+// GET /api/chat/:leadId/logs
 chatRouter.get('/:leadId/logs', async (req, res) => {
   try {
     const rows = unwrap(
@@ -224,9 +230,9 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
   }
 })
 
-// POST /api/chat/:leadId/media — envia arquivo/áudio
+// POST /api/chat/:leadId/media
 chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' })
+  if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado ou tipo não permitido.' })
   try {
     const leadRows = unwrap(
       await supabase.from('leads').select('id, phone, human_takeover, conversation_status')
@@ -273,7 +279,7 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
   }
 })
 
-// POST /api/chat/:leadId/transfer — IA ↔ humano
+// POST /api/chat/:leadId/transfer
 chatRouter.post('/:leadId/transfer', async (req, res) => {
   const { human_takeover } = req.body
   try {
@@ -297,12 +303,11 @@ chatRouter.post('/:leadId/transfer', async (req, res) => {
   }
 })
 
-// POST /api/chat/:leadId/transfer-to — transferir para outro operador
+// POST /api/chat/:leadId/transfer-to
 chatRouter.post('/:leadId/transfer-to', async (req, res) => {
   const { userId } = req.body
   if (!userId) return res.status(400).json({ error: 'userId obrigatório.' })
   try {
-    // busca o operador destino
     const opRows = unwrap(
       await supabase.from('users').select('id, name, email')
         .eq('id', userId).eq('tenant_id', req.user.tenantId).limit(1)
@@ -409,6 +414,28 @@ chatRouter.post('/:leadId/return-to-queue', async (req, res) => {
     })
     await logTicketEvent(req.user.tenantId, req.params.leadId, req.user.id, req.user.name, 'pending')
     res.json({ lead: row })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// DELETE /api/chat/:leadId
+chatRouter.delete('/:leadId', async (req, res) => {
+  if (!isManager(req.user.role)) {
+    return res.status(403).json({ error: 'Apenas administradores podem deletar conversas.' })
+  }
+  try {
+    const leadRows = unwrap(
+      await supabase.from('leads').select('id')
+        .eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!leadRows.length) return res.status(404).json({ error: 'Conversa não encontrada.' })
+
+    await supabase.from('messages').delete().eq('lead_id', req.params.leadId).eq('tenant_id', req.user.tenantId)
+    await supabase.from('ticket_logs').delete().eq('lead_id', req.params.leadId).eq('tenant_id', req.user.tenantId)
+    await supabase.from('leads').delete().eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId)
+
+    res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

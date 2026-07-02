@@ -67,7 +67,8 @@ router.beforeEach((to) => {
 
   // Root URL: limpa a sessão da aba atual e vai sempre para login
   if (to.path === '/') {
-    auth.logout()
+    auth.clearSession()
+    auth.logout().catch(() => {}) // limpa cookie em background
     return { name: 'login' }
   }
 

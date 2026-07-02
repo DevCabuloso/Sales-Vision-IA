@@ -2,13 +2,16 @@ import { verifyToken } from '../services/auth.js'
 import { supabase, unwrap } from '../db/supabase.js'
 
 /**
- * Valida o Bearer token e popula req.user = { id, role, tenantId, email }.
- * Owner tem tenantId = null (enxerga tudo).
+ * Valida o token (httpOnly cookie OU Bearer header) e popula
+ * req.user = { id, role, tenantId, email }.
+ * Bearer header tem prioridade — usado por sessões de impersonação.
  */
 export async function requireAuth(req, res, next) {
   try {
     const header = req.headers.authorization || ''
-    const token = header.startsWith('Bearer ') ? header.slice(7) : null
+    const headerToken = header.startsWith('Bearer ') ? header.slice(7) : null
+    const cookieToken = req.cookies?.sdr_token || null
+    const token = headerToken || cookieToken
     if (!token) return res.status(401).json({ error: 'Token ausente.' })
 
     const payload = verifyToken(token)

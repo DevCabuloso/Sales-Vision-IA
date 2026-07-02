@@ -170,9 +170,11 @@ contactsRouter.post('/import', upload.single('file'), async (req, res) => {
 
     if (!rows.length) return res.status(400).json({ error: 'Nenhum contato válido encontrado no arquivo.' })
 
+    // Importação em batches de 200 para evitar N+1 round-trips
+    const CHUNK = 200
     let imported = 0, skipped = 0
-    for (const r of rows) {
-      const { error } = await supabase.from('leads').upsert({
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const batch = rows.slice(i, i + CHUNK).map((r) => ({
         tenant_id: req.user.tenantId,
         name:  r.name || null,
         phone: r.phone,
@@ -181,9 +183,12 @@ contactsRouter.post('/import', upload.single('file'), async (req, res) => {
         stage: 'Novo Lead',
         conversation_status: 'pending',
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'tenant_id,phone', ignoreDuplicates: true })
-      if (error) skipped++
-      else imported++
+      }))
+      const { error, data } = await supabase.from('leads')
+        .upsert(batch, { onConflict: 'tenant_id,phone', ignoreDuplicates: true })
+        .select('id')
+      if (error) skipped += batch.length
+      else imported += data?.length ?? batch.length
     }
 
     res.json({ imported, skipped, total: rows.length })
@@ -219,7 +224,7 @@ contactsRouter.post('/deduplicate', async (req, res) => {
 contactsRouter.get('/tags', async (req, res) => {
   try {
     const rows = unwrap(
-      await supabase.from('leads').select('tags').eq('tenant_id', req.user.tenantId).not('tags', 'is', null)
+      await supabase.from('leads').select('tags').eq('tenant_id', req.user.tenantId).not('tags', 'is', null).limit(5000)
     )
     const all = [...new Set(rows.flatMap((r) => r.tags || []))].sort()
     res.json({ tags: all })

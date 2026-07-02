@@ -62,8 +62,18 @@ aiConfigRouter.get('/status', async (req, res) => {
 })
 
 // POST /api/ai-config/toggle — liga/desliga a IA globalmente
+// Aceita { ai_enabled: bool } no body para ser idempotente e evitar race condition.
+// Sem body, faz leitura-inversão (comportamento legado).
 aiConfigRouter.post('/toggle', async (req, res) => {
   try {
+    if (typeof req.body?.ai_enabled === 'boolean') {
+      unwrap(
+        await supabase.from('tenants')
+          .update({ ai_enabled: req.body.ai_enabled })
+          .eq('id', req.user.tenantId)
+      )
+      return res.json({ ai_enabled: req.body.ai_enabled })
+    }
     const rows = unwrap(
       await supabase.from('tenants').select('ai_enabled')
         .eq('id', req.user.tenantId).limit(1)

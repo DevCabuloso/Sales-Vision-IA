@@ -10,16 +10,24 @@ leadsRouter.use(requireAuth, requireTenant)
 
 // ─── GET /api/leads ───
 leadsRouter.get('/', async (req, res) => {
-  const rows = unwrap(
-    await supabase.from('leads')
-      .select('id, name, phone, stage, score, intention, interests, created_at, updated_at')
-      .eq('tenant_id', req.user.tenantId)
-      .order('updated_at', { ascending: false })
-  )
-  res.json({ leads: rows })
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000)
+    const offset = parseInt(req.query.offset, 10) || 0
+
+    const rows = unwrap(
+      await supabase.from('leads')
+        .select('id, name, phone, stage, score, intention, interests, created_at, updated_at')
+        .eq('tenant_id', req.user.tenantId)
+        .order('updated_at', { ascending: false })
+        .range(offset, offset + limit - 1)
+    )
+    res.json({ leads: rows, limit, offset })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
-// ─── POST /api/leads ─── (cadastro manual)
+// ─── POST /api/leads ───
 const createSchema = z.object({
   name: z.string().min(1).optional(),
   phone: z.string().min(8),
@@ -35,7 +43,6 @@ leadsRouter.post('/', async (req, res) => {
   }
   const d = parsed.data
 
-  // limite de leads do plano
   const { count } = await supabase.from('leads')
     .select('id', { count: 'exact', head: true })
     .eq('tenant_id', req.user.tenantId)
@@ -97,7 +104,7 @@ leadsRouter.patch('/:id', async (req, res) => {
         from_stage: current[0]?.stage || null,
         to_stage:   parsed.data.stage,
         changed_by: req.user.id,
-      }).then(null, () => {})
+      }).catch((e) => console.warn('[leads] falha ao salvar histórico de estágio:', e.message))
     }
 
     res.json({ lead: rows[0] })
@@ -108,33 +115,45 @@ leadsRouter.patch('/:id', async (req, res) => {
 
 // ─── DELETE /api/leads/:id ───
 leadsRouter.delete('/:id', async (req, res) => {
-  unwrap(
-    await supabase.from('leads').delete()
-      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
-  )
-  res.json({ deleted: true })
+  try {
+    unwrap(
+      await supabase.from('leads').delete()
+        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
+    )
+    res.json({ deleted: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
-// ─── GET /api/leads/:id/history ─── (histórico de estágios)
+// ─── GET /api/leads/:id/history ───
 leadsRouter.get('/:id/history', async (req, res) => {
-  const rows = unwrap(
-    await supabase.from('lead_stage_history')
-      .select('id, from_stage, to_stage, notes, changed_at, changed_by')
-      .eq('lead_id', req.params.id).eq('tenant_id', req.user.tenantId)
-      .order('changed_at', { ascending: false })
-  )
-  res.json({ history: rows })
+  try {
+    const rows = unwrap(
+      await supabase.from('lead_stage_history')
+        .select('id, from_stage, to_stage, notes, changed_at, changed_by')
+        .eq('lead_id', req.params.id).eq('tenant_id', req.user.tenantId)
+        .order('changed_at', { ascending: false })
+    )
+    res.json({ history: rows })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
 // ─── GET /api/leads/:id/messages ───
 leadsRouter.get('/:id/messages', async (req, res) => {
-  const rows = unwrap(
-    await supabase.from('messages')
-      .select('role, text, provider, created_at')
-      .eq('lead_id', req.params.id).eq('tenant_id', req.user.tenantId)
-      .order('created_at', { ascending: true })
-  )
-  res.json({ messages: rows })
+  try {
+    const rows = unwrap(
+      await supabase.from('messages')
+        .select('role, text, provider, created_at')
+        .eq('lead_id', req.params.id).eq('tenant_id', req.user.tenantId)
+        .order('created_at', { ascending: true })
+    )
+    res.json({ messages: rows })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
 // ─── POST /api/leads/:id/analyze ───

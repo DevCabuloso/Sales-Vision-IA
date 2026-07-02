@@ -2,16 +2,17 @@ import axios from 'axios'
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 const TOKEN_KEY = 'sdr_token'
+const USER_KEY = 'sdr_user'
 
-export const http = axios.create({ baseURL: API_BASE })
-
-// sessionStorage tem prioridade (sessões de impersonação por aba)
-// localStorage é o fallback para login normal (compartilhado entre abas)
+// Token só fica em sessionStorage para sessões de impersonação por aba.
+// Login normal usa httpOnly cookie gerenciado pelo backend.
 function getToken() {
-  return sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY)
+  return sessionStorage.getItem(TOKEN_KEY)
 }
 
-// injeta o Bearer token em toda requisição
+export const http = axios.create({ baseURL: API_BASE, withCredentials: true })
+
+// injeta Bearer token apenas quando há uma sessão de impersonação ativa
 http.interceptors.request.use((cfg) => {
   const token = getToken()
   if (token) cfg.headers.Authorization = `Bearer ${token}`
@@ -25,7 +26,7 @@ http.interceptors.response.use(
     const msg = err.response?.data?.error || err.message || 'Erro de rede'
     if (err.response?.status === 401) {
       sessionStorage.removeItem(TOKEN_KEY)
-      localStorage.removeItem(TOKEN_KEY)
+      localStorage.removeItem(USER_KEY)
     }
     return Promise.reject(new Error(msg))
   }
@@ -33,7 +34,8 @@ http.interceptors.response.use(
 
 export const tokenStore = {
   get: getToken,
-  set: (v) => (v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY)),
+  // token de login normal não vai mais para localStorage — fica no httpOnly cookie
+  set: (_v) => {},
   setSession: (v) => (v ? sessionStorage.setItem(TOKEN_KEY, v) : sessionStorage.removeItem(TOKEN_KEY)),
 }
 
@@ -44,6 +46,7 @@ export const api = {
     http.post('/auth/login', { email, password }).then((r) => r.data),
   register: (name, companyName, email, password) =>
     http.post('/auth/register', { name, companyName, email, password }).then((r) => r.data),
+  logout: () => http.post('/auth/logout').then((r) => r.data),
 
   // leads
   listLeads: () => http.get('/leads').then((r) => r.data.leads),
@@ -109,7 +112,7 @@ export const api = {
   deleteCampaign: (id) => http.delete(`/broadcast/campaigns/${id}`).then((r) => r.data),
   sendCampaign: (id) => http.post(`/broadcast/campaigns/${id}/send`).then((r) => r.data),
   cancelCampaign: (id) => http.post(`/broadcast/campaigns/${id}/cancel`).then((r) => r.data),
-  listContacts: (campaignId) => http.get(`/broadcast/campaigns/${campaignId}/contacts`).then((r) => r.data),
+  listBroadcastContacts: (campaignId) => http.get(`/broadcast/campaigns/${campaignId}/contacts`).then((r) => r.data),
   importContacts: (campaignId, contacts) => http.post(`/broadcast/campaigns/${campaignId}/contacts`, { contacts }).then((r) => r.data),
 
   // admin — visão geral
@@ -187,6 +190,7 @@ export const api = {
   // chat — status de atendimento
   attendChat: (id) => http.post(`/chat/${id}/attend`).then((r) => r.data),
   resolveChat: (id) => http.post(`/chat/${id}/resolve`).then((r) => r.data),
+  deleteConversation: (id) => http.delete(`/chat/${id}`).then((r) => r.data),
   reopenChat: (id) => http.post(`/chat/${id}/reopen`).then((r) => r.data),
   startChat: (payload) => http.post('/chat/start', payload).then((r) => r.data),
   listChatOperators: () => http.get('/chat/operators').then((r) => r.data.operators),

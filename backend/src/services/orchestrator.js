@@ -5,6 +5,20 @@ import * as whatsapp from './whatsapp/index.js'
 import { logUsage } from './usage.js'
 import { isWithinBusinessHours, getOffMessage } from '../routes/business-hours.js'
 
+// Cache TTL simples para reduzir queries repetidas por mensagem recebida
+const _cache = new Map()
+function ttlGet(key, ttlSec, fn) {
+  const now = Date.now()
+  const hit = _cache.get(key)
+  if (hit && hit.exp > now) return Promise.resolve(hit.val)
+  return Promise.resolve(fn()).then((val) => {
+    _cache.set(key, { val, exp: now + ttlSec * 1000 })
+    return val
+  })
+}
+// Invalida tenant quando dados de configuração mudam (chamado externamente se necessário)
+export function invalidateTenantCache(tenantId) { _cache.delete(`tenant:${tenantId}`) }
+
 /**
  * Processa uma mensagem recebida de um lead via WhatsApp.
  */
@@ -29,7 +43,7 @@ export async function handleInboundMessage({ tenantId, from, text, provider, ins
     await supabase.from('leads').upsert(
       upsertPayload,
       { onConflict: 'tenant_id,phone', ignoreDuplicates: false }
-    ).select('id, name, assigned_to, conversation_status').single()
+    ).select('id, name, stage, assigned_to, conversation_status').single()
   )
 
   // atualiza o nome se ainda é o número e agora temos o pushName
@@ -77,25 +91,26 @@ export async function handleInboundMessage({ tenantId, from, text, provider, ins
       .eq('id', lead.id)
   }
 
-  // 2) salva mensagem do lead
-  await supabase.from('messages').insert({
-    tenant_id: tenantId, lead_id: lead.id, role: 'lead', text, provider,
-  })
-  await logUsage(tenantId, null, 'message_received', { provider })
+  // 2) salva mensagem + logUsage em paralelo
+  await Promise.all([
+    supabase.from('messages').insert({ tenant_id: tenantId, lead_id: lead.id, role: 'lead', text, provider }),
+    logUsage(tenantId, null, 'message_received', { provider }),
+  ])
 
-  // histórico
-  const hist = unwrap(
-    await supabase.from('messages').select('role, text')
-      .eq('lead_id', lead.id).order('created_at', { ascending: true })
-  )
-  const tRows = unwrap(
-    await supabase.from('tenants').select('name, ai_enabled').eq('id', tenantId).limit(1)
-  )
-  const tenantName = tRows?.[0]?.name
-  const aiEnabled = tRows?.[0]?.ai_enabled ?? true
-
-  // 3) verifica horário de atendimento
-  const withinHours = await isWithinBusinessHours(tenantId)
+  // 3) histórico + tenant + horário comercial em paralelo
+  // tenant e horário são cacheados por 5 min (mudam raramente)
+  const [histResult, tenantInfo, withinHours] = await Promise.all([
+    supabase.from('messages').select('role, text')
+      .eq('lead_id', lead.id).order('created_at', { ascending: true }),
+    ttlGet(`tenant:${tenantId}`, 300, async () => {
+      const rows = unwrap(await supabase.from('tenants').select('name, ai_enabled').eq('id', tenantId).limit(1))
+      return rows?.[0] || { name: null, ai_enabled: true }
+    }),
+    ttlGet(`biz:${tenantId}`, 60, () => isWithinBusinessHours(tenantId)),
+  ])
+  const hist = unwrap(histResult)
+  const tenantName = tenantInfo.name
+  const aiEnabled = tenantInfo.ai_enabled ?? true
   if (!withinHours) {
     const offMsg = await getOffMessage(tenantId)
     try {
@@ -122,10 +137,10 @@ export async function handleInboundMessage({ tenantId, from, text, provider, ins
   if (reply) {
     try {
       await whatsapp.sendText(tenantId, from, reply)
-      await supabase.from('messages').insert({
-        tenant_id: tenantId, lead_id: lead.id, role: 'ai', text: reply, provider,
-      })
-      await logUsage(tenantId, null, 'message_sent', { provider })
+      await Promise.all([
+        supabase.from('messages').insert({ tenant_id: tenantId, lead_id: lead.id, role: 'ai', text: reply, provider }),
+        logUsage(tenantId, null, 'message_sent', { provider }),
+      ])
     } catch (e) {
       console.error('[orchestrator] falha ao enviar:', e.message)
     }
@@ -142,20 +157,37 @@ export async function handleInboundMessage({ tenantId, from, text, provider, ins
     await supabase.from('leads')
       .update({ stage: 'Reunião Agendada', updated_at: new Date().toISOString() })
       .eq('id', lead.id)
+    if (lead.stage !== 'Reunião Agendada') {
+      await supabase.from('lead_stage_history').insert({
+        tenant_id: tenantId, lead_id: lead.id,
+        from_stage: lead.stage, to_stage: 'Reunião Agendada',
+        changed_by: null, notes: 'Reunião agendada automaticamente pela IA',
+      })
+      lead.stage = 'Reunião Agendada'
+    }
     await logUsage(tenantId, null, 'appointment_created', { by: 'ai' })
   }
 
   // 6) re-analisa lead (não bloqueia)
+  const stageBeforeAnalysis = lead.stage
   analyzeLead(hist.concat([{ role: 'ai', text: reply }]))
-    .then((a) =>
-      supabase.from('leads').update({
+    .then(async (a) => {
+      const newStage = scheduled ? 'Reunião Agendada' : a.stage
+      await supabase.from('leads').update({
         score: a.score,
         intention: a.intention,
-        stage: scheduled ? 'Reunião Agendada' : a.stage,
+        stage: newStage,
         interests: a.interests,
         updated_at: new Date().toISOString(),
       }).eq('id', lead.id)
-    )
+      if (!scheduled && newStage !== stageBeforeAnalysis) {
+        await supabase.from('lead_stage_history').insert({
+          tenant_id: tenantId, lead_id: lead.id,
+          from_stage: stageBeforeAnalysis, to_stage: newStage,
+          changed_by: null, notes: 'Movido automaticamente pela IA',
+        })
+      }
+    })
     .catch((e) => console.warn('[orchestrator] análise:', e.message))
 
   return { reply, scheduled }

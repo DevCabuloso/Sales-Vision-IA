@@ -50,6 +50,20 @@ function defaultSystemPrompt(tenantName) {
   )
 }
 
+function buildSystemContent(aiCfg, tenantName) {
+  const now = new Date().toISOString()
+  if (!aiCfg?.system_prompt && !aiCfg?.main_prompt) {
+    return defaultSystemPrompt(tenantName)
+  }
+  let content = aiCfg?.system_prompt
+    ? `${aiCfg.system_prompt}\nData/hora atual: ${now} (America/Sao_Paulo).`
+    : `Data/hora atual: ${now} (America/Sao_Paulo).`
+  if (aiCfg?.main_prompt) {
+    content += `\n\n---\n${aiCfg.main_prompt}`
+  }
+  return content
+}
+
 /** Busca configuração de IA do tenant (com fallback para padrões). */
 async function getTenantAIConfig(tenantId) {
   try {
@@ -69,17 +83,17 @@ async function getTenantAIConfig(tenantId) {
 export async function runAgent({ tenantId, tenantName, history }) {
   const aiCfg = await getTenantAIConfig(tenantId)
 
-  const sysContent = aiCfg?.system_prompt
-    ? `${aiCfg.system_prompt}\nData/hora atual: ${new Date().toISOString()} (America/Sao_Paulo).`
-    : defaultSystemPrompt(tenantName)
+  const sysContent = buildSystemContent(aiCfg, tenantName)
+  const messages = [{ role: 'system', content: sysContent }]
 
-  const messages = [
-    { role: 'system', content: sysContent },
-    ...history.map((m) => ({
-      role: m.role === 'lead' ? 'user' : 'assistant',
-      content: m.text,
-    })),
-  ]
+  messages.push(
+    ...history
+      .filter((m) => m.role === 'lead' || m.role === 'ai' || m.role === 'agent')
+      .map((m) => ({
+        role: m.role === 'lead' ? 'user' : 'assistant',
+        content: m.text || '',
+      }))
+  )
 
   let scheduled = null
 

@@ -1,4 +1,6 @@
 import { Router } from 'express'
+import express from 'express'
+import crypto from 'node:crypto'
 import { config } from '../config/index.js'
 import { supabase, unwrap } from '../db/supabase.js'
 import { meta, evolution } from '../services/whatsapp/index.js'
@@ -6,12 +8,11 @@ import { handleInboundMessage, handleOutboundMessage } from '../services/orchest
 
 export const webhooksRouter = Router()
 
-// GET /webhooks/ping — para testar se o servidor está acessível
+// GET /webhooks/ping
 webhooksRouter.get('/ping', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }))
 
 // ════════════════════════════════════════════════
-// META — verificação do webhook (GET) e recebimento (POST)
-// O tenant é resolvido pelo phone_number_id da credencial salva.
+// META — verificação (GET) e recebimento (POST)
 // ════════════════════════════════════════════════
 webhooksRouter.get('/meta', (req, res) => {
   const mode = req.query['hub.mode']
@@ -23,66 +24,116 @@ webhooksRouter.get('/meta', (req, res) => {
   res.sendStatus(403)
 })
 
-webhooksRouter.post('/meta', async (req, res) => {
-  res.sendStatus(200) // responde rápido; processa em seguida
-  try {
-    const msgs = meta.parseWebhook(req.body)
-    for (const m of msgs) {
-      // descobre o tenant pelo phoneNumberId guardado em integrations.meta
+// Usa express.raw() para ter acesso ao body bruto e verificar HMAC X-Hub-Signature-256
+webhooksRouter.post('/meta',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    // Verificação HMAC — obrigatória quando META_APP_SECRET estiver configurado
+    if (config.meta.appSecret) {
+      const sig = req.headers['x-hub-signature-256'] || ''
+      const expected = 'sha256=' + crypto
+        .createHmac('sha256', config.meta.appSecret)
+        .update(req.body)
+        .digest('hex')
+      if (!crypto.timingSafeEqual(Buffer.from(sig.padEnd(expected.length)), Buffer.from(expected))) {
+        console.warn('[webhook meta] assinatura inválida — rejeitando requisição')
+        return res.sendStatus(403)
+      }
+    }
+
+    res.sendStatus(200)
+
+    try {
+      const body = JSON.parse(req.body.toString())
+      const msgs     = meta.parseWebhook(body)
+      const statuses = meta.parseWebhookStatuses(body)
+
+      const hasActivity = msgs.length || statuses.length
+      if (!hasActivity) return
+
+      // Busca integrações UMA vez fora do loop — evita N+1
       const rows = unwrap(
         await supabase.from('integrations')
           .select('tenant_id, meta')
           .eq('provider', 'meta_whatsapp').eq('status', 'connected')
       )
-      const match = rows.find((r) => r.meta?.phoneNumberId === m.phoneNumberId)
-      if (!match) continue
-      await handleInboundMessage({
-        tenantId: match.tenant_id,
-        from: m.from,
-        text: m.text,
-        provider: 'meta_whatsapp',
-      })
+
+      // Mensagens recebidas
+      for (const m of msgs) {
+        const match = rows.find((r) => r.meta?.phoneNumberId === m.phoneNumberId)
+        if (!match) continue
+        await handleInboundMessage({
+          tenantId: match.tenant_id,
+          from:      m.from,
+          text:      m.text,
+          mediaType: m.mediaType || null,
+          provider:  'meta_whatsapp',
+          pushName:  m.pushName || null,
+        })
+      }
+
+      // Status de entrega (sent / delivered / read / failed)
+      for (const s of statuses) {
+        if (s.status === 'failed') {
+          console.error(`[webhook meta] mensagem ${s.messageId} falhou para ${s.recipientId}: ${s.error}`)
+        }
+      }
+    } catch (e) {
+      console.error('[webhook meta]', e.message)
     }
-  } catch (e) {
-    console.error('[webhook meta]', e.message)
   }
-})
+)
 
 // ════════════════════════════════════════════════
-// EVOLUTION — recebimento. O tenant vem na URL: /webhooks/evolution/:tenantId
-// (configure essa URL no painel da sua Evolution para cada instância)
+// EVOLUTION — recebimento com verificação de secret
+// Configure EVOLUTION_WEBHOOK_SECRET no .env e no painel da Evolution
 // ════════════════════════════════════════════════
-webhooksRouter.post('/evolution/:tenantId', async (req, res) => {
-  res.sendStatus(200)
-  try {
-    const event = req.body?.event || '(sem event)'
-    console.log(`[webhook evolution] tenant=${req.params.tenantId} event=${event}`)
+webhooksRouter.post('/evolution/:tenantId',
+  express.json(),
+  async (req, res) => {
+    // Verificação do secret da Evolution via header apikey
+    if (config.evolution.webhookSecret) {
+      const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
+      if (provided !== config.evolution.webhookSecret) {
+        console.warn(`[webhook evolution] secret inválido para tenant=${req.params.tenantId}`)
+        return res.sendStatus(403)
+      }
+    }
 
-    const parsed = evolution.parseWebhook(req.body)
-    if (!parsed) return
-    console.log(`[webhook evolution] mensagem de ${parsed.from} via ${parsed.instanceName} fromMe=${parsed.fromMe}: "${parsed.text?.slice(0, 60)}"`)
+    res.sendStatus(200)
 
-    if (parsed.fromMe) {
-      await handleOutboundMessage({
+    try {
+      const event = req.body?.event || '(sem event)'
+      console.log(`[webhook evolution] tenant=${req.params.tenantId} event=${event}`)
+
+      const parsed = evolution.parseWebhook(req.body)
+      if (!parsed) return
+
+      const fromMasked = parsed.from ? `${parsed.from.slice(0, 3)}***${parsed.from.slice(-2)}` : '??'
+      console.log(`[webhook evolution] msg de ${fromMasked} via ${parsed.instanceName || 'default'}`)
+
+      if (parsed.fromMe) {
+        await handleOutboundMessage({
+          tenantId: req.params.tenantId,
+          to: parsed.from,
+          text: parsed.text,
+          provider: 'evolution',
+          instanceName: parsed.instanceName,
+        })
+        return
+      }
+
+      await handleInboundMessage({
         tenantId: req.params.tenantId,
-        to: parsed.from,
+        from: parsed.from,
         text: parsed.text,
+        mediaType: parsed.mediaType,
         provider: 'evolution',
         instanceName: parsed.instanceName,
+        pushName: parsed.pushName,
       })
-      return
+    } catch (e) {
+      console.error('[webhook evolution]', e.message)
     }
-
-    await handleInboundMessage({
-      tenantId: req.params.tenantId,
-      from: parsed.from,
-      text: parsed.text,
-      mediaType: parsed.mediaType,
-      provider: 'evolution',
-      instanceName: parsed.instanceName,
-      pushName: parsed.pushName,
-    })
-  } catch (e) {
-    console.error('[webhook evolution]', e.message)
   }
-})
+)

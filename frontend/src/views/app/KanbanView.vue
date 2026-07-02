@@ -40,7 +40,20 @@
           >
             <div class="d-flex align-center justify-space-between mb-2">
               <div class="lead-avatar">{{ (lead.name || lead.phone).slice(0, 2).toUpperCase() }}</div>
-              <v-chip v-if="lead.score > 0" :color="scoreColor(lead.score)" variant="tonal" size="x-small">{{ lead.score }}pts</v-chip>
+              <v-tooltip v-if="lead.score > 0" location="top">
+                <template #activator="{ props }">
+                  <v-chip v-bind="props" :color="scoreColor(lead.score)" variant="tonal" size="x-small">{{ lead.score }}pts</v-chip>
+                </template>
+                <div style="max-width:180px">
+                  <div class="font-weight-bold mb-1">Score de qualificação (0–100)</div>
+                  <div>Gerado pela IA com base na conversa.</div>
+                  <div class="mt-1">
+                    <span style="color:#4ade80">■</span> ≥ 70 · bem qualificado<br>
+                    <span style="color:#facc15">■</span> 40–69 · em qualificação<br>
+                    <span style="color:#f87171">■</span> &lt; 40 · pouco qualificado
+                  </div>
+                </div>
+              </v-tooltip>
             </div>
             <div class="text-body-2 font-weight-medium mb-1">{{ lead.name || lead.phone }}</div>
             <div v-if="lead.name" class="text-caption" style="color:#9FB0BC">{{ lead.phone }}</div>

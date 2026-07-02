@@ -168,7 +168,13 @@ async function processBroadcast(tenantId, campaign) {
   )
 
   let sent = 0
+  let idx = 0
   for (const c of contacts) {
+    // a cada 10 envios verifica se a campanha foi cancelada
+    if (idx++ % 10 === 0) {
+      const { data: campCheck } = await supabase.from('broadcast_campaigns').select('status').eq('id', campaign.id).single()
+      if (campCheck?.status !== 'sending') break
+    }
     try {
       await sendText(tenantId, c.phone, campaign.content)
       await supabase.from('broadcast_contacts').update({ status: 'sent', sent_at: new Date().toISOString() })
@@ -182,11 +188,15 @@ async function processBroadcast(tenantId, campaign) {
     }
   }
 
-  await supabase.from('broadcast_campaigns').update({
-    status: 'completed',
-    sent_count: sent,
-    updated_at: new Date().toISOString(),
-  }).eq('id', campaign.id)
+  // só marca completed se ainda estava sending (não foi cancelada)
+  const { data: finalStatus } = await supabase.from('broadcast_campaigns').select('status').eq('id', campaign.id).single()
+  if (finalStatus?.status === 'sending') {
+    await supabase.from('broadcast_campaigns').update({
+      status: 'completed',
+      sent_count: sent,
+      updated_at: new Date().toISOString(),
+    }).eq('id', campaign.id)
+  }
 }
 
 // POST /api/broadcast/campaigns/:id/cancel

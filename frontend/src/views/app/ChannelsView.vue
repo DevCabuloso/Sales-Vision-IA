@@ -23,6 +23,23 @@
       </div>
     </div>
 
+    <!-- Loading / Erro -->
+    <div v-if="loading" class="py-12 text-center">
+      <v-progress-circular indeterminate color="primary" size="48" />
+    </div>
+
+    <div v-else-if="loadError" class="ch-empty">
+      <v-icon icon="mdi-alert-circle-outline" size="56" color="error" class="ch-empty-icon" />
+      <div class="ch-empty-title">Erro ao carregar canais</div>
+      <p class="ch-empty-sub">{{ loadError }}</p>
+      <button class="ch-btn ch-btn-connect" @click="load">
+        <v-icon icon="mdi-refresh" size="15" />
+        Tentar novamente
+      </button>
+    </div>
+
+    <template v-else>
+
     <!-- Grid de cards -->
     <div v-if="channels.length" class="ch-grid">
       <div v-for="ch in sortedChannels" :key="ch.id" class="ch-card" :class="{ 'ch-card--default': ch.is_default }">
@@ -113,6 +130,8 @@
         Criar primeiro canal
       </button>
     </div>
+
+    </template>
 
     <!-- ══ Dialogs ══ -->
 
@@ -310,6 +329,8 @@ const QR_TTL = 45
 
 // ── estado principal ──
 const channels    = ref([])
+const loading     = ref(true)
+const loadError   = ref('')
 const refreshing  = reactive({})
 const disconnecting = reactive({})
 const saving      = ref(false)
@@ -540,9 +561,16 @@ function formatDate(d) {
 
 // ── init ──
 async function load() {
+  loading.value = true
+  loadError.value = ''
   try {
     channels.value = await api.listChannels()
-  } catch (e) { toast(e.message, 'error') }
+  } catch (e) {
+    loadError.value = e.message
+    toast(e.message, 'error')
+  } finally {
+    loading.value = false
+  }
 }
 onMounted(load)
 onUnmounted(() => { clearTimeout(qrTimer); clearInterval(pollTimer); clearInterval(countTimer) })

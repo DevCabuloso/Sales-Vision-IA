@@ -252,9 +252,13 @@
       <!-- Select mode toolbar -->
       <div v-if="selectMode" class="select-toolbar">
         <span class="select-count">{{ selectedConvs.size }} selecionado(s)</span>
-        <div class="d-flex ga-2">
+        <div class="d-flex ga-2 flex-wrap">
+          <v-btn size="x-small" variant="tonal" color="secondary" :prepend-icon="selectedConvs.size === filteredConvs.length ? 'mdi-checkbox-multiple-blank-outline' : 'mdi-checkbox-multiple-marked-outline'" @click="selectAll">
+            {{ selectedConvs.size === filteredConvs.length && filteredConvs.length > 0 ? 'Desmarcar todos' : 'Marcar todos' }}
+          </v-btn>
           <v-btn size="x-small" variant="tonal" color="error" prepend-icon="mdi-check-circle-outline" :disabled="!selectedConvs.size" @click="bulkResolve">Fechar</v-btn>
           <v-btn size="x-small" variant="tonal" color="info" prepend-icon="mdi-swap-horizontal" :disabled="!selectedConvs.size" @click="bulkTransferDialog = true">Transferir</v-btn>
+          <v-btn size="x-small" variant="tonal" color="error" prepend-icon="mdi-delete-outline" :disabled="!selectedConvs.size" @click="bulkDeleteDialog = true">Deletar</v-btn>
           <v-btn size="x-small" variant="text" @click="toggleSelectMode">Cancelar</v-btn>
         </div>
       </div>
@@ -365,6 +369,18 @@
                 <button v-bind="props" class="qa-btn" :class="{ active: showContactPanel }" @click="showContactPanel = !showContactPanel">
                   <v-icon icon="mdi-account-details-outline" size="17" />
                   <span>Contato</span>
+                </button>
+              </template>
+            </v-tooltip>
+
+            <div class="qa-divider" />
+
+            <!-- Deletar conversa -->
+            <v-tooltip text="Deletar conversa" location="bottom">
+              <template #activator="{ props }">
+                <button v-bind="props" class="qa-btn danger" @click="deleteDialog = true">
+                  <v-icon icon="mdi-delete-outline" size="17" />
+                  <span>Deletar</span>
                 </button>
               </template>
             </v-tooltip>
@@ -739,6 +755,38 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog: deletar em massa -->
+    <v-dialog v-model="bulkDeleteDialog" max-width="400">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Deletar conversas</v-card-title>
+        <v-card-text>
+          Tem certeza que deseja deletar <strong>{{ selectedConvs.size }} conversa(s)</strong>?
+          <div class="text-caption mt-2" style="color:#F87171">Esta ação é irreversível. Todas as mensagens serão apagadas.</div>
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="bulkDeleteDialog = false">Cancelar</v-btn>
+          <v-btn color="error" variant="flat" :loading="bulkLoading" @click="bulkDelete">Deletar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Dialog: deletar conversa -->
+    <v-dialog v-model="deleteDialog" max-width="400">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Deletar conversa</v-card-title>
+        <v-card-text>
+          Tem certeza que deseja deletar a conversa com <strong>{{ currentLead?.name || currentLead?.phone }}</strong>?
+          <div class="text-caption mt-2" style="color:#F87171">Esta ação é irreversível. Todas as mensagens serão apagadas.</div>
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="deleteDialog = false">Cancelar</v-btn>
+          <v-btn color="error" variant="flat" :loading="deleteLoading" @click="doDeleteConversation">Deletar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-snackbar v-model="snack.show" :color="snack.color" timeout="3000">{{ snack.text }}</v-snackbar>
   </div>
 </template>
@@ -779,6 +827,9 @@ const selectMode         = ref(false)
 const selectedConvs      = ref(new Set())
 const sortByUnread       = ref(false)
 const bulkTransferDialog = ref(false)
+const bulkDeleteDialog   = ref(false)
+const deleteDialog  = ref(false)
+const deleteLoading = ref(false)
 const bulkTransferUserId = ref(null)
 const bulkLoading        = ref(false)
 
@@ -982,6 +1033,14 @@ const activeFiltersCount = computed(() => {
 
 function tabCount(key) { return convs.value.filter((c) => (c.conversation_status || 'pending') === key).length }
 
+// pré-computa ticketNum para todos os leads quando convs mudar,
+// evitando recalcular por lead em cada keystroke de busca
+const ticketNumMap = computed(() => {
+  const map = new Map()
+  for (const c of convs.value) map.set(c.id, ticketNum(c.id))
+  return map
+})
+
 const filteredConvs = computed(() => {
   let list = filterShowAll.value
     ? convs.value.filter((c) => filterStatuses.value.includes(c.conversation_status || 'pending'))
@@ -992,7 +1051,7 @@ const filteredConvs = computed(() => {
     list = list.filter((c) =>
       (c.name || '').toLowerCase().includes(q) ||
       (c.phone || '').toLowerCase().includes(q) ||
-      ticketNum(c.id).includes(q)
+      (ticketNumMap.value.get(c.id) || '0000').includes(q)
     )
   }
   if (filterOnlyUnread.value)    list = list.filter((c) => c.unread > 0)
@@ -1089,14 +1148,33 @@ function toggleConvSelect(id) {
   if (next.has(id)) next.delete(id); else next.add(id)
   selectedConvs.value = next
 }
+function selectAll() {
+  const allIds = filteredConvs.value.map((c) => c.id)
+  const allSelected = allIds.length > 0 && allIds.every((id) => selectedConvs.value.has(id))
+  selectedConvs.value = allSelected ? new Set() : new Set(allIds)
+}
 async function bulkResolve() {
   bulkLoading.value = true
+  const count = selectedConvs.value.size
   try {
     await Promise.all([...selectedConvs.value].map((id) => api.resolveChat(id)))
     selectedConvs.value = new Set()
     selectMode.value = false
     await loadConvs()
-    toast(`${selectedConvs.value.size || 'Tickets'} finalizados.`)
+    toast(`${count} ticket(s) finalizado(s).`)
+  } catch (e) { toast(e.message, 'error') } finally { bulkLoading.value = false }
+}
+async function bulkDelete() {
+  const ids = [...selectedConvs.value]
+  bulkLoading.value = true
+  try {
+    await Promise.all(ids.map((id) => api.deleteConversation(id)))
+    convs.value = convs.value.filter((c) => !ids.includes(c.id))
+    if (currentLead.value && ids.includes(currentLead.value.id)) currentLead.value = null
+    bulkDeleteDialog.value = false
+    selectedConvs.value = new Set()
+    selectMode.value = false
+    toast(`${ids.length} conversa(s) deletada(s).`)
   } catch (e) { toast(e.message, 'error') } finally { bulkLoading.value = false }
 }
 async function bulkTransfer() {
@@ -1301,6 +1379,18 @@ async function reopenLead() {
   } catch (e) { toast(e.message, 'error') } finally { statusLoading.value = false }
 }
 
+async function doDeleteConversation() {
+  deleteLoading.value = true
+  try {
+    const id = currentLead.value.id
+    await api.deleteConversation(id)
+    convs.value = convs.value.filter((c) => c.id !== id)
+    currentLead.value = null
+    deleteDialog.value = false
+    toast('Conversa deletada.')
+  } catch (e) { toast(e.message, 'error') } finally { deleteLoading.value = false }
+}
+
 async function quickResolve(conv) {
   try {
     await api.resolveChat(conv.id)
@@ -1348,19 +1438,21 @@ function resetStartForm() { startForm.phone = ''; startForm.name = ''; startForm
 
 // ——— realtime: novas mensagens ———
 const { onMessage } = useMessageRealtime()
+let reloadConvsTimeout = null
 onMessage((msg) => {
   if (msg.lead_id === currentLead.value?.id) {
     messages.value.push(msg)
     scrollToBottom()
     syncConv(msg.lead_id, { lastMessage: msg })
   } else {
-    loadConvs()
+    // Debounce: evita múltiplos loadConvs() por rajada de mensagens
+    clearTimeout(reloadConvsTimeout)
+    reloadConvsTimeout = setTimeout(loadConvs, 500)
   }
 })
 
-// ——— polling: busca mensagens novas a cada 5s ———
+// ——— polling: busca mensagens novas do lead atual a cada 3s (fallback do realtime) ———
 let pollTimer = null
-let convsTimer = null
 
 async function pollNewMessages() {
   if (!currentLead.value) return
@@ -1389,17 +1481,21 @@ function closeEmojiOnOutside() { showEmojiPicker.value = false }
 
 onMounted(() => {
   loadConvs()
-  loadOperators() 
+  loadOperators()
   loadLabels()
   document.addEventListener('click', closeEmojiOnOutside)
-  pollTimer  = setInterval(pollNewMessages, 3000)
-  convsTimer = setInterval(loadConvs, 5000)
+  pollTimer = setInterval(pollNewMessages, 3000)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', closeEmojiOnOutside)
-  if (pollTimer)  clearInterval(pollTimer)
-  if (convsTimer) clearInterval(convsTimer)
+  if (pollTimer) clearInterval(pollTimer)
+  clearTimeout(reloadConvsTimeout)
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop()
+    mediaRecorder.stream?.getTracks().forEach((t) => t.stop())
+  }
+  if (recTimer) clearInterval(recTimer)
 })
 </script>
 
@@ -1574,6 +1670,8 @@ onUnmounted(() => {
 .qa-btn.active { color: #818CF8; background: rgba(99,102,241,0.12); }
 .qa-btn.success { color: #34D399; }
 .qa-btn.success:hover:not(:disabled) { background: rgba(16,185,129,0.1); }
+.qa-btn.danger { color: #F87171; }
+.qa-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.1); }
 .qa-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .qa-divider { width: 1px; height: 18px; background: var(--sep); margin: 0 2px; flex-shrink: 0; }

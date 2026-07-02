@@ -68,7 +68,7 @@
         </div>
 
         <div class="panel-footer">
-          Tempo médio de resposta: <strong>3,2s</strong> · Taxa de qualificação: <strong>{{ qualRate }}%</strong>
+          Taxa de qualificação: <strong>{{ qualRate }}%</strong>
         </div>
       </div>
 

@@ -1,9 +1,18 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import { config } from '../config/index.js'
 import { supabase, unwrap } from '../db/supabase.js'
 import { verifyPassword, hashPassword, signToken } from '../services/auth.js'
 import { logUsage } from '../services/usage.js'
 import { requireAuth } from '../middleware/auth.js'
+
+const COOKIE_OPTS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict',
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  path: '/',
+}
 
 export const authRouter = Router()
 
@@ -16,7 +25,7 @@ const registerSchema = z.object({
   name: z.string().min(2),
   companyName: z.string().min(2),
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(8, 'A senha deve ter pelo menos 8 caracteres.'),
 })
 
 authRouter.post('/login', async (req, res) => {
@@ -57,6 +66,7 @@ authRouter.post('/login', async (req, res) => {
     await logUsage(user.tenant_id, user.id, 'login')
 
     const token = signToken({ sub: user.id, role: user.role, tenantId: user.tenant_id })
+    res.cookie('sdr_token', token, COOKIE_OPTS)
     res.json({
       token,
       user: {
@@ -144,6 +154,7 @@ authRouter.post('/register', async (req, res) => {
     await logUsage(tenant.id, user.id, 'register')
 
     const token = signToken({ sub: user.id, role: user.role, tenantId: user.tenant_id })
+    res.cookie('sdr_token', token, COOKIE_OPTS)
     res.status(201).json({
       token,
       user: {
@@ -162,10 +173,16 @@ authRouter.post('/register', async (req, res) => {
   }
 })
 
+// POST /api/auth/logout — limpa o cookie de sessão
+authRouter.post('/logout', (req, res) => {
+  res.clearCookie('sdr_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/' })
+  res.json({ ok: true })
+})
+
 // POST /api/auth/change-password
 authRouter.post('/change-password', requireAuth, async (req, res) => {
   const { currentPassword, newPassword } = req.body
-  if (!currentPassword || !newPassword || newPassword.length < 6) {
+  if (!currentPassword || !newPassword || newPassword.length < 8) {
     return res.status(400).json({ error: 'Dados inválidos.' })
   }
   try {

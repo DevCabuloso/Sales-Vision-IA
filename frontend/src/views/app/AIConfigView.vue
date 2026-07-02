@@ -94,7 +94,7 @@ const testMessage = ref('')
 const testResult = ref('')
 const testError = ref('')
 
-const models = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano']
+const models = ['gpt-4o-mini', 'gpt-4.1-mini']
 const form = reactive({ name: 'SDR IA', model: 'gpt-4o-mini', system_prompt: '', main_prompt: '', temperature: 0.7, max_tokens: 1000 })
 
 function applyConfig(cfg) {

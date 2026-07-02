@@ -17,16 +17,17 @@ const userStore = {
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref(userStore.get())
+  // token só é não-nulo durante sessões de impersonação (sessionStorage)
   const token = ref(tokenStore.get())
 
-  const isAuthenticated = computed(() => !!token.value)
+  // isAuthenticated baseia-se no user object (persistido em localStorage).
+  // A sessão real é validada pelo httpOnly cookie a cada request ao backend.
+  const isAuthenticated = computed(() => !!user.value)
   const isOwner = computed(() => user.value?.role === 'owner')
 
   async function login(email, password) {
-    const { token: t, user: u } = await api.login(email, password)
-    token.value = t
+    const { user: u } = await api.login(email, password)
     user.value = u
-    tokenStore.set(t)
     userStore.set(u)
     return u
   }
@@ -34,28 +35,30 @@ export const useAuthStore = defineStore('auth', () => {
   async function loginSuperAdmin(email, password) {
     const u = await login(email, password)
     if (u.role !== 'owner') {
-      logout()
+      await logout()
       throw new Error('Acesso restrito ao superadmin.')
     }
     return u
   }
 
   async function register(name, companyName, email, password) {
-    const { token: t, user: u } = await api.register(name, companyName, email, password)
-    token.value = t
+    const { user: u } = await api.register(name, companyName, email, password)
     user.value = u
-    tokenStore.set(t)
     userStore.set(u)
     return u
   }
 
-  function logout() {
+  function clearSession() {
     token.value = null
     user.value = null
-    tokenStore.set(null)
     tokenStore.setSession(null)
     userStore.set(null)
     userStore.setSession(null)
+  }
+
+  async function logout() {
+    clearSession()
+    try { await api.logout() } catch { /* ignora */ }
   }
 
   function hydrate(u) {
@@ -69,5 +72,5 @@ export const useAuthStore = defineStore('auth', () => {
     userStore.setSession(u)
   }
 
-  return { user, token, isAuthenticated, isOwner, login, loginSuperAdmin, register, logout, hydrate, impersonate }
+  return { user, token, isAuthenticated, isOwner, login, loginSuperAdmin, register, logout, clearSession, hydrate, impersonate }
 })

@@ -1,5 +1,8 @@
 import express from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
+import cookieParser from 'cookie-parser'
 import { config } from './config/index.js'
 import { authRouter } from './routes/auth.js'
 import { leadsRouter } from './routes/leads.js'
@@ -22,21 +25,55 @@ import { internalGroupsRouter } from './routes/internal-groups.js'
 import { opSettingsRouter } from './routes/op-settings.js'
 import { notificationsRouter } from './routes/notifications.js'
 
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas tentativas. Aguarde 15 minutos.' },
+})
+
 export function createApp() {
   const app = express()
 
+  app.use(helmet())
   app.use(cors({ origin: config.frontendUrl, credentials: true }))
+  app.use(cookieParser())
+
+  // Webhooks montados ANTES do express.json() para que /webhooks/meta
+  // possa usar express.raw() e verificar a assinatura HMAC do Meta
+  app.use('/webhooks', webhooksRouter)
+
   app.use(express.json({ limit: '2mb' }))
+
+  // Em produção, substitui mensagens internas de erro por texto genérico antes
+  // de chegar ao cliente — cobre todos os blocos catch que usam e.message.
+  if (process.env.NODE_ENV === 'production') {
+    app.use((req, res, next) => {
+      const _json = res.json.bind(res)
+      res.json = (body) => {
+        if (res.statusCode >= 500 && body?.error && typeof body.error === 'string') {
+          return _json({ error: 'Erro interno do servidor.' })
+        }
+        return _json(body)
+      }
+      next()
+    })
+  }
 
   app.get('/api/health', async (req, res) => {
     try {
       const { supabase } = await import('./db/supabase.js')
       const { error } = await supabase.from('tenants').select('id').limit(1)
-      res.json({ ok: true, ts: Date.now(), supabase: error ? `ERRO: ${error.message}` : 'conectado' })
+      if (error) return res.status(503).json({ ok: false, ts: Date.now(), supabase: `ERRO: ${error.message}` })
+      res.json({ ok: true, ts: Date.now(), supabase: 'conectado' })
     } catch (e) {
-      res.json({ ok: true, ts: Date.now(), supabase: `ERRO: ${e.message}` })
+      res.status(503).json({ ok: false, ts: Date.now(), supabase: `ERRO: ${e.message}` })
     }
   })
+
+  app.use('/api/auth/login', authLimiter)
+  app.use('/api/auth/register', authLimiter)
 
   app.use('/api/auth', authRouter)
   app.use('/api/leads', leadsRouter)
@@ -57,12 +94,11 @@ export function createApp() {
   app.use('/api/internal-groups', internalGroupsRouter)
   app.use('/api/op-settings', opSettingsRouter)
   app.use('/api/notifications', notificationsRouter)
-  app.use('/webhooks', webhooksRouter)
 
   // 404
   app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }))
 
-  // handler de erro
+  // handler de erro global
   app.use((err, req, res, _next) => {
     console.error('[erro]', err.message)
     res.status(500).json({ error: 'Erro interno do servidor.' })

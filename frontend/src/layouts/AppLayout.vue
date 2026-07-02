@@ -204,7 +204,7 @@ const navSystem = computed(() => {
 const tenantName = computed(() => auth.user?.tenantName || auth.user?.tenantSlug || 'Minha Operação')
 const initials   = computed(() => (auth.user?.email || '?').slice(0, 2).toUpperCase())
 
-function logout() { auth.logout(); router.push('/login') }
+async function logout() { await auth.logout(); router.push('/login') }
 </script>
 
 <style scoped>

@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import dns from 'node:dns/promises'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { encrypt, decryptJSON } from '../services/crypto.js'
@@ -18,6 +19,38 @@ const schema = z.object({
   provider: z.enum(['openai', 'claude', 'gemini', 'deepseek', 'custom']).default('custom'),
   active:   z.boolean().optional().default(true),
 })
+
+// Bloqueia requisições para IPs privados/loopback (proteção contra SSRF)
+const PRIVATE_RANGES = [
+  /^127\./,
+  /^10\./,
+  /^192\.168\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^::1$/,
+  /^fd/,
+  /^169\.254\./,
+]
+
+async function assertPublicUrl(rawUrl) {
+  const url = new URL(rawUrl)
+  const hostname = url.hostname
+
+  // Bloqueia hostnames literais que são privados
+  if (PRIVATE_RANGES.some((re) => re.test(hostname))) {
+    throw new Error('URL aponta para rede privada ou loopback — não permitido.')
+  }
+
+  // Resolve DNS e valida o IP resultante
+  try {
+    const { address } = await dns.lookup(hostname)
+    if (PRIVATE_RANGES.some((re) => re.test(address))) {
+      throw new Error('URL resolve para endereço de rede privada — não permitido.')
+    }
+  } catch (e) {
+    if (e.message.includes('não permitido')) throw e
+    // Falha de DNS: deixa o fetch falhar naturalmente
+  }
+}
 
 // GET /api/custom-apis
 customApisRouter.get('/', async (req, res) => {
@@ -39,6 +72,7 @@ customApisRouter.post('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
   try {
+    await assertPublicUrl(parsed.data.base_url)
     const { api_key, ...rest } = parsed.data
     const row = unwrap(
       await supabase.from('custom_apis').insert({
@@ -59,6 +93,7 @@ customApisRouter.patch('/:id', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
   try {
+    if (parsed.data.base_url) await assertPublicUrl(parsed.data.base_url)
     const { api_key, ...rest } = parsed.data
     const update = { ...rest, updated_at: new Date().toISOString() }
     if (api_key !== undefined) update.api_key = api_key ? encrypt(api_key) : null
@@ -96,6 +131,8 @@ customApisRouter.post('/:id/test', async (req, res) => {
     )
     if (!rows.length) return res.status(404).json({ error: 'API não encontrada.' })
     const apiCfg = rows[0]
+
+    await assertPublicUrl(apiCfg.base_url)
 
     const apiKey = apiCfg.api_key ? decryptJSON(apiCfg.api_key) : null
 

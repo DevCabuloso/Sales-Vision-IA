@@ -87,7 +87,7 @@ const navSystem = [
   { title: 'Configurações', icon: 'mdi-cog-outline', to: '/admin/configuracoes' },
 ]
 
-function logout() { auth.logout(); router.push('/login') }
+async function logout() { await auth.logout(); router.push('/login') }
 </script>
 
 <style scoped>

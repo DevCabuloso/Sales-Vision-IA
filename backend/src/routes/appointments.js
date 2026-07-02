@@ -31,6 +31,7 @@ appointmentsRouter.post('/sync', async (req, res) => {
       timeMin: timeMin.toISOString(),
       timeMax: timeMax.toISOString(),
       maxResults: 200,
+      showDeleted: true,
     })
 
     // busca external_ids já existentes para não duplicar
@@ -47,34 +48,44 @@ appointmentsRouter.post('/sync', async (req, res) => {
 
       if (existingMap[ev.externalId]) {
         // atualiza dados que podem ter mudado
-        await supabase.from('appointments').update({
-          title: ev.title || '(sem título)',
-          start_time: ev.start,
-          end_time: ev.end,
-          meeting_link: ev.meetingLink || null,
-          status,
-        }).eq('id', existingMap[ev.externalId].id)
+        unwrap(
+          await supabase.from('appointments').update({
+            title: ev.title || '(sem título)',
+            start_time: ev.start,
+            end_time: ev.end,
+            meeting_link: ev.meetingLink || null,
+            status,
+          }).eq('id', existingMap[ev.externalId].id)
+        )
       } else {
         // insere novo evento vindo do Google Calendar
-        await supabase.from('appointments').insert({
-          tenant_id: req.user.tenantId,
-          title: ev.title || '(sem título)',
-          provider: 'google',
-          external_id: ev.externalId,
-          start_time: ev.start,
-          end_time: ev.end,
-          meeting_link: ev.meetingLink || null,
-          status,
-        })
+        unwrap(
+          await supabase.from('appointments').insert({
+            tenant_id: req.user.tenantId,
+            title: ev.title || '(sem título)',
+            provider: 'google',
+            external_id: ev.externalId,
+            start_time: ev.start,
+            end_time: ev.end,
+            meeting_link: ev.meetingLink || null,
+            status,
+          })
+        )
       }
       synced++
     }
 
     res.json({ synced })
   } catch (e) {
-    // se Google Calendar não está conectado, retorna OK silencioso
-    if (e.message?.includes('não conectado')) return res.json({ synced: 0, warning: 'Google Calendar não conectado.' })
-    res.status(500).json({ error: e.message })
+    const msg = e.message || ''
+    console.error('[appointments/sync] erro:', msg)
+    if (msg.includes('não conectado') || msg.includes('Google OAuth não configurado'))
+      return res.json({ synced: 0, warning: 'Google Calendar não conectado. Reconecte em Integrações.' })
+    if (msg.includes('invalid_grant') || msg.includes('Token has been expired') || msg.includes('token expired'))
+      return res.json({ synced: 0, warning: 'Acesso ao Google Calendar expirado. Reconecte em Integrações.' })
+    if (msg.includes('ENCRYPTION_KEY'))
+      return res.status(500).json({ error: 'ENCRYPTION_KEY não configurada no servidor.' })
+    res.status(500).json({ error: 'Falha ao sincronizar com Google Calendar: ' + msg })
   }
 })
 

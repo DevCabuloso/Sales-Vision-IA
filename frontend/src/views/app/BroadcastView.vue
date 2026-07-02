@@ -183,7 +183,7 @@ async function saveCampaign() {
 
 async function openManage(camp) {
   activeCampaign.value = camp; loadingContacts.value = true
-  try { const { contacts: c } = await api.listContacts(camp.id); contacts.value = c } catch (e) { toast.error(e.message) } finally { loadingContacts.value = false }
+  try { const { contacts: c } = await api.listBroadcastContacts(camp.id); contacts.value = c } catch (e) { toast.error(e.message) } finally { loadingContacts.value = false }
 }
 
 async function startSend(camp) {

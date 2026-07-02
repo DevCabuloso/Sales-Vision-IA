@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import jwt from 'jsonwebtoken'
 import { config } from '../config/index.js'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
@@ -77,8 +78,15 @@ integrationsRouter.get('/google/callback', async (req, res) => {
   if (!code || !state) {
     return res.redirect(`${back}?gcal=error&reason=missing_code`)
   }
+  let tenantId
   try {
-    await handleCallback(code, state) // state carrega o tenantId
+    const decoded = jwt.verify(state, config.jwt.secret)
+    tenantId = decoded.tenantId
+  } catch {
+    return res.redirect(`${back}?gcal=error&reason=invalid_state`)
+  }
+  try {
+    await handleCallback(code, tenantId)
     res.redirect(`${back}?gcal=connected`)
   } catch (e) {
     res.redirect(`${back}?gcal=error&reason=${encodeURIComponent(e.message)}`)

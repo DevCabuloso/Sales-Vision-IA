@@ -8,6 +8,10 @@
       <v-btn color="primary" prepend-icon="mdi-google" variant="tonal" size="small" :loading="syncing" @click="sync">Sincronizar Google</v-btn>
     </div>
 
+    <v-snackbar v-model="snackbar.show" :color="snackbar.color" timeout="4000" location="bottom end">
+      {{ snackbar.message }}
+    </v-snackbar>
+
     <!-- Calendário -->
     <v-card class="glass" border>
       <!-- Header do mês -->
@@ -124,8 +128,11 @@ const loading  = ref(true)
 const syncing  = ref(false)
 const cancelling = ref(null)
 const appts    = ref([])
-const cursor   = ref(new Date())   // mês exibido
-const selectedDay = ref(null)      // string 'YYYY-MM-DD'
+const cursor   = ref(new Date())
+const selectedDay = ref(null)
+
+const snackbar = ref({ show: false, message: '', color: 'success' })
+function notify(message, color = 'success') { snackbar.value = { show: true, message, color } }
 
 const weekdays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 
@@ -245,10 +252,18 @@ async function load() {
 async function sync() {
   syncing.value = true
   try {
-    await api.syncAppointments()
+    const result = await api.syncAppointments()
     await load()
-  } catch { /* Google Calendar pode não estar conectado */ }
-  finally { syncing.value = false }
+    if (result?.warning) {
+      notify(result.warning, 'warning')
+    } else {
+      notify(`Sincronizado: ${result?.synced ?? 0} evento(s) atualizados.`, 'success')
+    }
+  } catch (e) {
+    notify(e?.message || 'Erro ao sincronizar com Google Calendar.', 'error')
+  } finally {
+    syncing.value = false
+  }
 }
 
 async function cancel(a) {
