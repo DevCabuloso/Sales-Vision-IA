@@ -45,7 +45,7 @@
       </aside>
 
       <!-- Canvas Vue Flow -->
-      <div class="canvas-wrap" @dragover.prevent @drop="onDrop">
+      <div class="canvas-wrap" ref="canvasRef" @dragover.prevent @drop="onDrop">
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
@@ -198,17 +198,15 @@
 <script setup>
 import { ref, computed, onMounted, markRaw } from 'vue'
 import { useRoute }   from 'vue-router'
-import { VueFlow, useVueFlow } from '@vue-flow/core'
+import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls }   from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
-import '@vue-flow/background/dist/style.css'
 import '@vue-flow/controls/dist/style.css'
 import FlowNode from '@/components/flow/FlowNode.vue'
 import { http } from '@/services/api'
 
 const route = useRoute()
-const { addNodes, screenToFlowCoordinate } = useVueFlow()
 
 // ─── Estado ────────────────────────────────────────────────────────────────
 const flow          = ref(null)
@@ -221,6 +219,7 @@ const settingsDialog = ref(false)
 const pendingEdge   = ref({ source: null, target: null, edgeType: 'auto', keywords: '' })
 const flowSettings  = ref({})
 const dragType      = ref(null)
+const canvasRef     = ref(null)
 
 const nodeTypes = { flowNode: markRaw(FlowNode) }
 
@@ -273,14 +272,17 @@ function onDragStart(e, type) {
 
 function onDrop(e) {
   if (!dragType.value) return
-  const pos = screenToFlowCoordinate({ x: e.clientX, y: e.clientY })
-  const id  = `node-${Date.now()}`
-  addNodes([{
-    id,
-    type: 'flowNode',
-    position: pos,
-    data: { nodeType: dragType.value },
-  }])
+  const rect = canvasRef.value?.getBoundingClientRect() || { left: 0, top: 0 }
+  const id = `node-${Date.now()}`
+  nodes.value = [
+    ...nodes.value,
+    {
+      id,
+      type: 'flowNode',
+      position: { x: e.clientX - rect.left - 90, y: e.clientY - rect.top - 20 },
+      data: { nodeType: dragType.value },
+    },
+  ]
   dragType.value = null
 }
 
@@ -306,7 +308,9 @@ function confirmEdge() {
 
 // ─── Selecionar nó ──────────────────────────────────────────────────────────
 function onNodeClick(e) {
-  selectedNode.value = e.node
+  // Busca o nó no array reativo para que v-model no painel funcione
+  const found = nodes.value.find(n => n.id === e.node.id)
+  selectedNode.value = found || null
 }
 
 function deleteSelected() {
