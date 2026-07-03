@@ -24,6 +24,7 @@ import { businessHoursRouter } from './routes/business-hours.js'
 import { internalGroupsRouter } from './routes/internal-groups.js'
 import { opSettingsRouter } from './routes/op-settings.js'
 import { notificationsRouter } from './routes/notifications.js'
+import { flowsRouter } from './routes/flows.js'
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -117,6 +118,7 @@ export function createApp() {
   app.use('/api/internal-groups', internalGroupsRouter)
   app.use('/api/op-settings', opSettingsRouter)
   app.use('/api/notifications', notificationsRouter)
+  app.use('/api/flows', flowsRouter)
 
   // 404
   app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }))

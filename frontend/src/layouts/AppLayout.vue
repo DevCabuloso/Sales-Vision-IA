@@ -277,6 +277,7 @@ const navMain = computed(() => [
 const navTools = computed(() => [
   { title: t('nav.templates'),  icon: 'mdi-file-document-multiple-outline', to: '/templates' },
   { title: t('nav.broadcast'),  icon: 'mdi-bullhorn-outline',               to: '/broadcast',  show: feat('broadcast') },
+  { title: 'Chat Flow',         icon: 'mdi-robot-outline',                  to: '/flows' },
   { title: t('nav.usuarios'),   icon: 'mdi-account-group-outline',          to: '/operadores', show: feat('operators') },
 ].filter((i) => i.show !== false))
 

@@ -116,6 +116,17 @@ export async function handleInboundMessage({ tenantId, from: rawFrom, text, prov
   console.log(`[orchestrator] mensagem salva: id=${savedId} lead_id=${lead.id} text="${text?.slice(0, 40)}"`)
   if (msgResult?.error) console.error('[orchestrator] ERRO ao salvar mensagem:', msgResult.error.message)
 
+  // 2.5) flow engine — se ativo, trata a mensagem e interrompe a IA
+  if (!lead.human_takeover) {
+    try {
+      const { processFlowMessage } = await import('./flowEngine.js')
+      const handledByFlow = await processFlowMessage({ tenantId, leadId: lead.id, text, channelId })
+      if (handledByFlow) return { reply: null, scheduled: null }
+    } catch (e) {
+      console.warn('[orchestrator] flowEngine error:', e.message)
+    }
+  }
+
   // 3) histórico + tenant + horário comercial em paralelo
   // tenant e horário são cacheados por 5 min (mudam raramente)
   const [histResult, tenantInfo, withinHours] = await Promise.all([

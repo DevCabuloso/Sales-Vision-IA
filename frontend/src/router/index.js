@@ -38,6 +38,8 @@ const routes = [
       { path: 'configuracoes', name: 'config',     component: () => import('@/views/app/TenantSettingsView.vue') },
       { path: 'atendimento',  name: 'atendimento', component: () => import('@/views/app/AttendanceConfigView.vue') },
       { path: 'operacao',     name: 'operacao',    component: () => import('@/views/app/OperationalSettingsView.vue') },
+      { path: 'flows',        name: 'flows',        component: () => import('@/views/app/FlowsView.vue') },
+      { path: 'flows/:id',    name: 'flow-editor',  component: () => import('@/views/app/FlowEditorView.vue'), props: true },
     ],
   },
   {

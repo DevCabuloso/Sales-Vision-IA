@@ -197,6 +197,14 @@ export const api = {
   getTicketLogs: (id) => http.get(`/chat/${id}/logs`).then((r) => r.data.logs),
   transferTicketTo: (id, userId) => http.post(`/chat/${id}/transfer-to`, { userId }).then((r) => r.data),
 
+  // flows (chatbot)
+  listFlows: () => http.get('/flows').then((r) => r.data.flows),
+  getFlow: (id) => http.get(`/flows/${id}`).then((r) => r.data.flow),
+  createFlow: (payload) => http.post('/flows', payload).then((r) => r.data.flow),
+  updateFlow: (id, payload) => http.patch(`/flows/${id}`, payload).then((r) => r.data.flow),
+  deleteFlow: (id) => http.delete(`/flows/${id}`).then((r) => r.data),
+  getFlowSessions: (id) => http.get(`/flows/${id}/sessions`).then((r) => r.data.sessions),
+
   // admin — monitoramento
   adminMonitoring: (params) =>
     http.get('/admin/monitoring', { params }).then((r) => r.data),

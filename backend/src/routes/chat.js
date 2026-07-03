@@ -322,7 +322,13 @@ chatRouter.post('/:leadId/transfer', async (req, res) => {
       text: human_takeover ? '— Atendimento transferido para humano —' : '— IA retomou o atendimento —',
       is_human_takeover: !!human_takeover,
     })
-    if (human_takeover) await logUsage(req.user.tenantId, req.user.id, 'human_takeover', { lead_id: req.params.leadId })
+    if (human_takeover) {
+      await logUsage(req.user.tenantId, req.user.id, 'human_takeover', { lead_id: req.params.leadId })
+      // encerra sessão ativa do chatbot ao assumir atendimento
+      await supabase.from('flow_sessions')
+        .update({ status: 'transferred' })
+        .eq('lead_id', req.params.leadId).eq('tenant_id', req.user.tenantId).eq('status', 'active')
+    }
     res.json({ lead: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
