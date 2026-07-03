@@ -6,11 +6,8 @@ export const flowsRouter = Router()
 flowsRouter.use(requireAuth, requireTenant)
 
 const DEFAULT_NODES = () => [
-  { id: 'start',   type: 'flowNode', position: { x: 80,  y: 200 }, data: { nodeType: 'start' } },
-  { id: 'welcome', type: 'flowNode', position: { x: 320, y: 200 }, data: { nodeType: 'message', text: 'Olá! Como posso te ajudar?' } },
-]
-const DEFAULT_EDGES = () => [
-  { id: 'e-start-welcome', source: 'start', target: 'welcome', type: 'auto', data: { edgeType: 'auto' } },
+  { id: 'n1', tipo: 'mensagem',  conteudo: 'Olá! 👋 Como posso te ajudar?' },
+  { id: 'n2', tipo: 'encerrar' },
 ]
 
 // GET /api/flows
@@ -56,7 +53,7 @@ flowsRouter.post('/', async (req, res) => {
         timeout_minutes:  timeout_minutes || 30,
         fallback_text:    fallback_text || null,
         nodes:            DEFAULT_NODES(),
-        edges:            DEFAULT_EDGES(),
+        edges:            [],
         updated_at:       new Date().toISOString(),
       }).select()
     )
