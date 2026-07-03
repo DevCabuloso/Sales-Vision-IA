@@ -57,7 +57,7 @@ export async function handleInboundMessage({ tenantId, from: rawFrom, text, prov
     await supabase.from('leads').upsert(
       upsertPayload,
       { onConflict: 'tenant_id,phone', ignoreDuplicates: false }
-    ).select('id, name, stage, assigned_to, conversation_status').single()
+    ).select('id, name, stage, assigned_to, conversation_status, human_takeover').single()
   )
 
   // atualiza o nome se ainda é o número e agora temos o pushName
@@ -129,7 +129,7 @@ export async function handleInboundMessage({ tenantId, from: rawFrom, text, prov
   ])
   const hist = unwrap(histResult)
   const tenantName = tenantInfo.name
-  const aiEnabled = tenantInfo.ai_enabled ?? true
+  const aiEnabled = (tenantInfo.ai_enabled ?? true) && !lead.human_takeover
   if (!withinHours) {
     const offMsg = await getOffMessage(tenantId)
     try {
