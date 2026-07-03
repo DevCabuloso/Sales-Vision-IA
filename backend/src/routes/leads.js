@@ -104,7 +104,7 @@ leadsRouter.patch('/:id', async (req, res) => {
         from_stage: current[0]?.stage || null,
         to_stage:   parsed.data.stage,
         changed_by: req.user.id,
-      }).catch((e) => console.warn('[leads] falha ao salvar histórico de estágio:', e.message))
+      }).then(null, (e) => console.warn('[leads] falha ao salvar histórico de estágio:', e.message))
     }
 
     res.json({ lead: rows[0] })
