@@ -438,7 +438,7 @@ async function getLeadPhone(tenantId, leadId) {
 }
 
 async function saveMsg(tenantId, leadId, role, text) {
-  await supabase.from('messages')
-    .insert({ tenant_id: tenantId, lead_id: leadId, role, text })
-    .catch(() => {})
+  try {
+    await supabase.from('messages').insert({ tenant_id: tenantId, lead_id: leadId, role, text })
+  } catch { /* ignora */ }
 }
