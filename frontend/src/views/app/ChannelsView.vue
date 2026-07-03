@@ -305,6 +305,35 @@
             />
           </v-expand-transition>
 
+          <!-- Chatbot -->
+          <div class="cfg-section-title">Chatbot</div>
+          <p class="text-caption mb-3" style="color:var(--text-muted)">
+            Selecione qual fluxo de chatbot será ativado automaticamente neste canal quando não houver palavra-gatilho configurada.
+          </p>
+          <v-select
+            v-model="cfg.flow_id"
+            :items="settingsFlows"
+            item-title="name"
+            item-value="id"
+            label="Fluxo de chatbot (opcional)"
+            variant="outlined"
+            density="compact"
+            clearable
+            class="mb-4"
+            :hint="cfg.flow_id ? 'Qualquer mensagem neste canal ativará o fluxo selecionado.' : 'Nenhum chatbot ativo para este canal.'"
+            persistent-hint
+          >
+            <template #item="{ item, props }">
+              <v-list-item v-bind="props">
+                <template #append>
+                  <v-chip :color="item.raw.status === 'active' ? 'success' : 'default'" size="x-small" variant="tonal">
+                    {{ item.raw.status === 'active' ? 'Ativo' : 'Inativo' }}
+                  </v-chip>
+                </template>
+              </v-list-item>
+            </template>
+          </v-select>
+
           <v-alert v-if="settingsError" type="error" variant="tonal" density="compact" :text="settingsError" class="mt-1" />
         </v-card-text>
 
@@ -323,7 +352,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
-import { api } from '@/services/api'
+import { api, http } from '@/services/api'
 
 const QR_TTL = 45
 
@@ -506,12 +535,14 @@ const savingSettings  = ref(false)
 const settingsError   = ref('')
 const settingsUsers   = ref([])
 const settingsQueues  = ref([])
+const settingsFlows   = ref([])
 const cfg = reactive({
   name: '',
   goodbye_message: '',
   assignType: 'none',
   assigned_user_id: null,
   assigned_queue_id: null,
+  flow_id: null,
 })
 
 async function openSettings(ch) {
@@ -522,15 +553,22 @@ async function openSettings(ch) {
   cfg.assigned_user_id  = ch.assigned_user_id || null
   cfg.assigned_queue_id = ch.assigned_queue_id || null
   cfg.assignType = ch.assigned_queue_id ? 'queue' : ch.assigned_user_id ? 'user' : 'none'
+  cfg.flow_id    = null
   settingsDialog.value  = true
 
   try {
-    const [ops, queuesData] = await Promise.all([
+    const [ops, queuesData, flowsData] = await Promise.all([
       api.listOperators(),
       api.listQueues(),
+      http.get('/flows').then(r => r.data.flows || []),
     ])
     settingsUsers.value  = ops.operators || ops || []
     settingsQueues.value = queuesData.queues || queuesData || []
+    settingsFlows.value  = flowsData
+
+    // Pré-seleciona o fluxo já vinculado a este canal (sem keywords = chatbot padrão)
+    const linked = flowsData.find(f => f.channel_id === ch.id && !f.trigger_keywords?.length)
+    cfg.flow_id = linked?.id || null
   } catch { /* ignora */ }
 }
 
@@ -539,15 +577,36 @@ async function saveSettings() {
   if (!cfg.name.trim()) { settingsError.value = 'Nome obrigatório.'; return }
   savingSettings.value = true
   try {
+    const channelId = settingsTarget.value.id
+
+    // Salva configurações do canal
     const payload = {
       name:              cfg.name.trim(),
       goodbye_message:   cfg.goodbye_message || null,
       assigned_user_id:  cfg.assignType === 'user'  ? cfg.assigned_user_id  : null,
       assigned_queue_id: cfg.assignType === 'queue' ? cfg.assigned_queue_id : null,
     }
-    const { channel } = await api.updateChannelSettings(settingsTarget.value.id, payload)
-    const idx = channels.value.findIndex((c) => c.id === settingsTarget.value.id)
+    const { channel } = await api.updateChannelSettings(channelId, payload)
+    const idx = channels.value.findIndex((c) => c.id === channelId)
     if (idx !== -1) channels.value[idx] = { ...channels.value[idx], ...channel }
+
+    // Gerencia vínculo de fluxo
+    const previousLinked = settingsFlows.value.find(
+      f => f.channel_id === channelId && !f.trigger_keywords?.length
+    )
+
+    if (cfg.flow_id) {
+      // Vincula o fluxo selecionado a este canal
+      await http.patch(`/flows/${cfg.flow_id}`, { channel_id: channelId })
+      // Remove vínculo do fluxo anterior (se for diferente)
+      if (previousLinked && previousLinked.id !== cfg.flow_id) {
+        await http.patch(`/flows/${previousLinked.id}`, { channel_id: null })
+      }
+    } else if (previousLinked) {
+      // Usuário limpou a seleção — desvincula o fluxo anterior
+      await http.patch(`/flows/${previousLinked.id}`, { channel_id: null })
+    }
+
     settingsDialog.value = false
     toast('Configurações salvas.')
   } catch (e) { settingsError.value = e.message } finally { savingSettings.value = false }
