@@ -34,7 +34,18 @@ jobs:
             cd backend && npm install && cd ..
 
             echo ">>> Instalando dependências do frontend..."
-            cd frontend && npm install && npm run build && cd ..
+            cd frontend
+            # Garante que o .env existe (git reset --hard não afeta arquivos gitignored,
+            # mas recria caso o servidor seja novo ou a pasta seja limpa manualmente)
+            if [ ! -f .env ]; then
+              echo "VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}" > .env
+              echo "VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}" >> .env
+              echo "VITE_API_BASE=/api" >> .env
+              echo "VITE_BACKEND_URL=http://167.233.84.42" >> .env
+              echo ">>> .env do frontend recriado"
+            fi
+            npm install && npm run build
+            cd ..
 
             echo ">>> Reiniciando backend..."
             pm2 describe backend > /dev/null 2>&1 \
