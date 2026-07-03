@@ -11,20 +11,26 @@ import * as whatsapp        from './whatsapp/index.js'
 /**
  * Processa uma mensagem inbound. Retorna true se o flow tratou a mensagem
  * (impede que o orchestrator chame a IA).
+ *
+ * allowNewFlow: false quando human_takeover=true — retoma sessões existentes
+ * mas não dispara novos fluxos enquanto um humano está atendendo.
  */
-export async function processFlowMessage({ tenantId, leadId, text, channelId }) {
+export async function processFlowMessage({ tenantId, leadId, text, channelId, allowNewFlow = true }) {
   try {
+    // Retoma sessão ativa independente de human_takeover
     const session = await getSession(tenantId, leadId)
-
     if (session) {
       await resumeFlow(session, text, tenantId, leadId)
       return true
     }
 
-    const flow = await findTriggeredFlow(tenantId, text, channelId)
-    if (flow) {
-      await startFlow(flow, tenantId, leadId)
-      return true
+    // Só inicia novo fluxo se não houver humano atendendo
+    if (allowNewFlow) {
+      const flow = await findTriggeredFlow(tenantId, text, channelId)
+      if (flow) {
+        await startFlow(flow, tenantId, leadId)
+        return true
+      }
     }
 
     return false
