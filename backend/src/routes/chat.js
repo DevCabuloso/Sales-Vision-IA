@@ -241,6 +241,8 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
     if (lead.phone) {
       try {
         const { sendText } = await import('../services/whatsapp/index.js')
+        const { markSentByPlatform } = await import('../services/orchestrator.js')
+        markSentByPlatform(req.user.tenantId, lead.phone, parsed.data.text)
         await sendText(req.user.tenantId, lead.phone, parsed.data.text)
       } catch (e) {
         console.warn('[chat] falha ao enviar WhatsApp:', e.message)

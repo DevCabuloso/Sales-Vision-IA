@@ -8,8 +8,8 @@ import { requireAuth } from '../middleware/auth.js'
 
 const COOKIE_OPTS = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'strict',
+  secure: false,
+  sameSite: 'lax',
   maxAge: 7 * 24 * 60 * 60 * 1000,
   path: '/',
 }
@@ -175,7 +175,7 @@ authRouter.post('/register', async (req, res) => {
 
 // POST /api/auth/logout — limpa o cookie de sessão
 authRouter.post('/logout', (req, res) => {
-  res.clearCookie('sdr_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/' })
+  res.clearCookie('sdr_token', { httpOnly: true, secure: false, sameSite: 'lax', path: '/' })
   res.json({ ok: true })
 })
 

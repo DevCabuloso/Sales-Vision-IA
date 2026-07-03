@@ -27,6 +27,14 @@ function normalizePhone(raw) {
   return (raw || '').replace(/\D/g, '')
 }
 
+/** Registra mensagem enviada pela plataforma para evitar duplicata do webhook fromMe. */
+const _sentByPlatform = new Map()
+export function markSentByPlatform(tenantId, phone, text) {
+  const key = `${tenantId}:${normalizePhone(phone)}:${text}`
+  _sentByPlatform.set(key, Date.now())
+  setTimeout(() => _sentByPlatform.delete(key), 30000)
+}
+
 export async function handleInboundMessage({ tenantId, from: rawFrom, text, provider, instanceName, pushName }) {
   const from = normalizePhone(rawFrom)
   // resolve channel_id pelo instance_name (se disponível)
@@ -210,6 +218,11 @@ export async function handleInboundMessage({ tenantId, from: rawFrom, text, prov
  */
 export async function handleOutboundMessage({ tenantId, to: rawTo, text, provider, instanceName }) {
   const to = normalizePhone(rawTo)
+  const platformKey = `${tenantId}:${to}:${text}`
+  if (_sentByPlatform.has(platformKey)) {
+    _sentByPlatform.delete(platformKey)
+    return
+  }
   let channelId = null
   if (instanceName) {
     try {
