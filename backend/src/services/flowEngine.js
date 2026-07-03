@@ -135,7 +135,7 @@ async function resumeFlow(session, userText, tenantId, leadId) {
 
   let variables = { ...(session.variables || {}) }
 
-  // Se o nó atual é de captura, salva a resposta do usuário na variável
+  // Captura de variável (formato legado)
   if (currentNode.tipo === 'captura' && currentNode.variavel) {
     variables[currentNode.variavel] = userText
     await updateSession(session.id, { variables })
@@ -143,8 +143,13 @@ async function resumeFlow(session, userText, tenantId, leadId) {
     await updateSession(session.id, {})
   }
 
-  // Sessão atualizada com última entrada do usuário (usada por condições)
   const updatedSession = { ...session, variables, _lastInput: userText }
+
+  // Formato novo: passo com saida='aguardar' — rotear pela resposta
+  if (currentNode.tipo === 'passo' && currentNode.saida === 'aguardar') {
+    await roteiarResposta(flow, currentNode, updatedSession, userText, tenantId, leadId)
+    return
+  }
 
   const nextNode = getNextNode(flow.nodes, currentNode, updatedSession)
   if (nextNode) {
@@ -153,6 +158,33 @@ async function resumeFlow(session, userText, tenantId, leadId) {
     const phone = await getLeadPhone(tenantId, leadId)
     if (phone) await whatsapp.sendText(tenantId, phone, flow.fallback_text).catch(() => {})
   }
+}
+
+// Roteamento por resposta do usuário (nó 'passo' com saida='aguardar')
+async function roteiarResposta(flow, node, session, userText, tenantId, leadId) {
+  const lower = (userText || '').toLowerCase().trim()
+  const nodes = flow.nodes || []
+
+  const match = (node.respostas || []).find(r =>
+    r.texto && lower.includes(r.texto.toLowerCase())
+  )
+  const destId = match?.destino || node.padrao
+
+  // Destinos especiais
+  if (destId === '__transfer__' || destId === '__end__') {
+    const fake = { id: `_special_${Date.now()}`, tipo: destId === '__transfer__' ? 'transferencia' : 'encerrar' }
+    await runNode(flow, fake, session, tenantId, leadId)
+    return
+  }
+
+  if (destId) {
+    const next = nodes.find(n => n.id === destId)
+    if (next) { await runNode(flow, next, session, tenantId, leadId); return }
+  }
+
+  // Sem match e sem padrão: avança sequencialmente
+  const next = getNextNode(nodes, node, session)
+  if (next) await runNode(flow, next, session, tenantId, leadId)
 }
 
 // ─── Navegação entre nós ──────────────────────────────────────────────────────
@@ -192,6 +224,40 @@ async function runNode(flow, node, session, tenantId, leadId) {
   }
 
   switch (node.tipo) {
+
+    // ── Passo (formato novo): mensagem + saída configurável ──
+    case 'passo': {
+      const txt = interpolate(node.mensagem || '', vars)
+      if (phone && txt) {
+        await whatsapp.sendText(tenantId, phone, txt).catch(() => {})
+        await saveMsg(tenantId, leadId, 'ai', txt)
+      }
+      switch (node.saida) {
+        case 'aguardar':
+          // Aguarda próxima mensagem — resumeFlow() vai rotear
+          break
+        case 'transferir': {
+          const msg = node.msg_transferencia ? interpolate(node.msg_transferencia, vars) : null
+          if (msg && phone) {
+            await whatsapp.sendText(tenantId, phone, msg).catch(() => {})
+            await saveMsg(tenantId, leadId, 'ai', msg)
+          }
+          await supabase.from('leads')
+            .update({ human_takeover: true, updated_at: new Date().toISOString() })
+            .eq('id', leadId)
+          await saveMsg(tenantId, leadId, 'system', '— Atendimento transferido para humano pelo chatbot —')
+          await closeSession(session.id, 'transferred')
+          break
+        }
+        case 'encerrar':
+          await closeSession(session.id, 'completed')
+          break
+        default: // 'avancar'
+          await advance()
+      }
+      break
+    }
+
     // ── Mensagem: envia texto e avança ──
     case 'mensagem': {
       const txt = interpolate(node.conteudo || '', vars)
