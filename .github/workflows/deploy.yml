@@ -15,18 +15,23 @@ jobs:
 
       - name: Deploy no servidor
         uses: appleboy/ssh-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: GH_TOKEN
           script: |
             cd /opt/sdr-platform
 
             echo ">>> Atualizando código..."
-            git pull origin main
+            git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/DevCabuloso/Plataforma-SDR.git
+            git fetch origin main
+            git reset --hard origin/main
 
             echo ">>> Instalando dependências do backend..."
-            cd backend && npm install --production && cd ..
+            cd backend && npm install && cd ..
 
             echo ">>> Instalando dependências do frontend..."
             cd frontend && npm install && npm run build && cd ..

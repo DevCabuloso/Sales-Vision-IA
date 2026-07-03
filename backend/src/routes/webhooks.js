@@ -107,8 +107,70 @@ webhooksRouter.post('/meta',
 )
 
 // ════════════════════════════════════════════════
-// EVOLUTION — recebimento com verificação de secret
-// Configure EVOLUTION_WEBHOOK_SECRET no .env e no painel da Evolution
+// EVOLUTION — rota universal (sem tenantId na URL)
+// Resolve o tenant pelo nome da instância → tabela channels
+// ════════════════════════════════════════════════
+webhooksRouter.post('/evolution',
+  express.json(),
+  async (req, res) => {
+    if (config.evolution.webhookSecret) {
+      const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
+      if (provided !== config.evolution.webhookSecret) {
+        console.warn('[webhook evolution] secret inválido')
+        return res.sendStatus(403)
+      }
+    }
+
+    res.sendStatus(200)
+
+    try {
+      const event = req.body?.event || '(sem event)'
+      const parsed = evolution.parseWebhook(req.body)
+      if (!parsed) return
+
+      const instanceName = parsed.instanceName
+      console.log(`[webhook evolution] event=${event} instance=${instanceName}`)
+
+      // Resolve tenant pelo nome da instância (channels ou integrations)
+      let tenantId = null
+      if (instanceName) {
+        const chRows = unwrap(
+          await supabase.from('channels').select('tenant_id')
+            .eq('instance_name', instanceName).limit(1)
+        )
+        tenantId = chRows?.[0]?.tenant_id || null
+      }
+      if (!tenantId) {
+        // fallback: busca em integrations pelo instance_name no campo meta
+        const intRows = unwrap(
+          await supabase.from('integrations').select('tenant_id, meta')
+            .eq('provider', 'evolution').eq('status', 'connected')
+        )
+        const match = intRows?.find((r) => r.meta?.instanceName === instanceName)
+        tenantId = match?.tenant_id || null
+      }
+
+      if (!tenantId) {
+        console.warn(`[webhook evolution] instância não reconhecida: ${instanceName}`)
+        return
+      }
+
+      console.log(`[webhook evolution] tenant resolvido: ${tenantId}`)
+
+      if (parsed.fromMe) {
+        await handleOutboundMessage({ tenantId, to: parsed.from, text: parsed.text, provider: 'evolution', instanceName })
+        return
+      }
+
+      await handleInboundMessage({ tenantId, from: parsed.from, text: parsed.text, mediaType: parsed.mediaType, provider: 'evolution', instanceName, pushName: parsed.pushName })
+    } catch (e) {
+      console.error('[webhook evolution]', e.message)
+    }
+  }
+)
+
+// ════════════════════════════════════════════════
+// EVOLUTION — rota com tenantId explícito (compatibilidade)
 // ════════════════════════════════════════════════
 webhooksRouter.post('/evolution/:tenantId',
   express.json(),
