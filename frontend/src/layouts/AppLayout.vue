@@ -166,6 +166,7 @@ import { api } from '@/services/api'
 import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
 import NotificationBell from '@/components/NotificationBell.vue'
 import { useNotificationsStore } from '@/stores/notifications'
+import { supabase } from '@/services/supabase'
 
 const router = useRouter()
 const route  = useRoute()
@@ -197,14 +198,60 @@ async function toggleAI() {
   try { const d = await api.toggleAI(); aiEnabled.value = d.ai_enabled } catch { /* */ }
   finally { togglingAI.value = false }
 }
+let pushChannel = null
+
+function showPushNotification(msg) {
+  if (Notification.permission !== 'granted') return
+  if (!document.hidden && route.path === `/chat/${msg.lead_id}`) return
+
+  supabase.from('leads').select('name, phone').eq('id', msg.lead_id).single()
+    .then(({ data }) => {
+      const title = data?.name || data?.phone || 'Nova mensagem'
+      const notif = new Notification(title, {
+        body: msg.text?.slice(0, 120) || 'Nova mensagem recebida',
+        icon: '/favicon.svg',
+        tag: msg.lead_id,
+      })
+      notif.onclick = () => { window.focus(); router.push(`/chat/${msg.lead_id}`) }
+    })
+    .catch(() => {
+      const notif = new Notification('Nova mensagem', {
+        body: msg.text?.slice(0, 120) || 'Nova mensagem recebida',
+        icon: '/favicon.svg',
+        tag: msg.lead_id,
+      })
+      notif.onclick = () => { window.focus(); router.push(`/chat/${msg.lead_id}`) }
+    })
+}
+
 onMounted(() => {
   loadAIStatus()
   notifStore.startPolling()
   window.addEventListener('resize', onResize)
+
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission()
+  }
+
+  if (supabase && auth.user?.tenantId) {
+    pushChannel = supabase
+      .channel(`push:${auth.user.tenantId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `tenant_id=eq.${auth.user.tenantId}`,
+      }, (payload) => {
+        const msg = payload.new
+        if (msg.role === 'lead') showPushNotification(msg)
+      })
+      .subscribe()
+  }
 })
 onUnmounted(() => {
   notifStore.stopPolling()
   window.removeEventListener('resize', onResize)
+  if (pushChannel && supabase) supabase.removeChannel(pushChannel)
 })
 
 const isAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
