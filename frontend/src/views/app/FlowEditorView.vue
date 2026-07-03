@@ -116,7 +116,7 @@
               <label class="cfg-label">Mensagem</label>
               <v-textarea v-model="selectedNode.conteudo" variant="outlined" density="compact"
                 rows="5" auto-grow hide-details placeholder="Olá {{nome}}, como posso te ajudar?" />
-              <p class="cfg-hint mt-2">Use <code>{{'{{'}}variavel{{'}}'}}</code> para inserir valores capturados.</p>
+              <p class="cfg-hint mt-2">Use <code><span v-pre>{{variavel}}</span></code> para inserir valores capturados.</p>
             </template>
 
             <!-- ── captura ── -->
@@ -126,15 +126,15 @@
                 rows="3" auto-grow hide-details placeholder="Qual é o seu nome?" />
               <label class="cfg-label mt-3">Salvar resposta em variável</label>
               <v-text-field v-model="selectedNode.variavel" variant="outlined" density="compact"
-                hide-details prefix="{{" suffix="}}" placeholder="nome" />
-              <p class="cfg-hint mt-2">Reutilize com <code>{{'{{'}}{{ selectedNode.variavel || 'variavel' }}{{'}}'}}</code>.</p>
+                hide-details :prefix="OB" :suffix="CB" placeholder="nome" />
+              <p class="cfg-hint mt-2">Reutilize com <code>{{ OB + (selectedNode.variavel || 'variavel') + CB }}</code>.</p>
             </template>
 
             <!-- ── condição ── -->
             <template v-else-if="selectedNode.tipo === 'condicao'">
               <label class="cfg-label">Variável a avaliar (opcional)</label>
               <v-text-field v-model="selectedNode.variavel" variant="outlined" density="compact"
-                hide-details prefix="{{" suffix="}}" placeholder="opcao"
+                hide-details :prefix="OB" :suffix="CB" placeholder="opcao"
                 hint="Deixe vazio para avaliar a última resposta do usuário" persistent-hint />
 
               <label class="cfg-label mt-4">Regras</label>
@@ -174,7 +174,7 @@
 
               <label class="cfg-label mt-3">Salvar resposta em variável (opcional)</label>
               <v-text-field v-model="selectedNode.variavel" variant="outlined" density="compact"
-                hide-details prefix="{{" suffix="}}" placeholder="resposta_api" />
+                hide-details :prefix="OB" :suffix="CB" placeholder="resposta_api" />
             </template>
 
             <!-- ── ia ── -->
@@ -276,6 +276,10 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { http } from '@/services/api'
+
+// Usadas no template para evitar que o parser Vue interprete {{ }} literal
+const OB = '{{'
+const CB = '}}'
 
 const route = useRoute()
 
