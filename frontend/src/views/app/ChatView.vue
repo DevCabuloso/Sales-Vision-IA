@@ -1518,7 +1518,7 @@ onUnmounted(() => {
 <style scoped>
 .chat-layout {
   display: flex;
-  height: calc(100vh - 80px);
+  height: 100%;
   border-radius: 16px;
   overflow: hidden;
   border: 1px solid var(--sep-md);
@@ -1526,7 +1526,7 @@ onUnmounted(() => {
 
 @media (max-width: 767px) {
   .chat-layout {
-    height: calc(100vh - 128px);
+    height: 100%;
     border-radius: 8px;
   }
   .mobile-hidden { display: none !important; }

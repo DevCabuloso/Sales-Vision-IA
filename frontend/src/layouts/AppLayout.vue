@@ -134,7 +134,7 @@
         <ThemeSwitcher />
       </header>
 
-      <main class="main-content" :class="{ 'has-bottom-nav': isMobile }">
+      <main class="main-content" :class="{ 'has-bottom-nav': isMobile, 'full-page': isFullPage }">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
             <component :is="Component" />
@@ -254,7 +254,9 @@ onUnmounted(() => {
   if (pushChannel && supabase) supabase.removeChannel(pushChannel)
 })
 
-const isAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
+const isAdmin    = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
+// Rotas que ocupam 100% do espaço disponível — sem padding, sem scroll externo
+const isFullPage = computed(() => /^\/(flows\/.+|chat)/.test(route.path))
 const locale  = useLocaleStore()
 const t       = (k) => locale.t(k)
 
@@ -471,11 +473,18 @@ async function logout() { await auth.logout(); router.push('/login') }
 .main-content {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   padding: 24px;
   background:
     radial-gradient(900px 500px at 85% -10%, var(--glow-1), transparent 60%),
     radial-gradient(700px 400px at -5% 110%, var(--glow-2), transparent 60%),
     var(--app-bg);
+}
+
+/* Páginas que ocupam todo o espaço (flow editor, chat, kanban) */
+.main-content.full-page {
+  overflow: hidden;
+  padding: 0;
 }
 
 /* ─── Transições ─── */

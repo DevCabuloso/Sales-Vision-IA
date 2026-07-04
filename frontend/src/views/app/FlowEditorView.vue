@@ -537,7 +537,7 @@ async function save() {
 <style scoped>
 .fe-shell {
   display: flex; flex-direction: column;
-  height: 100vh; overflow: hidden;
+  height: 100%; overflow: hidden;
   background: #080e1a; color: #e2e8f0;
 }
 
