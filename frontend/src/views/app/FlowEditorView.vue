@@ -10,6 +10,7 @@
       </v-chip>
       <v-spacer />
       <v-btn size="small" variant="tonal" prepend-icon="mdi-plus" @click="addNode">Novo Nó</v-btn>
+      <v-btn size="small" variant="tonal" prepend-icon="mdi-auto-fix" @click="autoLayout" title="Organizar posições automaticamente">Organizar</v-btn>
       <v-btn size="small" variant="tonal" prepend-icon="mdi-cog-outline" @click="settingsDialog = true">Config</v-btn>
       <v-btn size="small" color="primary" prepend-icon="mdi-content-save-outline" :loading="saving" @click="save">Salvar</v-btn>
     </div>
@@ -188,10 +189,11 @@
 import '@vue-flow/core/dist/style.css'
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { VueFlow, Handle, Position, MarkerType } from '@vue-flow/core'
+import { VueFlow, Handle, Position, MarkerType, useVueFlow } from '@vue-flow/core'
 import { http } from '@/services/api'
 
 const route = useRoute()
+const { fitView } = useVueFlow({ id: 'chatflow' })
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const flow          = ref(null)
@@ -355,6 +357,59 @@ function cancelConnect() {
 }
 function removeEdge(eid) {
   vfEdges.value = vfEdges.value.filter(e => e.id !== eid)
+}
+
+// ── Auto Layout ───────────────────────────────────────────────────────────────
+function autoLayout() {
+  const W = 160, H = 160, HGAP = 80, VGAP = 100
+
+  // Monta adjacência: pai → filhos
+  const children = {}
+  const hasParent = new Set()
+  for (const n of vfNodes.value) children[n.id] = []
+  for (const e of vfEdges.value) {
+    children[e.source]?.push(e.target)
+    hasParent.add(e.target)
+  }
+
+  // Raízes = nós sem pai (ou primeiro nó se tudo conectado em ciclo)
+  let roots = vfNodes.value.filter(n => !hasParent.has(n.id))
+  if (!roots.length && vfNodes.value.length) roots = [vfNodes.value[0]]
+
+  // BFS por níveis
+  const visited = new Set()
+  const levels = []
+  const queue = roots.map(n => ({ id: n.id, level: 0 }))
+
+  while (queue.length) {
+    const { id, level } = queue.shift()
+    if (visited.has(id)) continue
+    visited.add(id)
+    if (!levels[level]) levels[level] = []
+    levels[level].push(id)
+    for (const cid of (children[id] || [])) {
+      if (!visited.has(cid)) queue.push({ id: cid, level: level + 1 })
+    }
+  }
+
+  // Nós não alcançados vão para um nível extra
+  const orphans = vfNodes.value.filter(n => !visited.has(n.id)).map(n => n.id)
+  if (orphans.length) levels.push(orphans)
+
+  // Calcula posições centralizadas por nível
+  const pos = {}
+  for (let lv = 0; lv < levels.length; lv++) {
+    const ids = levels[lv]
+    const totalW = ids.length * W + (ids.length - 1) * HGAP
+    const startX = -totalW / 2 + W / 2
+    for (let i = 0; i < ids.length; i++) {
+      pos[ids[i]] = { x: startX + i * (W + HGAP), y: lv * (H + VGAP) + 60 }
+    }
+  }
+
+  // Aplica e centraliza a view
+  vfNodes.value = vfNodes.value.map(n => ({ ...n, position: pos[n.id] ?? n.position }))
+  setTimeout(() => fitView({ padding: 0.15, duration: 400 }), 50)
 }
 
 // ── Add / Delete node ─────────────────────────────────────────────────────────
