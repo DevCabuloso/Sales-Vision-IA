@@ -81,6 +81,9 @@ export const api = {
 
   // templates
   listTemplates: () => http.get('/templates').then((r) => r.data),
+  listTemplateCategories: () => http.get('/templates/categories').then((r) => r.data.categories),
+  createTemplateCategory: (name) => http.post('/templates/categories', { name }).then((r) => r.data.category),
+  deleteTemplateCategory: (id) => http.delete(`/templates/categories/${id}`).then((r) => r.data),
   createTemplate: (payload) => http.post('/templates', payload).then((r) => r.data),
   updateTemplate: (id, payload) => http.patch(`/templates/${id}`, payload).then((r) => r.data),
   deleteTemplate: (id) => http.delete(`/templates/${id}`).then((r) => r.data),
@@ -114,6 +117,9 @@ export const api = {
   cancelCampaign: (id) => http.post(`/broadcast/campaigns/${id}/cancel`).then((r) => r.data),
   listBroadcastContacts: (campaignId) => http.get(`/broadcast/campaigns/${campaignId}/contacts`).then((r) => r.data),
   importContacts: (campaignId, contacts) => http.post(`/broadcast/campaigns/${campaignId}/contacts`, { contacts }).then((r) => r.data),
+  importLeadsToCampaign: (campaignId, filters) => http.post(`/broadcast/campaigns/${campaignId}/import-leads`, filters).then((r) => r.data),
+  removeBroadcastContact: (campaignId, contactId) => http.delete(`/broadcast/campaigns/${campaignId}/contacts/${contactId}`).then((r) => r.data),
+  clearBroadcastContacts: (campaignId) => http.delete(`/broadcast/campaigns/${campaignId}/contacts`).then((r) => r.data),
 
   // admin — visão geral
   adminOverview: () => http.get('/admin/overview').then((r) => r.data.overview),
@@ -201,6 +207,9 @@ export const api = {
   listChatOperators: () => http.get('/chat/operators').then((r) => r.data.operators),
   getTicketLogs: (id) => http.get(`/chat/${id}/logs`).then((r) => r.data.logs),
   transferTicketTo: (id, userId) => http.post(`/chat/${id}/transfer-to`, { userId }).then((r) => r.data),
+  listScheduledMessages: (id) => http.get(`/chat/${id}/schedule`).then((r) => r.data.scheduled),
+  scheduleMessage: (id, payload) => http.post(`/chat/${id}/schedule`, payload).then((r) => r.data.scheduled),
+  cancelScheduledMessage: (id, scheduleId) => http.delete(`/chat/${id}/schedule/${scheduleId}`).then((r) => r.data),
 
   // flows (chatbot)
   listFlows: () => http.get('/flows').then((r) => r.data.flows),

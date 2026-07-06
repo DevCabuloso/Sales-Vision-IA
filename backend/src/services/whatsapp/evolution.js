@@ -84,18 +84,31 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
 export async function downloadMediaBase64(instanceName, messageId, remoteJid, fromMe) {
   if (!config.evolution.apiUrl) throw new Error('EVOLUTION_API_URL não configurado.')
   const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${instanceName}`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
-    body: JSON.stringify({
-      message: { key: { id: messageId, remoteJid, fromMe: !!fromMe } },
-      convertToMp4: false,
-    }),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.message || data.error || `Evolution erro ${res.status}`)
-  if (!data.base64) throw new Error('Evolution não retornou base64 da mídia.')
-  return { base64: data.base64, mimetype: data.mimetype || null }
+  // timeout defensivo: se a sessão do WhatsApp estiver com problema de descriptografia
+  // (ex: "Bad MAC" / sessão dessincronizada), a Evolution pode nunca responder — sem isso,
+  // o fetch trava para sempre e a mensagem inteira nunca é salva na plataforma.
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 20_000)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
+      body: JSON.stringify({
+        message: { key: { id: messageId, remoteJid, fromMe: !!fromMe } },
+        convertToMp4: false,
+      }),
+      signal: controller.signal,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.message || data.error || `Evolution erro ${res.status}`)
+    if (!data.base64) throw new Error('Evolution não retornou base64 da mídia.')
+    return { base64: data.base64, mimetype: data.mimetype || null }
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Evolution não respondeu a tempo ao buscar a mídia (timeout).')
+    throw e
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 /**

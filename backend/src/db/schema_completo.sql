@@ -157,6 +157,16 @@ CREATE TABLE IF NOT EXISTS templates (
 );
 CREATE INDEX IF NOT EXISTS idx_templates_tenant ON templates(tenant_id);
 
+-- ─── TEMPLATE CATEGORIES (categorias configuráveis por tenant) ──
+CREATE TABLE IF NOT EXISTS template_categories (
+  id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name       TEXT        NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_template_categories_tenant ON template_categories(tenant_id);
+
 -- ─── LEAD STAGE HISTORY (histórico do Kanban) ───────────────────
 CREATE TABLE IF NOT EXISTS lead_stage_history (
   id         BIGSERIAL   PRIMARY KEY,
@@ -220,6 +230,23 @@ CREATE TABLE IF NOT EXISTS broadcast_contacts (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_broadcast_contacts_campaign ON broadcast_contacts(campaign_id);
+
+-- ─── SCHEDULED MESSAGES (mensagem avulsa agendada por lead) ─────
+-- status: 'pending' | 'sent' | 'cancelled' | 'failed'
+CREATE TABLE IF NOT EXISTS scheduled_messages (
+  id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id  UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  lead_id    UUID        NOT NULL REFERENCES leads(id)   ON DELETE CASCADE,
+  created_by UUID        REFERENCES users(id) ON DELETE SET NULL,
+  text       TEXT        NOT NULL,
+  send_at    TIMESTAMPTZ NOT NULL,
+  status     TEXT        NOT NULL DEFAULT 'pending',
+  error      TEXT,
+  sent_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_messages_due  ON scheduled_messages(status, send_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_messages_lead ON scheduled_messages(lead_id, status);
 
 -- ════════════════════════════════════════════════════════════════
 -- REALTIME (Supabase Realtime — atualizações ao vivo no frontend)

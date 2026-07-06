@@ -127,8 +127,9 @@ export function createApp() {
 
   // handler de erro global
   app.use((err, req, res, _next) => {
-    console.error('[erro]', err.message)
-    res.status(500).json({ error: 'Erro interno do servidor.' })
+    const status = err.status || err.statusCode || 500
+    console.error(`[erro] ${req.method} ${req.originalUrl} ->`, err.message)
+    res.status(status).json({ error: status === 413 ? 'Payload muito grande.' : 'Erro interno do servidor.' })
   })
 
   return app

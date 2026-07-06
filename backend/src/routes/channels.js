@@ -82,7 +82,7 @@ channelsRouter.get('/:id/qr', requireAuth, requireTenant, async (req, res) => {
 
     // Após logout a instância fica em estado inconsistente — reinicia antes de gerar novo QR
     if (channel.status === 'disconnected') {
-      const restartRes = await evoFetch(`/instance/restart/${channel.instance_name}`, { method: 'PUT' }).catch(() => null)
+      const restartRes = await evoFetch(`/instance/restart/${channel.instance_name}`, { method: 'POST' }).catch(() => null)
       // Se restart falhou pode ser que a instância não existe mais — recria
       if (!restartRes || !restartRes.ok) {
         await evoFetch('/instance/create', {
@@ -264,7 +264,7 @@ channelsRouter.post('/:id/disconnect', requireAuth, requireTenant, async (req, r
     await evoFetch(`/instance/logout/${instance_name}`, { method: 'DELETE' }).catch(() => {})
 
     // Reinicia a instância imediatamente para deixá-la pronta para novo QR
-    await evoFetch(`/instance/restart/${instance_name}`, { method: 'PUT' }).catch(() => {})
+    await evoFetch(`/instance/restart/${instance_name}`, { method: 'POST' }).catch(() => {})
 
     unwrap(await supabase.from('channels').update({
       status: 'disconnected', phone: null, updated_at: new Date().toISOString(),
@@ -285,7 +285,10 @@ channelsRouter.delete('/:id', requireAuth, requireTenant, async (req, res) => {
     )
     if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
 
-    await evoFetch(`/instance/delete/${rows[0].instance_name}`, { method: 'DELETE' }).catch(() => {})
+    // a Evolution recusa excluir uma instância ainda conectada — desconecta antes de excluir
+    const { instance_name } = rows[0]
+    await evoFetch(`/instance/logout/${instance_name}`, { method: 'DELETE' }).catch(() => {})
+    await evoFetch(`/instance/delete/${instance_name}`, { method: 'DELETE' }).catch(() => {})
 
     unwrap(await supabase.from('channels').delete().eq('id', req.params.id))
     res.json({ deleted: true })

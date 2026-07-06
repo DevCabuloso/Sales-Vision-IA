@@ -257,6 +257,77 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
   }
 })
 
+// GET /api/chat/:leadId/schedule — lista mensagens agendadas pendentes
+chatRouter.get('/:leadId/schedule', async (req, res) => {
+  try {
+    const rows = unwrap(
+      await supabase.from('scheduled_messages')
+        .select('id, text, send_at, status, created_at')
+        .eq('lead_id', req.params.leadId)
+        .eq('tenant_id', req.user.tenantId)
+        .eq('status', 'pending')
+        .order('send_at', { ascending: true })
+    )
+    res.json({ scheduled: rows })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/chat/:leadId/schedule — agenda uma mensagem para envio futuro
+const scheduleSchema = z.object({
+  text: z.string().min(1).max(4000),
+  send_at: z.string().datetime(),
+})
+
+chatRouter.post('/:leadId/schedule', async (req, res) => {
+  const parsed = scheduleSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+
+  if (new Date(parsed.data.send_at).getTime() <= Date.now()) {
+    return res.status(400).json({ error: 'A data/hora agendada precisa estar no futuro.' })
+  }
+
+  try {
+    const leadRows = unwrap(
+      await supabase.from('leads').select('id')
+        .eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!leadRows.length) return res.status(404).json({ error: 'Lead não encontrado.' })
+
+    const row = unwrap(
+      await supabase.from('scheduled_messages').insert({
+        tenant_id: req.user.tenantId,
+        lead_id: req.params.leadId,
+        created_by: req.user.id,
+        text: parsed.data.text,
+        send_at: parsed.data.send_at,
+      }).select('*').single()
+    )
+    res.status(201).json({ scheduled: row })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// DELETE /api/chat/:leadId/schedule/:id — cancela mensagem agendada
+chatRouter.delete('/:leadId/schedule/:id', async (req, res) => {
+  try {
+    const rows = unwrap(
+      await supabase.from('scheduled_messages').select('status')
+        .eq('id', req.params.id).eq('lead_id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Agendamento não encontrado.' })
+    if (rows[0].status !== 'pending') return res.status(400).json({ error: 'Este agendamento já foi processado.' })
+
+    await supabase.from('scheduled_messages').update({ status: 'cancelled' })
+      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
+    res.json({ cancelled: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // POST /api/chat/:leadId/media
 chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado ou tipo não permitido.' })

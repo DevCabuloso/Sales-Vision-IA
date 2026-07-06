@@ -570,6 +570,31 @@
                     :disabled="currentLead.conversation_status !== 'open'"
                     @click="transferDialog = true"
                   >Transferir Atendimento</v-btn>
+                  <v-btn
+                    size="small" variant="tonal" color="secondary" block
+                    prepend-icon="mdi-clock-plus-outline"
+                    :disabled="currentLead.conversation_status !== 'open'"
+                    @click="openScheduleDialog"
+                  >Agendar Mensagem</v-btn>
+                </div>
+              </div>
+
+              <!-- Mensagens agendadas -->
+              <div v-if="scheduledMessages.length" class="mt-4">
+                <div class="text-caption mb-2" style="color:#9FB0BC;font-weight:600;letter-spacing:.5px">MENSAGENS AGENDADAS</div>
+                <div class="d-flex flex-column ga-2">
+                  <div v-for="item in scheduledMessages" :key="item.id" class="scheduled-msg-item">
+                    <div class="scheduled-msg-body">
+                      <div class="scheduled-msg-text">{{ item.text }}</div>
+                      <div class="scheduled-msg-time">
+                        <v-icon icon="mdi-clock-outline" size="12" />
+                        {{ formatScheduleDate(item.send_at) }}
+                      </div>
+                    </div>
+                    <button class="wa-icon-btn" title="Cancelar agendamento" @click="cancelScheduledMessage(item)">
+                      <v-icon icon="mdi-close" size="16" />
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -660,6 +685,9 @@
               <button class="wa-icon-btn" :class="{ active: useSignature }" title="Assinatura" @click="useSignature = !useSignature">
                 <v-icon icon="mdi-pen" size="19" />
               </button>
+              <button class="wa-icon-btn" title="Agendar mensagem" @click="openScheduleDialog">
+                <v-icon icon="mdi-clock-plus-outline" size="19" />
+              </button>
             </div>
 
             <!-- Textarea -->
@@ -749,6 +777,37 @@
         <div class="d-flex ga-3 justify-end mt-4">
           <v-btn variant="text" @click="transferDialog = false; transferUserId = null">Cancelar</v-btn>
           <v-btn color="info" :loading="transferLoading" :disabled="!transferUserId" prepend-icon="mdi-swap-horizontal" @click="doTransfer">Transferir</v-btn>
+        </div>
+      </v-card>
+    </v-dialog>
+
+    <!-- Dialog: Agendar mensagem -->
+    <v-dialog v-model="scheduleDialog" max-width="440">
+      <v-card class="pa-6">
+        <div class="d-flex align-center ga-2 mb-1">
+          <v-icon icon="mdi-clock-plus-outline" color="secondary" />
+          <span class="text-h6 font-weight-bold">Agendar Mensagem</span>
+        </div>
+        <div class="text-body-2 mb-4" style="color:#9FB0BC">A mensagem será enviada automaticamente na data e hora escolhidas.</div>
+        <v-select
+          v-model="scheduleTemplateId"
+          :items="templateOptions"
+          item-title="title"
+          item-value="value"
+          label="Usar um template (opcional)"
+          variant="outlined"
+          density="compact"
+          clearable
+          class="mb-3"
+          prepend-inner-icon="mdi-file-document-outline"
+          @update:model-value="applyScheduleTemplate"
+        />
+        <v-textarea v-model="scheduleForm.text" label="Mensagem" variant="outlined" density="compact" rows="3" auto-grow maxlength="4000" class="mb-3" />
+        <v-text-field v-model="scheduleForm.sendAt" label="Enviar em" type="datetime-local" variant="outlined" density="compact" />
+        <v-alert v-if="scheduleError" type="error" variant="tonal" density="compact" :text="scheduleError" class="mt-2" />
+        <div class="d-flex ga-3 justify-end mt-4">
+          <v-btn variant="text" @click="scheduleDialog = false">Cancelar</v-btn>
+          <v-btn color="secondary" :loading="scheduleSaving" prepend-icon="mdi-clock-plus-outline" @click="saveScheduledMessage">Agendar</v-btn>
         </div>
       </v-card>
     </v-dialog>
@@ -969,7 +1028,7 @@ async function sendFile() {
     fd.append('file', file)
     if (inputText.value.trim()) fd.append('caption', inputText.value.trim())
     const { data } = await http.post(`/chat/${currentLead.value.id}/media`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
-    messages.value.push(data.message)
+    if (!messages.value.some((m) => m.id === data.message.id)) messages.value.push(data.message)
     inputText.value = ''
     scrollToBottom()
   } catch (e) { toast(e.message, 'error') } finally { sending.value = false }
@@ -1036,6 +1095,27 @@ const ticketLogsLoading = ref(false)
 const transferDialog  = ref(false)
 const transferUserId  = ref(null)
 const transferLoading = ref(false)
+
+// ——— mensagens agendadas ———
+const scheduledMessages = ref([])
+const scheduleDialog    = ref(false)
+const scheduleSaving    = ref(false)
+const scheduleError     = ref('')
+const scheduleForm      = reactive({ text: '', sendAt: '' })
+const scheduleTemplateId = ref(null)
+const templates          = ref([])
+const templateOptions    = computed(() =>
+  templates.value.map((t) => ({ title: `${t.name} (${t.category})`, value: t.id }))
+)
+
+async function loadTemplates() {
+  try { const { templates: t } = await api.listTemplates(); templates.value = t } catch { /* silencioso */ }
+}
+
+function applyScheduleTemplate(templateId) {
+  const tpl = templates.value.find((t) => t.id === templateId)
+  if (tpl) scheduleForm.text = tpl.content
+}
 
 // ——— tabs ———
 const tabs = [
@@ -1284,6 +1364,7 @@ async function selectLead(lead) {
   await loadMessages()
   scrollToBottom()
   loadTicketLogs()
+  loadScheduledMessages()
 }
 
 async function loadTicketLogs() {
@@ -1292,6 +1373,50 @@ async function loadTicketLogs() {
   try { ticketLogs.value = await api.getTicketLogs(currentLead.value.id) }
   catch { /* silencioso */ }
   finally { ticketLogsLoading.value = false }
+}
+
+// ——— mensagens agendadas ———
+async function loadScheduledMessages() {
+  if (!currentLead.value) return
+  try { scheduledMessages.value = await api.listScheduledMessages(currentLead.value.id) }
+  catch { /* silencioso */ }
+}
+
+function openScheduleDialog() {
+  scheduleForm.text = inputText.value.trim()
+  scheduleForm.sendAt = ''
+  scheduleTemplateId.value = null
+  scheduleError.value = ''
+  scheduleDialog.value = true
+}
+
+async function saveScheduledMessage() {
+  if (!scheduleForm.text.trim()) { scheduleError.value = 'Digite a mensagem.'; return }
+  if (!scheduleForm.sendAt) { scheduleError.value = 'Escolha data e hora.'; return }
+  const sendAtIso = new Date(scheduleForm.sendAt).toISOString()
+  if (new Date(sendAtIso).getTime() <= Date.now()) { scheduleError.value = 'A data/hora precisa estar no futuro.'; return }
+
+  scheduleSaving.value = true
+  try {
+    const scheduled = await api.scheduleMessage(currentLead.value.id, { text: scheduleForm.text.trim(), send_at: sendAtIso })
+    scheduledMessages.value.push(scheduled)
+    scheduledMessages.value.sort((a, b) => new Date(a.send_at) - new Date(b.send_at))
+    scheduleDialog.value = false
+    toast('Mensagem agendada com sucesso.')
+  } catch (e) { scheduleError.value = e.message }
+  finally { scheduleSaving.value = false }
+}
+
+async function cancelScheduledMessage(item) {
+  try {
+    await api.cancelScheduledMessage(currentLead.value.id, item.id)
+    scheduledMessages.value = scheduledMessages.value.filter((s) => s.id !== item.id)
+    toast('Agendamento cancelado.')
+  } catch (e) { toast(e.message, 'error') }
+}
+
+function formatScheduleDate(d) {
+  return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function logActionLabel(action) {
@@ -1378,7 +1503,9 @@ async function sendMessage() {
   sending.value = true
   try {
     const { message } = await http.post(`/chat/${currentLead.value.id}/messages`, { text }).then((r) => r.data)
-    messages.value.push(message)
+    // o insert no banco dispara o realtime antes do envio ao WhatsApp terminar e esta requisição
+    // responder — se o evento realtime já inseriu essa mensagem, não duplica aqui.
+    if (!messages.value.some((m) => m.id === message.id)) messages.value.push(message)
     scrollToBottom()
   } catch (e) { toast(e.message, 'error'); inputText.value = text } finally { sending.value = false }
 }
@@ -1544,6 +1671,7 @@ onMounted(() => {
   loadConvs()
   loadOperators()
   loadLabels()
+  loadTemplates()
   document.addEventListener('click', closeEmojiOnOutside)
   pollTimer = setInterval(pollNewMessages, 3000)
   convsPollTimer = setInterval(loadConvs, 10000)
@@ -1866,6 +1994,19 @@ onUnmounted(() => {
 .ticket-log-body { flex: 1; min-width: 0; }
 .ticket-log-action { font-size: 12px; color: #C4D4DF; line-height: 1.4; }
 .ticket-log-meta { font-size: 10px; color: #6B7C88; margin-top: 1px; }
+
+/* ———— MENSAGENS AGENDADAS ———— */
+.scheduled-msg-item {
+  display: flex; align-items: flex-start; gap: 6px;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px; padding: 8px 8px 8px 10px;
+}
+.scheduled-msg-body { flex: 1; min-width: 0; }
+.scheduled-msg-text { font-size: 12px; color: #C4D4DF; line-height: 1.4; word-break: break-word; }
+.scheduled-msg-time {
+  font-size: 10px; color: #9FB0BC; margin-top: 3px;
+  display: flex; align-items: center; gap: 4px;
+}
 
 /* ———— TRANSFER AVATAR ———— */
 .transfer-avatar {

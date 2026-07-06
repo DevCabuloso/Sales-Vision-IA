@@ -48,7 +48,7 @@ webhooksRouter.get('/meta', (req, res) => {
 
 // Usa express.raw() para ter acesso ao body bruto e verificar HMAC X-Hub-Signature-256
 webhooksRouter.post('/meta',
-  express.raw({ type: 'application/json' }),
+  express.raw({ type: 'application/json', limit: '10mb' }),
   async (req, res) => {
     // Verificação HMAC — obrigatória quando META_APP_SECRET estiver configurado
     if (config.meta.appSecret) {
@@ -114,7 +114,7 @@ webhooksRouter.post('/meta',
 // Resolve o tenant pelo nome da instância → tabela channels
 // ════════════════════════════════════════════════
 webhooksRouter.post('/evolution',
-  express.json(),
+  express.json({ limit: '10mb' }),
   async (req, res) => {
     if (config.evolution.webhookSecret) {
       const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
@@ -186,7 +186,7 @@ webhooksRouter.post('/evolution',
 // EVOLUTION — rota com tenantId explícito (compatibilidade)
 // ════════════════════════════════════════════════
 webhooksRouter.post('/evolution/:tenantId',
-  express.json(),
+  express.json({ limit: '10mb' }),
   async (req, res) => {
     // Verificação do secret da Evolution via header apikey
     if (config.evolution.webhookSecret) {

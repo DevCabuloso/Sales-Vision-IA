@@ -29,6 +29,13 @@ broadcastRouter.get('/campaigns', async (req, res) => {
   }
 })
 
+// se scheduled_at está no futuro, a campanha entra automaticamente no
+// status 'scheduled' para o scheduler em background pegá-la na hora certa
+function statusForSchedule(scheduledAt) {
+  if (!scheduledAt) return 'draft'
+  return new Date(scheduledAt).getTime() > Date.now() ? 'scheduled' : 'draft'
+}
+
 // POST /api/broadcast/campaigns
 broadcastRouter.post('/campaigns', async (req, res) => {
   const parsed = campaignSchema.safeParse(req.body)
@@ -39,6 +46,7 @@ broadcastRouter.post('/campaigns', async (req, res) => {
       await supabase.from('broadcast_campaigns').insert({
         tenant_id: req.user.tenantId,
         ...parsed.data,
+        status: statusForSchedule(parsed.data.scheduled_at),
       }).select('*').single()
     )
     res.status(201).json({ campaign: row })
@@ -53,11 +61,21 @@ broadcastRouter.patch('/campaigns/:id', async (req, res) => {
   if (!partial.success) return res.status(400).json({ error: partial.error.issues[0].message })
 
   try {
+    const current = unwrap(
+      await supabase.from('broadcast_campaigns').select('status, scheduled_at')
+        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!current.length) return res.status(404).json({ error: 'Campanha não encontrada.' })
+
+    const patch = { ...partial.data, updated_at: new Date().toISOString() }
+    // só reavalia o status automaticamente se a campanha ainda não começou a enviar
+    if ('scheduled_at' in partial.data && ['draft', 'scheduled'].includes(current[0].status)) {
+      patch.status = statusForSchedule(partial.data.scheduled_at)
+    }
+
     const row = unwrap(
-      await supabase.from('broadcast_campaigns').update({
-        ...partial.data,
-        updated_at: new Date().toISOString(),
-      }).eq('id', req.params.id).eq('tenant_id', req.user.tenantId).select('*').single()
+      await supabase.from('broadcast_campaigns').update(patch)
+        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).select('*').single()
     )
     res.json({ campaign: row })
   } catch (e) {
@@ -128,6 +146,94 @@ broadcastRouter.post('/campaigns/:id/contacts', async (req, res) => {
   }
 })
 
+async function assertCampaignEditable(tenantId, campaignId) {
+  const rows = unwrap(
+    await supabase.from('broadcast_campaigns').select('status')
+      .eq('id', campaignId).eq('tenant_id', tenantId).limit(1)
+  )
+  if (!rows.length) return 'Campanha não encontrada.'
+  if (!['draft', 'scheduled'].includes(rows[0].status)) {
+    return 'Só é possível remover contatos de campanhas ainda não enviadas.'
+  }
+  return null
+}
+
+// DELETE /api/broadcast/campaigns/:id/contacts/:contactId — remove um contato da lista
+broadcastRouter.delete('/campaigns/:id/contacts/:contactId', async (req, res) => {
+  try {
+    const err = await assertCampaignEditable(req.user.tenantId, req.params.id)
+    if (err) return res.status(err === 'Campanha não encontrada.' ? 404 : 400).json({ error: err })
+
+    await supabase.from('broadcast_contacts').delete()
+      .eq('id', req.params.contactId).eq('campaign_id', req.params.id).eq('tenant_id', req.user.tenantId)
+    res.json({ deleted: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// DELETE /api/broadcast/campaigns/:id/contacts — limpa toda a lista de contatos
+broadcastRouter.delete('/campaigns/:id/contacts', async (req, res) => {
+  try {
+    const err = await assertCampaignEditable(req.user.tenantId, req.params.id)
+    if (err) return res.status(err === 'Campanha não encontrada.' ? 404 : 400).json({ error: err })
+
+    await supabase.from('broadcast_contacts').delete()
+      .eq('campaign_id', req.params.id).eq('tenant_id', req.user.tenantId)
+    res.json({ deleted: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+const importLeadsSchema = z.object({
+  stages:   z.array(z.string()).optional(),
+  queueIds: z.array(z.string().uuid()).optional(),
+  tags:     z.array(z.string()).optional(),
+})
+
+// POST /api/broadcast/campaigns/:id/import-leads — importa da base de contatos/leads,
+// opcionalmente filtrando por fila, etiqueta e etapa. Sem filtros, importa todos os leads do tenant.
+broadcastRouter.post('/campaigns/:id/import-leads', async (req, res) => {
+  const parsed = importLeadsSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+
+  try {
+    const campRows = unwrap(
+      await supabase.from('broadcast_campaigns').select('id')
+        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!campRows.length) return res.status(404).json({ error: 'Campanha não encontrada.' })
+
+    const { stages, queueIds, tags } = parsed.data
+    let q = supabase.from('leads').select('name, phone')
+      .eq('tenant_id', req.user.tenantId)
+      .not('phone', 'is', null)
+    if (stages?.length) q = q.in('stage', stages)
+    if (queueIds?.length) q = q.in('queue_id', queueIds)
+    if (tags?.length) q = q.overlaps('tags', tags)
+
+    const leads = unwrap(await q.limit(5000))
+    if (!leads.length) return res.json({ matched: 0, imported: 0, skipped: 0 })
+
+    // não duplica contatos já importados nesta campanha
+    const existing = unwrap(
+      await supabase.from('broadcast_contacts').select('phone').eq('campaign_id', req.params.id)
+    )
+    const existingPhones = new Set(existing.map((c) => c.phone))
+
+    const rows = leads
+      .filter((l) => l.phone && !existingPhones.has(l.phone))
+      .map((l) => ({ campaign_id: req.params.id, tenant_id: req.user.tenantId, name: l.name || null, phone: l.phone }))
+
+    if (rows.length) await supabase.from('broadcast_contacts').insert(rows)
+
+    res.status(201).json({ matched: leads.length, imported: rows.length, skipped: leads.length - rows.length })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // POST /api/broadcast/campaigns/:id/send — inicia envio
 broadcastRouter.post('/campaigns/:id/send', async (req, res) => {
   try {
@@ -158,7 +264,7 @@ broadcastRouter.post('/campaigns/:id/send', async (req, res) => {
   }
 })
 
-async function processBroadcast(tenantId, campaign) {
+export async function processBroadcast(tenantId, campaign) {
   const { sendText } = await import('../services/whatsapp/index.js')
 
   const contacts = unwrap(

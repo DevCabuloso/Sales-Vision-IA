@@ -78,11 +78,22 @@
           <v-card class="glass pa-5" border>
             <div class="d-flex align-center justify-space-between mb-4">
               <div class="text-subtitle-2 font-weight-bold">Contatos ({{ contacts.length }})</div>
-              <v-btn v-if="activeCampaign.status === 'draft'" size="small" color="primary" prepend-icon="mdi-import" @click="importDialog = true">Importar</v-btn>
+              <div v-if="['draft', 'scheduled'].includes(activeCampaign.status)" class="d-flex ga-2">
+                <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-account-multiple-outline" @click="openImportFromBase">Importar da Base</v-btn>
+                <v-btn size="small" color="primary" prepend-icon="mdi-import" @click="importDialog = true">Colar Lista</v-btn>
+                <v-btn v-if="contacts.length" size="small" variant="tonal" color="error" prepend-icon="mdi-broom" @click="doClearContacts">Limpar Lista</v-btn>
+              </div>
             </div>
             <v-data-table :headers="contactHeaders" :items="contacts" :loading="loadingContacts" item-value="id" density="compact" class="bg-transparent" :items-per-page="15">
               <template #item.status="{ item }"><v-chip :color="contactBadgeColor(item.status)" variant="tonal" size="x-small">{{ item.status }}</v-chip></template>
               <template #item.sent_at="{ item }"><span class="text-caption">{{ item.sent_at ? formatDate(item.sent_at) : '—' }}</span></template>
+              <template #item.actions="{ item }">
+                <v-btn
+                  v-if="['draft', 'scheduled'].includes(activeCampaign.status)"
+                  icon variant="text" size="small" color="error" title="Remover"
+                  @click="doRemoveContact(item)"
+                ><v-icon icon="mdi-close" size="16" /></v-btn>
+              </template>
               <template #no-data><div class="py-6 text-center" style="color:#6B7C88">Nenhum contato importado.</div></template>
             </v-data-table>
           </v-card>
@@ -96,6 +107,16 @@
         <v-card-title class="text-h6 font-weight-bold">Nova Campanha</v-card-title>
         <v-card-text>
           <v-text-field v-model="createForm.name" label="Nome da campanha" class="mb-3" />
+          <v-select
+            v-model="createForm.template_id"
+            :items="templateOptions"
+            item-title="title"
+            item-value="value"
+            label="Usar um template (opcional)"
+            clearable
+            class="mb-3"
+            @update:model-value="applyCampaignTemplate"
+          />
           <v-textarea v-model="createForm.content" label="Mensagem" placeholder="Olá {nome}! Estamos com uma oferta especial..." rows="4" auto-grow maxlength="4000" class="mb-3" />
           <v-text-field v-model="createForm.scheduled_at" label="Agendar para (opcional)" type="datetime-local" />
           <v-alert v-if="createError" type="error" variant="tonal" density="compact" :text="createError" class="mt-2" />
@@ -125,6 +146,34 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Dialog: importar da base (com filtros) -->
+    <v-dialog v-model="importBaseDialog" max-width="500">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Importar da Base</v-card-title>
+        <v-card-text>
+          <p class="text-body-2 mb-3" style="color:#9FB0BC">Importa contatos direto do seu CRM. Deixe os filtros vazios para importar todos os contatos com telefone.</p>
+          <v-select
+            v-model="importBaseForm.stages" :items="stageOptions" label="Etapa (opcional)"
+            multiple chips closable-chips density="compact" variant="outlined" class="mb-3"
+          />
+          <v-select
+            v-model="importBaseForm.queueIds" :items="queueOptions" item-title="title" item-value="value" label="Fila (opcional)"
+            multiple chips closable-chips density="compact" variant="outlined" class="mb-3"
+          />
+          <v-select
+            v-model="importBaseForm.tags" :items="tagOptions" label="Etiqueta (opcional)"
+            multiple chips closable-chips density="compact" variant="outlined"
+          />
+          <v-alert v-if="importBaseError" type="error" variant="tonal" density="compact" :text="importBaseError" class="mt-2" />
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="importBaseDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" :loading="importingBase" @click="doImportFromBase">Importar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -147,7 +196,21 @@ const importDialog = ref(false)
 const importText = ref('')
 const importError = ref('')
 const createError = ref('')
-const createForm = reactive({ name: '', content: '', scheduled_at: '' })
+const createForm = reactive({ name: '', content: '', scheduled_at: '', template_id: null })
+const templates = ref([])
+const templateOptions = computed(() =>
+  templates.value.map((t) => ({ title: `${t.name} (${t.category})`, value: t.id }))
+)
+
+// ——— importar da base (com filtros) ———
+const importBaseDialog = ref(false)
+const importingBase    = ref(false)
+const importBaseError  = ref('')
+const importBaseForm   = reactive({ stages: [], queueIds: [], tags: [] })
+const stageOptions = ['Novo Lead', 'Em Qualificação', 'Qualificado', 'Reunião Agendada', 'Vendido', 'Perdido']
+const queues = ref([])
+const tagOptions = ref([])
+const queueOptions = computed(() => queues.value.map((q) => ({ title: q.name, value: q.id })))
 
 const headers = [
   { title: 'Campanha', key: 'name' },
@@ -158,6 +221,7 @@ const headers = [
 ]
 const contactHeaders = [
   { title: 'Nome', key: 'name' }, { title: 'Telefone', key: 'phone' }, { title: 'Status', key: 'status' }, { title: 'Enviado em', key: 'sent_at' },
+  { title: '', key: 'actions', sortable: false, align: 'end' },
 ]
 
 const parsedContacts = computed(() => {
@@ -172,18 +236,50 @@ function formatDate(d) { if (!d) return '—'; return new Date(d).toLocaleDateSt
 
 async function load() { loading.value = true; try { const { campaigns: c } = await api.listCampaigns(); campaigns.value = c } catch (e) { toast.error(e.message) } finally { loading.value = false } }
 
-function openCreate() { Object.assign(createForm, { name: '', content: '', scheduled_at: '' }); createError.value = ''; createDialog.value = true }
+function openCreate() { Object.assign(createForm, { name: '', content: '', scheduled_at: '', template_id: null }); createError.value = ''; createDialog.value = true }
+
+function applyCampaignTemplate(templateId) {
+  const tpl = templates.value.find((t) => t.id === templateId)
+  if (tpl) createForm.content = tpl.content
+}
+
+async function loadTemplates() {
+  try { const { templates: t } = await api.listTemplates(); templates.value = t } catch { /* silencioso */ }
+}
 
 async function saveCampaign() {
   if (!createForm.name || !createForm.content) { createError.value = 'Nome e mensagem são obrigatórios.'; return }
   saving.value = true
-  try { const { campaign } = await api.createCampaign({ name: createForm.name, content: createForm.content, scheduled_at: createForm.scheduled_at || null }); campaigns.value.unshift(campaign); createDialog.value = false; toast.success('Campanha criada.') }
+  try {
+    const { campaign } = await api.createCampaign({
+      name: createForm.name,
+      content: createForm.content,
+      template_id: createForm.template_id || null,
+      scheduled_at: createForm.scheduled_at ? new Date(createForm.scheduled_at).toISOString() : null,
+    })
+    campaigns.value.unshift(campaign); createDialog.value = false; toast.success('Campanha criada.')
+  }
   catch (e) { createError.value = e.message } finally { saving.value = false }
 }
 
 async function openManage(camp) {
   activeCampaign.value = camp; loadingContacts.value = true
   try { const { contacts: c } = await api.listBroadcastContacts(camp.id); contacts.value = c } catch (e) { toast.error(e.message) } finally { loadingContacts.value = false }
+}
+
+async function doRemoveContact(item) {
+  try {
+    await api.removeBroadcastContact(activeCampaign.value.id, item.id)
+    contacts.value = contacts.value.filter((c) => c.id !== item.id)
+  } catch (e) { toast.error(e.message) }
+}
+
+async function doClearContacts() {
+  try {
+    await api.clearBroadcastContacts(activeCampaign.value.id)
+    contacts.value = []
+    toast.success('Lista de contatos limpa.')
+  } catch (e) { toast.error(e.message) }
 }
 
 async function startSend(camp) {
@@ -201,5 +297,26 @@ async function doImport() {
   catch (e) { importError.value = e.message } finally { importing.value = false }
 }
 
-onMounted(load)
+function openImportFromBase() {
+  Object.assign(importBaseForm, { stages: [], queueIds: [], tags: [] })
+  importBaseError.value = ''
+  importBaseDialog.value = true
+}
+
+async function doImportFromBase() {
+  importBaseError.value = ''; importingBase.value = true
+  try {
+    const { imported, skipped } = await api.importLeadsToCampaign(activeCampaign.value.id, { ...importBaseForm })
+    await openManage(activeCampaign.value)
+    importBaseDialog.value = false
+    toast.success(`${imported} contato(s) importado(s)${skipped ? ` (${skipped} já estavam na lista)` : ''}.`)
+  } catch (e) { importBaseError.value = e.message } finally { importingBase.value = false }
+}
+
+async function loadFilterOptions() {
+  try { const { queues: q } = await api.listQueues(); queues.value = q } catch { /* silencioso */ }
+  try { tagOptions.value = await api.listContactTags() } catch { /* silencioso */ }
+}
+
+onMounted(() => { load(); loadFilterOptions(); loadTemplates() })
 </script>

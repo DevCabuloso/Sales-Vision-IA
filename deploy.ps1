@@ -13,9 +13,19 @@ Compress-Archive -Path "$staging\backend","$staging\frontend" -DestinationPath "
 
 Write-Host "Enviando para o servidor..." -ForegroundColor Cyan
 scp "..\sdr-platform-deploy.zip" "${server}:/opt/"
+if ($LASTEXITCODE -ne 0) { Write-Host "ERRO: falha ao enviar o pacote (scp)." -ForegroundColor Red; exit 1 }
 
-Write-Host "Aplicando no servidor (PM2)..." -ForegroundColor Cyan
-ssh $server "cd /opt && unzip -o sdr-platform-deploy.zip -d sdr-platform && cd $remote/backend && npm install --omit=dev && pm2 restart backend && cd $remote/frontend && npm install && npm run build"
+Write-Host "Extraindo e atualizando backend (PM2)..." -ForegroundColor Cyan
+# unzip retorna exit code 1 so por causa do aviso inofensivo de separador de caminho
+# (zip gerado no Windows usa backslash) - o "|| true" evita que isso mate a cadeia && seguinte.
+ssh $server "cd /opt && (unzip -o sdr-platform-deploy.zip -d sdr-platform || true) && cd $remote/backend && npm install --omit=dev && pm2 startOrRestart ecosystem.config.cjs"
+if ($LASTEXITCODE -ne 0) { Write-Host "ERRO: falha ao extrair/instalar/reiniciar o backend. Deploy incompleto." -ForegroundColor Red; exit 1 }
+
+# separado do passo acima: builds do vite geram muita saída e, quando combinados num único
+# comando ssh, já mostraram travar antes de completar sem sinalizar erro (ver histórico do chat).
+Write-Host "Rebuild do frontend..." -ForegroundColor Cyan
+ssh $server "cd $remote/frontend && npm install && npm run build"
+if ($LASTEXITCODE -ne 0) { Write-Host "ERRO: falha ao instalar/buildar o frontend. Backend foi atualizado, mas o frontend NAO." -ForegroundColor Red; exit 1 }
 
 Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
 

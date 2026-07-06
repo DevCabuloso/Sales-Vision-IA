@@ -5,7 +5,10 @@
         <h1 class="text-h5 font-weight-bold mb-1">Templates</h1>
         <p class="text-body-2" style="color:#9FB0BC">{{ templates.length }} template(s) cadastrado(s)</p>
       </div>
-      <v-btn color="primary" prepend-icon="mdi-plus" @click="openCreate">Novo Template</v-btn>
+      <div class="d-flex ga-2">
+        <v-btn variant="tonal" prepend-icon="mdi-tag-multiple-outline" @click="openManageCategories">Categorias</v-btn>
+        <v-btn color="primary" prepend-icon="mdi-plus" @click="openCreate">Novo Template</v-btn>
+      </div>
     </div>
 
     <div class="d-flex flex-wrap ga-2 mb-5">
@@ -91,6 +94,31 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog: gerenciar categorias -->
+    <v-dialog v-model="categoriesDialog" max-width="440">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Categorias de Templates</v-card-title>
+        <v-card-text>
+          <div class="d-flex ga-2 mb-4">
+            <v-text-field v-model="newCategoryName" label="Nova categoria" density="compact" hide-details @keydown.enter="addCategory" />
+            <v-btn color="primary" :loading="savingCategory" @click="addCategory">Adicionar</v-btn>
+          </div>
+          <v-alert v-if="categoryError" type="error" variant="tonal" density="compact" :text="categoryError" class="mb-3" />
+          <div class="d-flex flex-column ga-2">
+            <div v-for="cat in categories" :key="cat.id" class="d-flex align-center justify-space-between category-row">
+              <span class="text-body-2">{{ cat.name }}</span>
+              <v-btn icon variant="text" size="small" color="error" @click="removeCategory(cat)"><v-icon icon="mdi-delete-outline" size="16" /></v-btn>
+            </div>
+            <div v-if="!categories.length" class="text-caption text-center py-3" style="color:#6B7C88">Nenhuma categoria ainda.</div>
+          </div>
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="categoriesDialog = false">Fechar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Dialog: excluir -->
     <v-dialog v-model="deleteDialog" max-width="380">
       <v-card class="glass pa-2" border>
@@ -122,7 +150,7 @@ const editDialog = ref(false)
 const editMode = ref(false)
 const editTarget = ref(null)
 const editError = ref('')
-const editForm = reactive({ name: '', category: 'geral', content: '' })
+const editForm = reactive({ name: '', category: 'Marketing', content: '' })
 
 const testDialog = ref(false)
 const testTarget = ref(null)
@@ -133,10 +161,39 @@ const testError = ref('')
 const deleteDialog = ref(false)
 const deleteTarget = ref(null)
 
-const CATS = ['geral', 'prospecção', 'follow-up', 'proposta', 'agendamento', 'reativação']
+const categories = ref([])
+const CATS = computed(() => categories.value.map((c) => c.name))
+const categoriesDialog = ref(false)
+const newCategoryName = ref('')
+const savingCategory = ref(false)
+const categoryError = ref('')
 
-const catColorMap = { prospecção: 'primary', 'follow-up': 'info', proposta: 'success', agendamento: 'accent', reativação: 'warning' }
+const catColorMap = { Marketing: 'primary', Utilidade: 'info' }
 function catColor(c) { return catColorMap[c] }
+
+async function loadCategories() {
+  try { categories.value = await api.listTemplateCategories() } catch (e) { toast.error(e.message) }
+}
+
+function openManageCategories() { newCategoryName.value = ''; categoryError.value = ''; categoriesDialog.value = true }
+
+async function addCategory() {
+  if (!newCategoryName.value.trim()) return
+  categoryError.value = ''; savingCategory.value = true
+  try {
+    const category = await api.createTemplateCategory(newCategoryName.value.trim())
+    categories.value.push(category)
+    categories.value.sort((a, b) => a.name.localeCompare(b.name))
+    newCategoryName.value = ''
+  } catch (e) { categoryError.value = e.message } finally { savingCategory.value = false }
+}
+
+async function removeCategory(cat) {
+  try {
+    await api.deleteTemplateCategory(cat.id)
+    categories.value = categories.value.filter((c) => c.id !== cat.id)
+  } catch (e) { toast.error(e.message) }
+}
 function formatDate(d) { if (!d) return ''; return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' }) }
 
 const filtered = computed(() => filterCat.value === 'Todos' ? templates.value : templates.value.filter((t) => t.category === filterCat.value))
@@ -147,7 +204,7 @@ async function load() {
   catch (e) { toast.error(e.message) } finally { loading.value = false }
 }
 
-function openCreate() { editMode.value = false; editTarget.value = null; editError.value = ''; Object.assign(editForm, { name: '', category: 'geral', content: '' }); editDialog.value = true }
+function openCreate() { editMode.value = false; editTarget.value = null; editError.value = ''; Object.assign(editForm, { name: '', category: CATS.value[0] || 'Marketing', content: '' }); editDialog.value = true }
 function openEdit(tpl) { editMode.value = true; editTarget.value = tpl; editError.value = ''; Object.assign(editForm, { name: tpl.name, category: tpl.category, content: tpl.content }); editDialog.value = true }
 
 async function saveEdit() {
@@ -177,9 +234,11 @@ async function runTest() {
   catch (e) { testError.value = e.message } finally { testing.value = false }
 }
 
-onMounted(load)
+onMounted(() => { load(); loadCategories() })
 </script>
 
 <style scoped>
 .template-preview { color:#9FB0BC; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; line-height:1.5; }
+.category-row { padding: 6px 4px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.category-row:last-child { border-bottom: none; }
 </style>
