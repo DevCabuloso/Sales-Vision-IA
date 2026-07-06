@@ -80,8 +80,29 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
 }
 
 /**
+ * Baixa uma mídia recebida via Meta Cloud API a partir do media id do webhook.
+ * Meta exige duas chamadas autenticadas: 1) resolver o media id em uma URL temporária,
+ * 2) baixar os bytes dessa URL (também exige o Bearer token).
+ */
+export async function downloadMedia(tenantId, mediaId) {
+  const { accessToken } = await getCreds(tenantId)
+
+  const infoRes = await fetch(`https://graph.facebook.com/${config.meta.graphVersion}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  const info = await infoRes.json().catch(() => ({}))
+  if (!infoRes.ok || !info.url) throw new Error(info.error?.message || `Meta media info erro ${infoRes.status}`)
+
+  const fileRes = await fetch(info.url, { headers: { Authorization: `Bearer ${accessToken}` } })
+  if (!fileRes.ok) throw new Error(`Falha ao baixar mídia da Meta (${fileRes.status})`)
+
+  const arrayBuf = await fileRes.arrayBuffer()
+  return { buffer: Buffer.from(arrayBuf), mimetype: info.mime_type || null }
+}
+
+/**
  * Extrai mensagens de um payload de webhook da Meta.
- * Retorna [{ from, text, mediaType, phoneNumberId, pushName }]
+ * Retorna [{ from, text, mediaType, mediaId, mediaMimeType, mediaFilename, phoneNumberId, pushName }]
  */
 export function parseWebhook(body) {
   const out = []
@@ -103,12 +124,16 @@ export function parseWebhook(body) {
         if (msg.type === 'text') {
           out.push({ from, text: msg.text?.body || '', phoneNumberId, pushName })
         } else if (['image', 'video', 'audio', 'document', 'sticker'].includes(msg.type)) {
-          const caption = msg[msg.type]?.caption || ''
-          const fname   = msg[msg.type]?.filename || msg.type
+          const media   = msg[msg.type] || {}
+          const caption = media.caption || ''
+          const fname   = media.filename || msg.type
           out.push({
             from,
             text: caption || `[${fname}]`,
             mediaType: msg.type,
+            mediaId: media.id || null,
+            mediaMimeType: media.mime_type || null,
+            mediaFilename: media.filename || null,
             phoneNumberId,
             pushName,
           })

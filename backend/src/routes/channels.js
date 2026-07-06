@@ -234,7 +234,7 @@ channelsRouter.post('/:id/revalidate-webhook', requireAuth, requireTenant, async
           enabled: true,
           url: webhookUrl,
           webhookByEvents: false,
-          webhookBase64: false,
+          webhookBase64: true,
           events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'MESSAGES_UPDATE', 'SEND_MESSAGE'],
         },
       }),

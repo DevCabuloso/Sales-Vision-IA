@@ -256,6 +256,7 @@
           <v-btn size="x-small" variant="tonal" color="secondary" :prepend-icon="selectedConvs.size === filteredConvs.length ? 'mdi-checkbox-multiple-blank-outline' : 'mdi-checkbox-multiple-marked-outline'" @click="selectAll">
             {{ selectedConvs.size === filteredConvs.length && filteredConvs.length > 0 ? 'Desmarcar todos' : 'Marcar todos' }}
           </v-btn>
+          <v-btn size="x-small" variant="tonal" color="primary" prepend-icon="mdi-check-all" :disabled="!selectedConvs.size" @click="bulkMarkRead">Marcar como Lido</v-btn>
           <v-btn size="x-small" variant="tonal" color="error" prepend-icon="mdi-check-circle-outline" :disabled="!selectedConvs.size" @click="bulkResolve">Fechar</v-btn>
           <v-btn size="x-small" variant="tonal" color="info" prepend-icon="mdi-swap-horizontal" :disabled="!selectedConvs.size" @click="bulkTransferDialog = true">Transferir</v-btn>
           <v-btn size="x-small" variant="tonal" color="error" prepend-icon="mdi-delete-outline" :disabled="!selectedConvs.size" @click="bulkDeleteDialog = true">Deletar</v-btn>
@@ -415,7 +416,7 @@
           <div ref="messagesEl" class="chat-messages" @scroll="onScroll">
             <div v-if="loadingMore" class="text-center py-3"><v-progress-circular size="20" indeterminate color="primary" /></div>
 
-            <template v-for="msg in displayedMessages" :key="msg.id">
+            <template v-for="(msg, msgIdx) in displayedMessages" :key="msg.id">
               <!-- Separador de nova conversa -->
               <div v-if="msg.role === 'system'" class="msg-separator">
                 <span class="msg-separator-line" />
@@ -426,13 +427,30 @@
               <div
                 v-else
                 class="msg-wrapper"
-                :class="[msg.role, { 'msg-highlight': msgSearchQuery && msg.text?.toLowerCase().includes(msgSearchQuery.toLowerCase()) }]"
+                :class="[msg.role, { 'msg-highlight': msgSearchQuery && msg.text?.toLowerCase().includes(msgSearchQuery.toLowerCase()), 'msg-group-start': isGroupStart(displayedMessages, msgIdx) }]"
               >
                 <div class="msg-bubble" :class="msg.role">
                   <div v-if="msg.role === 'agent' || msg.role === 'ai'" class="msg-role-badge">
                     {{ msg.role === 'ai' ? '⬦ IA' : '⬦ Agente' }}
                   </div>
-                  <div class="msg-text">{{ msg.text }}</div>
+
+                  <template v-if="msg.media_url">
+                    <img
+                      v-if="msg.media_type === 'image' || msg.media_type === 'sticker'"
+                      :src="msg.media_url" class="msg-media-image"
+                      @click="openMediaViewer(msg.media_url)"
+                    />
+                    <video v-else-if="msg.media_type === 'video'" :src="msg.media_url" controls class="msg-media-video" />
+                    <audio v-else-if="msg.media_type === 'audio'" :src="msg.media_url" controls class="msg-media-audio" />
+                    <a v-else :href="msg.media_url" target="_blank" rel="noopener" class="msg-media-doc">
+                      <v-icon icon="mdi-file-outline" size="20" />
+                      <span>{{ msg.media_filename || 'Arquivo' }}</span>
+                      <v-icon icon="mdi-download" size="16" />
+                    </a>
+                    <div v-if="mediaCaption(msg)" class="msg-text msg-media-caption">{{ mediaCaption(msg) }}</div>
+                  </template>
+                  <div v-else class="msg-text">{{ msg.text }}</div>
+
                   <div class="msg-time">{{ formatTime(msg.created_at) }}</div>
                 </div>
               </div>
@@ -772,6 +790,11 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog: visualizador de imagem -->
+    <v-dialog v-model="mediaViewer" max-width="720">
+      <img v-if="mediaViewerUrl" :src="mediaViewerUrl" class="media-viewer-img" @click="mediaViewer = false" />
+    </v-dialog>
+
     <!-- Dialog: deletar conversa -->
     <v-dialog v-model="deleteDialog" max-width="400">
       <v-card class="glass pa-2" border>
@@ -1091,6 +1114,14 @@ const displayedMessages = computed(() => {
 })
 const msgSearchResults = computed(() => displayedMessages.value.length)
 
+// true quando a mensagem inicia um novo "grupo" (troca de remetente) — usado para
+// mostrar o "rabinho" da bolha só na primeira mensagem do grupo, como no WhatsApp
+function isGroupStart(list, idx) {
+  const prev = list[idx - 1]
+  if (!prev || prev.role === 'system') return true
+  return prev.role !== list[idx].role
+}
+
 // ——— helpers visuais ———
 const AVATAR_COLORS = ['#6366F1','#10B981','#F59E0B','#EF4444','#8B5CF6','#06B6D4','#EC4899','#14B8A6']
 function avatarColor(conv) {
@@ -1160,6 +1191,13 @@ function selectAll() {
   const allIds = filteredConvs.value.map((c) => c.id)
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedConvs.value.has(id))
   selectedConvs.value = allSelected ? new Set() : new Set(allIds)
+}
+function bulkMarkRead() {
+  const count = selectedConvs.value.size
+  for (const id of selectedConvs.value) syncConv(id, { unread: 0 })
+  selectedConvs.value = new Set()
+  selectMode.value = false
+  toast(`${count} ticket(s) marcado(s) como lido(s).`)
 }
 async function bulkResolve() {
   bulkLoading.value = true
@@ -1343,6 +1381,15 @@ async function sendMessage() {
     messages.value.push(message)
     scrollToBottom()
   } catch (e) { toast(e.message, 'error'); inputText.value = text } finally { sending.value = false }
+}
+
+// ——— mídia ———
+const mediaViewer    = ref(false)
+const mediaViewerUrl = ref(null)
+function openMediaViewer(url) { mediaViewerUrl.value = url; mediaViewer.value = true }
+function mediaCaption(msg) {
+  if (!msg.text) return ''
+  return msg.text.replace(/^\[[^\]]*\]\s*/, '')
 }
 
 function syncConv(id, patch) {
@@ -1713,25 +1760,62 @@ onUnmounted(() => {
 .chat-body { flex:1; display:flex; overflow:hidden; position:relative; }
 
 /* ———— MENSAGENS ———— */
-.chat-messages { flex:1; overflow-y:auto; padding:20px 16px; display:flex; flex-direction:column; gap:8px; }
+.chat-messages {
+  flex:1; overflow-y:auto; padding:20px 16px; display:flex; flex-direction:column;
+  /* papel de parede sutil, no estilo WhatsApp */
+  background-color: rgba(0,0,0,0.12);
+  background-image: radial-gradient(circle at 10px 10px, rgba(255,255,255,0.16) 1.6px, transparent 1.7px);
+  background-size: 20px 20px;
+}
 .msg-separator {
   display: flex; align-items: center; gap: 10px;
-  margin: 12px 16px; color: #6B7C88;
+  margin: 14px 16px; color: #6B7C88;
 }
 .msg-separator-line { flex: 1; height: 1px; background: var(--sep); }
 .msg-separator-text { font-size: 11px; white-space: nowrap; }
 
-.msg-wrapper { display:flex; }
+.msg-wrapper { display:flex; margin-top:6px; }
+.msg-wrapper.msg-group-start { margin-top:14px; }
 .msg-wrapper.lead { justify-content:flex-start; }
 .msg-wrapper.ai, .msg-wrapper.agent { justify-content:flex-end; }
-.msg-bubble { max-width:72%; padding:10px 14px; border-radius:14px; }
+.msg-bubble {
+  position: relative;
+  max-width:72%; padding:10px 14px; border-radius:14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+}
 .msg-bubble.lead { background:rgba(255,255,255,0.08); border-radius:4px 14px 14px 14px; }
 .msg-bubble.ai { background:rgba(99,102,241,0.22); border-radius:14px 4px 14px 14px; }
 .msg-bubble.agent { background:rgba(16,185,129,0.22); border-radius:14px 4px 14px 14px; }
+
+/* "rabinho" da bolha, só na primeira mensagem de cada grupo (como no WhatsApp) */
+.msg-group-start .msg-bubble.lead::before {
+  content:''; position:absolute; top:0; left:-7px; width:0; height:0;
+  border-top: 7px solid rgba(255,255,255,0.08); border-left: 7px solid transparent;
+}
+.msg-group-start .msg-bubble.ai::before {
+  content:''; position:absolute; top:0; right:-7px; width:0; height:0;
+  border-top: 7px solid rgba(99,102,241,0.22); border-right: 7px solid transparent;
+}
+.msg-group-start .msg-bubble.agent::before {
+  content:''; position:absolute; top:0; right:-7px; width:0; height:0;
+  border-top: 7px solid rgba(16,185,129,0.22); border-right: 7px solid transparent;
+}
 .msg-role-badge { font-size:10px; color:#9FB0BC; margin-bottom:3px; }
 .msg-text { font-size:13px; line-height:1.55; white-space:pre-wrap; word-break:break-word; }
 .msg-time { font-size:10px; color:#6B7C88; margin-top:4px; text-align:right; }
 .msg-highlight .msg-bubble { outline: 2px solid rgba(99,102,241,0.5); outline-offset: 2px; }
+
+.msg-media-image { max-width: 260px; max-height: 260px; border-radius: 10px; display: block; cursor: pointer; object-fit: cover; }
+.msg-media-video { max-width: 280px; max-height: 320px; border-radius: 10px; display: block; }
+.msg-media-audio { width: 240px; }
+.msg-media-doc {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(255,255,255,0.06); border-radius: 10px; padding: 8px 12px;
+  color: inherit; text-decoration: none; font-size: 13px; max-width: 240px;
+}
+.msg-media-doc span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-media-caption { margin-top: 6px; }
+.media-viewer-img { max-width: 100%; max-height: 85vh; display: block; margin: 0 auto; cursor: zoom-out; border-radius: 8px; }
 
 .typing-indicator { display:flex; gap:4px; padding:12px 16px; align-items:center; }
 .typing-indicator span { width:7px; height:7px; border-radius:50%; background:#818CF8; animation:bounce 1.2s infinite ease-in-out; }

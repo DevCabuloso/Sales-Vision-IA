@@ -4,6 +4,7 @@ import multer from 'multer'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { logUsage } from '../services/usage.js'
+import { uploadChatMedia } from '../services/mediaStorage.js'
 
 const ALLOWED_MIMETYPES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif',
@@ -179,7 +180,7 @@ chatRouter.post('/start', async (req, res) => {
 chatRouter.get('/:leadId/messages', async (req, res) => {
   const { limit = 50, before, after } = req.query
   try {
-    let q = supabase.from('messages').select('id, role, text, provider, is_human_takeover, created_at')
+    let q = supabase.from('messages').select('id, role, text, provider, is_human_takeover, media_url, media_type, media_mimetype, media_filename, created_at')
       .eq('lead_id', req.params.leadId)
       .eq('tenant_id', req.user.tenantId)
       .order('created_at', { ascending: !!after })
@@ -274,6 +275,17 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
     const caption = req.body.caption || ''
     const filename = req.file.originalname || 'arquivo'
     const label = `[Arquivo: ${filename}]${caption ? ' ' + caption : ''}`
+    const mediaType = req.file.mimetype.startsWith('image/') ? 'image'
+      : req.file.mimetype.startsWith('video/') ? 'video'
+      : req.file.mimetype.startsWith('audio/') ? 'audio'
+      : 'document'
+
+    let mediaUrl = null
+    try {
+      mediaUrl = await uploadChatMedia(req.user.tenantId, req.file.buffer, req.file.mimetype, filename)
+    } catch (e) {
+      console.warn('[chat/media] falha ao salvar no storage:', e.message)
+    }
 
     const row = unwrap(
       await supabase.from('messages').insert({
@@ -282,12 +294,20 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
         role: 'agent',
         text: label,
         is_human_takeover: lead.human_takeover,
+        media_url: mediaUrl,
+        media_type: mediaType,
+        media_mimetype: req.file.mimetype,
+        media_filename: filename,
       }).select('*').single()
     )
 
     if (lead.phone) {
       try {
         const { sendMedia } = await import('../services/whatsapp/index.js')
+        const { markSentByPlatform } = await import('../services/orchestrator.js')
+        // Evolution ecoa a própria mensagem enviada via webhook (fromMe) com esse mesmo texto —
+        // marca como "já processada" para não duplicar a mensagem no histórico.
+        markSentByPlatform(req.user.tenantId, lead.phone, caption || `[${mediaType}]`)
         await sendMedia(req.user.tenantId, lead.phone, {
           buffer: req.file.buffer,
           mimetype: req.file.mimetype,

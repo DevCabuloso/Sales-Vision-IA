@@ -17,6 +17,7 @@ export const messages = {
       integracoes:  'Integrações',
       configuracoes:'Configurações',
       atendimento:  'Atendimento',
+      ajuda:        'Central de Ajuda',
     },
     settings: {
       title:        'Configurações',
@@ -70,6 +71,7 @@ export const messages = {
       integracoes:  'Integrations',
       configuracoes:'Settings',
       atendimento:  'Attendance',
+      ajuda:        'Help Center',
     },
     settings: {
       title:        'Settings',
@@ -123,6 +125,7 @@ export const messages = {
       integracoes:  'Integraciones',
       configuracoes:'Configuración',
       atendimento:  'Atención',
+      ajuda:        'Centro de Ayuda',
     },
     settings: {
       title:        'Configuración',

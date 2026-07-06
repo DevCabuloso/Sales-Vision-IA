@@ -76,6 +76,29 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
 }
 
 /**
+ * Baixa e descriptografa uma mídia recebida, usando o endpoint próprio da Evolution
+ * (a mídia do WhatsApp chega criptografada — a Evolution já tem a chave da sessão
+ * Baileys para descriptografar, então é mais simples/confiável pedir pra ela do que
+ * reimplementar a criptografia do WhatsApp aqui).
+ */
+export async function downloadMediaBase64(instanceName, messageId, remoteJid, fromMe) {
+  if (!config.evolution.apiUrl) throw new Error('EVOLUTION_API_URL não configurado.')
+  const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${instanceName}`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
+    body: JSON.stringify({
+      message: { key: { id: messageId, remoteJid, fromMe: !!fromMe } },
+      convertToMp4: false,
+    }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.message || data.error || `Evolution erro ${res.status}`)
+  if (!data.base64) throw new Error('Evolution não retornou base64 da mídia.')
+  return { base64: data.base64, mimetype: data.mimetype || null }
+}
+
+/**
  * Extrai mensagem de um webhook da Evolution (evento messages.upsert).
  * Retorna { from, text, mediaType, instanceName } ou null.
  */
@@ -118,13 +141,24 @@ export function parseWebhook(body) {
     msg.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
     ''
 
-  // tipo de mídia para registro
+  // tipo de mídia + mimetype/nome de arquivo para registro
   let mediaType = null
-  if (msg.imageMessage)    mediaType = 'image'
-  else if (msg.videoMessage)    mediaType = 'video'
-  else if (msg.audioMessage || msg.pttMessage) mediaType = 'audio'
-  else if (msg.documentMessage || msg.documentWithCaptionMessage) mediaType = 'document'
-  else if (msg.stickerMessage) mediaType = 'sticker'
+  let mediaMimeType = null
+  let mediaFilename = null
+  if (msg.imageMessage) {
+    mediaType = 'image'; mediaMimeType = msg.imageMessage.mimetype
+  } else if (msg.videoMessage) {
+    mediaType = 'video'; mediaMimeType = msg.videoMessage.mimetype
+  } else if (msg.audioMessage || msg.pttMessage) {
+    mediaType = 'audio'; mediaMimeType = (msg.audioMessage || msg.pttMessage).mimetype
+  } else if (msg.documentMessage || msg.documentWithCaptionMessage) {
+    mediaType = 'document'
+    const docMsg = msg.documentMessage || msg.documentWithCaptionMessage?.message?.documentMessage
+    mediaMimeType = docMsg?.mimetype || null
+    mediaFilename = docMsg?.fileName || null
+  } else if (msg.stickerMessage) {
+    mediaType = 'sticker'; mediaMimeType = msg.stickerMessage.mimetype
+  }
 
   // descarta se não há texto nem mídia reconhecida
   if (!text && !mediaType) {
@@ -135,5 +169,9 @@ export function parseWebhook(body) {
   const from = remoteJid.split('@')[0]
   const pushName = data?.pushName || null
   const finalText = text || `[${mediaType || 'mensagem'}]`
-  return { from, text: finalText, mediaType, instanceName, fromMe, pushName }
+  return {
+    from, text: finalText, mediaType, mediaMimeType, mediaFilename,
+    mediaMessageId: data?.key?.id || null, mediaRemoteJid: remoteJid, mediaFromMe: fromMe,
+    instanceName, fromMe, pushName,
+  }
 }

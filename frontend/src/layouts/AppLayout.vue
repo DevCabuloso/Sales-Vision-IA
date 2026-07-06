@@ -103,6 +103,16 @@
           </transition>
         </button>
 
+        <!-- Central de Ajuda -->
+        <button class="nav-item" :class="{ active: isActive('/ajuda') }" @click="navigate('/ajuda')">
+          <div class="nav-icon" :class="{ 'nav-icon--active': isActive('/ajuda') }">
+            <v-icon icon="mdi-help-circle-outline" size="18" />
+          </div>
+          <transition name="fade-fast">
+            <span v-if="!rail" class="nav-title">{{ t('nav.ajuda') }}</span>
+          </transition>
+        </button>
+
         <div class="footer-divider" />
 
         <!-- Perfil do usuário -->

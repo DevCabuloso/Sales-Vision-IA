@@ -40,6 +40,7 @@ const routes = [
       { path: 'operacao',     name: 'operacao',    component: () => import('@/views/app/OperationalSettingsView.vue') },
       { path: 'flows',        name: 'flows',        component: () => import('@/views/app/FlowsView.vue') },
       { path: 'flows/:id',    name: 'flow-editor',  component: () => import('@/views/app/FlowEditorView.vue'), props: true },
+      { path: 'ajuda',        name: 'ajuda',        component: () => import('@/views/app/HelpView.vue') },
     ],
   },
   {

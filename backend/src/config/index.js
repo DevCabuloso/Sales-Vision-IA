@@ -29,6 +29,7 @@ export const config = {
   supabase: {
     url: process.env.SUPABASE_URL,
     serviceKey: process.env.SUPABASE_SERVICE_KEY,
+    mediaBucket: process.env.SUPABASE_MEDIA_BUCKET || 'chat-media',
   },
 
   jwt: {

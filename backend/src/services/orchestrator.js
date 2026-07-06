@@ -4,6 +4,7 @@ import { analyzeLead } from './ai/analyze.js'
 import * as whatsapp from './whatsapp/index.js'
 import { logUsage } from './usage.js'
 import { isWithinBusinessHours, getOffMessage } from '../routes/business-hours.js'
+import { uploadChatMedia } from './mediaStorage.js'
 
 // Cache TTL simples para reduzir queries repetidas por mensagem recebida
 const _cache = new Map()
@@ -35,7 +36,39 @@ export function markSentByPlatform(tenantId, phone, text) {
   setTimeout(() => _sentByPlatform.delete(key), 30000)
 }
 
-export async function handleInboundMessage({ tenantId, from: rawFrom, text, provider, instanceName, pushName }) {
+/** Baixa (Meta: Graph API / Evolution: descriptografia via API própria) a mídia recebida e persiste no storage. */
+async function resolveMedia({
+  tenantId, provider, instanceName, mediaType, mediaId, mediaMimeType, mediaFilename,
+  mediaMessageId, mediaRemoteJid, mediaFromMe,
+}) {
+  if (!mediaType) return null
+  try {
+    let buffer, mimetype
+    if (provider === 'meta_whatsapp' && mediaId) {
+      const dl = await whatsapp.meta.downloadMedia(tenantId, mediaId)
+      buffer = dl.buffer
+      mimetype = dl.mimetype || mediaMimeType
+    } else if (provider === 'evolution' && mediaMessageId && instanceName) {
+      const dl = await whatsapp.evolution.downloadMediaBase64(instanceName, mediaMessageId, mediaRemoteJid, mediaFromMe)
+      buffer = Buffer.from(dl.base64, 'base64')
+      mimetype = dl.mimetype || mediaMimeType
+    } else {
+      console.warn(`[orchestrator] mídia tipo=${mediaType} sem fonte para download (provider=${provider})`)
+      return null
+    }
+    const url = await uploadChatMedia(tenantId, buffer, mimetype || 'application/octet-stream', mediaFilename || mediaType)
+    return { url, mimetype: mimetype || null }
+  } catch (e) {
+    console.warn('[orchestrator] falha ao baixar/salvar mídia recebida:', e.message)
+    return null
+  }
+}
+
+export async function handleInboundMessage({
+  tenantId, from: rawFrom, text, provider, instanceName, pushName,
+  mediaType, mediaId, mediaMimeType, mediaFilename,
+  mediaMessageId, mediaRemoteJid, mediaFromMe,
+}) {
   const from = normalizePhone(rawFrom)
   // resolve channel_id pelo instance_name (se disponível)
   let channelId = null
@@ -107,9 +140,19 @@ export async function handleInboundMessage({ tenantId, from: rawFrom, text, prov
 
   console.log(`[orchestrator] lead upserted: id=${lead.id} phone=${from} status=${lead.conversation_status}`)
 
-  // 2) salva mensagem + logUsage em paralelo
+  // 2) baixa mídia (se houver) e salva mensagem + logUsage em paralelo
+  const media = await resolveMedia({
+    tenantId, provider, instanceName, mediaType, mediaId, mediaMimeType, mediaFilename,
+    mediaMessageId, mediaRemoteJid, mediaFromMe,
+  })
   const [msgResult] = await Promise.all([
-    supabase.from('messages').insert({ tenant_id: tenantId, lead_id: lead.id, role: 'lead', text, provider }).select('id'),
+    supabase.from('messages').insert({
+      tenant_id: tenantId, lead_id: lead.id, role: 'lead', text, provider,
+      media_url: media?.url || null,
+      media_type: mediaType || null,
+      media_mimetype: media?.mimetype || mediaMimeType || null,
+      media_filename: mediaFilename || null,
+    }).select('id'),
     logUsage(tenantId, null, 'message_received', { provider }),
   ])
   const savedId = msgResult?.data?.[0]?.id || '(sem id)'
@@ -228,7 +271,11 @@ export async function handleInboundMessage({ tenantId, from: rawFrom, text, prov
  * Registra uma mensagem enviada diretamente pelo WhatsApp (fromMe=true).
  * Salva como mensagem do operador sem acionar a IA.
  */
-export async function handleOutboundMessage({ tenantId, to: rawTo, text, provider, instanceName }) {
+export async function handleOutboundMessage({
+  tenantId, to: rawTo, text, provider, instanceName,
+  mediaType, mediaId, mediaMimeType, mediaFilename,
+  mediaMessageId, mediaRemoteJid, mediaFromMe,
+}) {
   const to = normalizePhone(rawTo)
   const platformKey = `${tenantId}:${to}:${text}`
   if (_sentByPlatform.has(platformKey)) {
@@ -269,11 +316,20 @@ export async function handleOutboundMessage({ tenantId, to: rawTo, text, provide
   )
   if (existing?.length) return
 
+  const media = await resolveMedia({
+    tenantId, provider, instanceName, mediaType, mediaId, mediaMimeType, mediaFilename,
+    mediaMessageId, mediaRemoteJid, mediaFromMe,
+  })
+
   await supabase.from('messages').insert({
     tenant_id: tenantId,
     lead_id: lead.id,
     role: 'agent',
     text,
     provider,
+    media_url: media?.url || null,
+    media_type: mediaType || null,
+    media_mimetype: media?.mimetype || mediaMimeType || null,
+    media_filename: mediaFilename || null,
   })
 }

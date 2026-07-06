@@ -17,7 +17,7 @@ webhooksRouter.get('/debug-msgs', async (req, res) => {
   try {
     const msgs = unwrap(
       await supabase.from('messages')
-        .select('id, tenant_id, lead_id, role, text, created_at')
+        .select('id, tenant_id, lead_id, role, text, media_url, media_type, media_mimetype, media_filename, created_at')
         .order('created_at', { ascending: false })
         .limit(20)
     )
@@ -89,6 +89,9 @@ webhooksRouter.post('/meta',
           from:      m.from,
           text:      m.text,
           mediaType: m.mediaType || null,
+          mediaId:   m.mediaId || null,
+          mediaMimeType: m.mediaMimeType || null,
+          mediaFilename: m.mediaFilename || null,
           provider:  'meta_whatsapp',
           pushName:  m.pushName || null,
         })
@@ -158,11 +161,21 @@ webhooksRouter.post('/evolution',
       console.log(`[webhook evolution] tenant resolvido: ${tenantId}`)
 
       if (parsed.fromMe) {
-        await handleOutboundMessage({ tenantId, to: parsed.from, text: parsed.text, provider: 'evolution', instanceName })
+        await handleOutboundMessage({
+          tenantId, to: parsed.from, text: parsed.text,
+          mediaType: parsed.mediaType, mediaMimeType: parsed.mediaMimeType, mediaFilename: parsed.mediaFilename,
+          mediaMessageId: parsed.mediaMessageId, mediaRemoteJid: parsed.mediaRemoteJid, mediaFromMe: parsed.mediaFromMe,
+          provider: 'evolution', instanceName,
+        })
         return
       }
 
-      await handleInboundMessage({ tenantId, from: parsed.from, text: parsed.text, mediaType: parsed.mediaType, provider: 'evolution', instanceName, pushName: parsed.pushName })
+      await handleInboundMessage({
+        tenantId, from: parsed.from, text: parsed.text,
+        mediaType: parsed.mediaType, mediaMimeType: parsed.mediaMimeType, mediaFilename: parsed.mediaFilename,
+        mediaMessageId: parsed.mediaMessageId, mediaRemoteJid: parsed.mediaRemoteJid, mediaFromMe: parsed.mediaFromMe,
+        provider: 'evolution', instanceName, pushName: parsed.pushName,
+      })
     } catch (e) {
       console.error('[webhook evolution]', e.message)
     }
@@ -201,6 +214,12 @@ webhooksRouter.post('/evolution/:tenantId',
           tenantId: req.params.tenantId,
           to: parsed.from,
           text: parsed.text,
+          mediaType: parsed.mediaType,
+          mediaMimeType: parsed.mediaMimeType,
+          mediaFilename: parsed.mediaFilename,
+          mediaMessageId: parsed.mediaMessageId,
+          mediaRemoteJid: parsed.mediaRemoteJid,
+          mediaFromMe: parsed.mediaFromMe,
           provider: 'evolution',
           instanceName: parsed.instanceName,
         })
@@ -212,6 +231,11 @@ webhooksRouter.post('/evolution/:tenantId',
         from: parsed.from,
         text: parsed.text,
         mediaType: parsed.mediaType,
+        mediaMimeType: parsed.mediaMimeType,
+        mediaFilename: parsed.mediaFilename,
+        mediaMessageId: parsed.mediaMessageId,
+        mediaRemoteJid: parsed.mediaRemoteJid,
+        mediaFromMe: parsed.mediaFromMe,
         provider: 'evolution',
         instanceName: parsed.instanceName,
         pushName: parsed.pushName,

@@ -4,7 +4,7 @@
     <!-- ═══ HEADER ═══ -->
     <div class="dash-header">
       <div class="dash-title-row">
-        <span class="dash-eyebrow">PAINEL SDR · VISÃO COMERCIAL — Bem-vindo, {{ auth.user?.name }}!</span>
+        <span class="dash-eyebrow">PAINEL SDR · Bem-vindo, {{ auth.user?.name }}!</span>
         <div class="d-flex align-center ga-3">
           <button class="report-btn" :disabled="reportLoading" @click="openReport">
             <v-progress-circular v-if="reportLoading" indeterminate size="14" width="2" />
@@ -662,8 +662,8 @@ function stageColor(s) {
   display: flex; align-items: center; justify-content: space-between;
 }
 .dash-eyebrow {
-  font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
-  color: var(--text-faint); text-transform: uppercase;
+  font-size: 13px; font-weight: 700; letter-spacing: 1px;
+  color: var(--text-secondary); text-transform: uppercase;
 }
 .dash-live {
   display: flex; align-items: center; gap: 6px;
