@@ -128,6 +128,8 @@ export const api = {
   adminDeleteClient: (id) => http.delete(`/admin/clients/${id}`).then((r) => r.data),
   adminImpersonate: (clientId) =>
     http.post(`/admin/clients/${clientId}/impersonate`).then((r) => r.data),
+  adminImpersonateUser: (userId) =>
+    http.post(`/admin/users/${userId}/impersonate`).then((r) => r.data),
 
   // admin — usuários
   adminUsers: (tenantId) =>

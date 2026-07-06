@@ -338,46 +338,27 @@ adminRouter.delete('/owners/:id', async (req, res) => {
 
 // ── Impersonation ─────────────────────────────────────────────────────────────
 
-adminRouter.post('/clients/:id/impersonate', async (req, res) => {
-  const tenantId = req.params.id
+const TENANT_FEATURE_COLUMNS = 'name, slug, feat_meta_api, feat_evolution_api, feat_hybrid, feat_google_cal, feat_broadcast, feat_kanban, feat_agenda, feat_contacts, feat_ia_config, feat_operators, feat_custom_apis'
 
-  const tenants = unwrap(
-    await supabase.from('tenants')
-      .select('name, slug, feat_meta_api, feat_evolution_api, feat_hybrid, feat_google_cal, feat_broadcast, feat_kanban, feat_agenda, feat_contacts, feat_ia_config, feat_operators, feat_custom_apis')
-      .eq('id', tenantId).limit(1)
-  )
-  if (!tenants.length) return res.status(404).json({ error: 'Cliente não encontrado.' })
-  const tenant = tenants[0]
-
-  const admins = unwrap(
-    await supabase.from('users')
-      .select('id, email, name, role, permissions, is_restricted')
-      .eq('tenant_id', tenantId)
-      .eq('role', 'admin')
-      .eq('active', true)
-      .limit(1)
-  )
-  if (!admins.length) return res.status(404).json({ error: 'Nenhum administrador ativo encontrado para este cliente.' })
-  const adminUser = admins[0]
-
+function buildImpersonationPayload(tenant, tenantId, targetUser) {
   const token = jwt.sign(
-    { sub: adminUser.id, role: adminUser.role, tenantId },
+    { sub: targetUser.id, role: targetUser.role, tenantId },
     config.jwt.secret,
     { expiresIn: '1h' }
   )
 
-  res.json({
+  return {
     token,
     user: {
-      id: adminUser.id,
-      email: adminUser.email,
-      name: adminUser.name,
-      role: adminUser.role,
+      id: targetUser.id,
+      email: targetUser.email,
+      name: targetUser.name,
+      role: targetUser.role,
       tenantId,
       tenantName: tenant.name,
       tenantSlug: tenant.slug,
-      permissions: adminUser.permissions || null,
-      is_restricted: adminUser.is_restricted || false,
+      permissions: targetUser.permissions || null,
+      is_restricted: targetUser.is_restricted || false,
       features: {
         meta_api:    tenant.feat_meta_api      ?? false,
         evolution:   tenant.feat_evolution_api ?? false,
@@ -392,7 +373,48 @@ adminRouter.post('/clients/:id/impersonate', async (req, res) => {
         custom_apis: tenant.feat_custom_apis   ?? false,
       },
     },
-  })
+  }
+}
+
+adminRouter.post('/clients/:id/impersonate', async (req, res) => {
+  const tenantId = req.params.id
+
+  const tenants = unwrap(
+    await supabase.from('tenants').select(TENANT_FEATURE_COLUMNS).eq('id', tenantId).limit(1)
+  )
+  if (!tenants.length) return res.status(404).json({ error: 'Cliente não encontrado.' })
+  const tenant = tenants[0]
+
+  const admins = unwrap(
+    await supabase.from('users')
+      .select('id, email, name, role, permissions, is_restricted')
+      .eq('tenant_id', tenantId)
+      .eq('role', 'admin')
+      .eq('active', true)
+      .limit(1)
+  )
+  if (!admins.length) return res.status(404).json({ error: 'Nenhum administrador ativo encontrado para este cliente.' })
+
+  res.json(buildImpersonationPayload(tenant, tenantId, admins[0]))
+})
+
+adminRouter.post('/users/:id/impersonate', async (req, res) => {
+  const users = unwrap(
+    await supabase.from('users')
+      .select('id, email, name, role, permissions, is_restricted, active, tenant_id')
+      .eq('id', req.params.id)
+      .limit(1)
+  )
+  if (!users.length) return res.status(404).json({ error: 'Usuário não encontrado.' })
+  const targetUser = users[0]
+  if (!targetUser.active) return res.status(400).json({ error: 'Usuário está inativo.' })
+
+  const tenants = unwrap(
+    await supabase.from('tenants').select(TENANT_FEATURE_COLUMNS).eq('id', targetUser.tenant_id).limit(1)
+  )
+  if (!tenants.length) return res.status(404).json({ error: 'Cliente não encontrado.' })
+
+  res.json(buildImpersonationPayload(tenants[0], targetUser.tenant_id, targetUser))
 })
 
 // ── Monitoramento ─────────────────────────────────────────────────────────────

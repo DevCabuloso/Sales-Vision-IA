@@ -127,6 +127,18 @@
               </div>
 
               <div class="d-flex ga-1">
+                <v-tooltip text="Acessar como este usuário">
+                  <template #activator="{ props }">
+                    <v-btn
+                      v-bind="props" icon variant="text" size="small" color="secondary"
+                      :disabled="!u.active"
+                      :loading="impersonatingUserId === u.id"
+                      @click="doImpersonateUser(u)"
+                    >
+                      <v-icon icon="mdi-login-variant" size="18" />
+                    </v-btn>
+                  </template>
+                </v-tooltip>
                 <v-tooltip text="Editar usuário">
                   <template #activator="{ props }">
                     <v-btn v-bind="props" icon variant="text" size="small" @click="openEditUser(u)">
@@ -302,6 +314,7 @@ const loading = ref(true)
 const saving = ref(false)
 const deleting = ref(false)
 const impersonating = ref(false)
+const impersonatingUserId = ref(null)
 const savingKey = ref(null)
 const confirmDelete = ref(false)
 
@@ -546,6 +559,19 @@ async function doImpersonate() {
     toast(e.message, 'error')
   } finally {
     impersonating.value = false
+  }
+}
+
+async function doImpersonateUser(u) {
+  impersonatingUserId.value = u.id
+  try {
+    const { token, user } = await api.adminImpersonateUser(u.id)
+    const encoded = btoa(encodeURIComponent(JSON.stringify(user)))
+    window.open(`/impersonate?token=${token}&u=${encoded}`, '_blank')
+  } catch (e) {
+    toast(e.message, 'error')
+  } finally {
+    impersonatingUserId.value = null
   }
 }
 
