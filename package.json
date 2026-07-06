@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently --names \"BACK,FRONT\" --prefix-colors \"cyan,magenta\" \"npm run dev --prefix backend\" \"wait-on tcp:5000 && npm run dev --prefix frontend\"",
+    "dev": "concurrently --names \"BACK,FRONT\" --prefix-colors \"cyan,magenta\" \"cd /d backend && node node_modules/nodemon/bin/nodemon.js src/server.js\" \"cd /d frontend && node node_modules/vite/bin/vite.js\"",
     "dev:back": "npm run dev --prefix backend",
     "dev:front": "npm run dev --prefix frontend",
     "test": "npm run test --prefix backend",

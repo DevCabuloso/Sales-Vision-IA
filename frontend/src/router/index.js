@@ -75,7 +75,7 @@ router.beforeEach((to) => {
   }
 
   if (to.meta.requiresAuth && !auth.isAuthenticated) {
-    return { name: 'login', query: { redirect: to.fullPath } }
+    return { name: 'login' }
   }
 
   // owner não acessa rotas de cliente
