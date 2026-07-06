@@ -39,7 +39,10 @@
           </div>
         </template>
         <template #item.stage="{ item }">
-          <v-chip :color="stageBadgeColor(item.stage)" variant="tonal" size="small">{{ item.stage }}</v-chip>
+          <v-chip
+            variant="tonal" size="small"
+            :style="`background:${stageBadgeColor(item.stage)}22;color:${stageBadgeColor(item.stage)}`"
+          >{{ item.stage }}</v-chip>
         </template>
         <template #item.created_at="{ item }">
           <span class="text-caption">{{ formatDate(item.created_at) }}</span>
@@ -172,7 +175,16 @@ const headers = [
   { title: '', key: 'actions', sortable: false, align: 'end' },
 ]
 
-function stageBadgeColor(s) { return { 'Novo Lead': undefined, 'Em Qualificação': 'info', 'Qualificado': 'success', 'Reunião Agendada': 'warning', 'Vendido': 'accent', 'Perdido': 'error' }[s] }
+function stageBadgeColor(s) {
+  return {
+    'Novo Lead': '#6366F1',
+    'Em Qualificação': '#38BDF8',
+    'Qualificado': '#10B981',
+    'Reunião Agendada': '#F59E0B',
+    'Perdido': '#EF4444',
+    'Vendido': '#A855F7',
+  }[s] || '#6366F1'
+}
 function formatDate(d) { if (!d) return '—'; return new Date(d).toLocaleDateString('pt-BR') }
 async function loadTags() {
   try { availableLabels.value = (await http.get('/labels').then((r) => r.data)).labels || [] } catch { /* */ }

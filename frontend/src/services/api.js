@@ -131,6 +131,9 @@ export const api = {
   adminImpersonateUser: (userId) =>
     http.post(`/admin/users/${userId}/impersonate`).then((r) => r.data),
 
+  // relatórios
+  dailyReport: (date) => http.get('/reports/daily', { params: date ? { date } : {} }).then((r) => r.data),
+
   // admin — usuários
   adminUsers: (tenantId) =>
     http.get('/admin/users', { params: tenantId ? { tenant: tenantId } : {} }).then((r) => r.data.users),

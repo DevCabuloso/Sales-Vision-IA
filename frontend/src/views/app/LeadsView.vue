@@ -25,7 +25,10 @@
           <span class="font-weight-medium">{{ item.name || '—' }}</span>
         </template>
         <template #item.stage="{ item }">
-          <v-chip variant="outlined" size="small">{{ item.stage || 'Novo Lead' }}</v-chip>
+          <v-chip
+            variant="tonal" size="small"
+            :style="`background:${stageColor(item.stage)}22;color:${stageColor(item.stage)}`"
+          >{{ item.stage || 'Novo Lead' }}</v-chip>
         </template>
         <template #item.score="{ item }">
           <v-chip :color="scoreColor(item.score)" variant="tonal" size="small">{{ item.score ?? 0 }}</v-chip>
@@ -100,6 +103,17 @@ const filtered = computed(() => {
 })
 
 function scoreColor(s) { if ((s ?? 0) >= 70) return 'success'; if ((s ?? 0) >= 40) return 'warning'; return 'error' }
+
+function stageColor(s) {
+  return {
+    'Novo Lead': '#6366F1',
+    'Em Qualificação': '#38BDF8',
+    'Qualificado': '#10B981',
+    'Reunião Agendada': '#F59E0B',
+    'Perdido': '#EF4444',
+    'Vendido': '#A855F7',
+  }[s] || '#6366F1'
+}
 
 function openCreate() { form.name = ''; form.phone = ''; form.intention = ''; formError.value = ''; dialog.value = true }
 
