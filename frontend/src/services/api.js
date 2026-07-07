@@ -78,6 +78,11 @@ export const api = {
   getAIConfig: () => http.get('/ai-config').then((r) => r.data),
   saveAIConfig: (payload) => http.put('/ai-config', payload).then((r) => r.data),
   testAIConfig: (message) => http.post('/ai-config/test', { message }).then((r) => r.data),
+  uploadKnowledgeBase: (file) => {
+    const fd = new FormData(); fd.append('file', file)
+    return http.post('/ai-config/knowledge-base', fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then((r) => r.data)
+  },
+  removeKnowledgeBase: () => http.delete('/ai-config/knowledge-base').then((r) => r.data),
 
   // templates
   listTemplates: () => http.get('/templates').then((r) => r.data),

@@ -47,13 +47,45 @@
           <p class="text-caption mb-3" style="color:#9FB0BC">Define personalidade, tom e regras da IA.</p>
           <v-textarea v-model="form.system_prompt" placeholder="Ex: Você é a Lara, assistente de vendas da Empresa XYZ..." rows="4" auto-grow maxlength="8000" />
         </v-card>
-        <v-card class="glass pa-6" border>
+        <v-card class="glass pa-6 mb-4" border>
           <div class="d-flex align-center ga-2 mb-3">
             <v-icon icon="mdi-format-text" color="accent" size="22" />
             <span class="text-subtitle-1 font-weight-bold">Prompt Principal</span>
           </div>
           <p class="text-caption mb-3" style="color:#9FB0BC">Contexto do negócio: produtos, preços, diferenciais.</p>
           <v-textarea v-model="form.main_prompt" placeholder="Ex: Nossa solução custa R$ 297/mês..." rows="4" auto-grow maxlength="8000" />
+        </v-card>
+
+        <v-card class="glass pa-6" border>
+          <div class="d-flex align-center ga-2 mb-3">
+            <v-icon icon="mdi-file-document-outline" color="primary" size="22" />
+            <span class="text-subtitle-1 font-weight-bold">Base de Conhecimento</span>
+          </div>
+          <p class="text-caption mb-3" style="color:#9FB0BC">Envie um catálogo de produtos/serviços (PDF, XLSX, CSV ou TXT) para a IA consultar nas conversas.</p>
+
+          <div v-if="knowledgeBase.filename" class="d-flex align-center ga-2 mb-3 pa-3" style="background:rgba(255,255,255,0.04); border-radius:8px">
+            <v-icon icon="mdi-file-check-outline" color="success" size="20" />
+            <div class="flex-grow-1" style="min-width:0">
+              <div class="text-body-2 font-weight-medium text-truncate">{{ knowledgeBase.filename }}</div>
+              <div class="text-caption" style="color:#6B7C88">Atualizado em {{ formatDate(knowledgeBase.updatedAt) }}</div>
+            </div>
+            <v-btn icon="mdi-delete-outline" size="small" variant="text" color="error" :loading="removingKB" @click="removeKB" />
+          </div>
+
+          <v-file-input
+            v-model="kbFile"
+            label="Selecionar arquivo"
+            accept=".pdf,.xlsx,.xls,.csv,.txt"
+            prepend-icon=""
+            prepend-inner-icon="mdi-paperclip"
+            density="compact"
+            variant="outlined"
+            :loading="uploadingKB"
+            show-size
+            @update:model-value="uploadKB"
+          />
+          <v-alert v-if="kbError" type="error" variant="tonal" density="compact" :text="kbError" class="mt-2" />
+          <v-alert v-if="kbTruncated" type="warning" variant="tonal" density="compact" text="Documento muito grande — apenas os primeiros 15.000 caracteres foram usados." class="mt-2" />
         </v-card>
       </v-col>
     </v-row>
@@ -97,11 +129,54 @@ const testError = ref('')
 const models = ['gpt-4o-mini', 'gpt-4.1-mini']
 const form = reactive({ name: 'SDR IA', model: 'gpt-4o-mini', system_prompt: '', main_prompt: '', temperature: 0.7, max_tokens: 1000 })
 
+const knowledgeBase = reactive({ filename: '', updatedAt: null })
+const kbFile = ref(null)
+const uploadingKB = ref(false)
+const removingKB = ref(false)
+const kbError = ref('')
+const kbTruncated = ref(false)
+
 function applyConfig(cfg) {
   if (!cfg) return
   form.name = cfg.name ?? form.name; form.model = cfg.model ?? form.model
   form.system_prompt = cfg.system_prompt ?? ''; form.main_prompt = cfg.main_prompt ?? ''
   form.temperature = Number(cfg.temperature ?? 0.7); form.max_tokens = cfg.max_tokens ?? 1000
+  knowledgeBase.filename = cfg.knowledge_base_filename ?? ''
+  knowledgeBase.updatedAt = cfg.knowledge_base_updated_at ?? null
+}
+
+function formatDate(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleString('pt-BR')
+}
+
+async function uploadKB(file) {
+  if (!file) return
+  kbError.value = ''; kbTruncated.value = false; uploadingKB.value = true
+  try {
+    const { config, truncated } = await api.uploadKnowledgeBase(file)
+    applyConfig(config)
+    kbTruncated.value = !!truncated
+    toast.success('Base de conhecimento atualizada.')
+  } catch (e) {
+    kbError.value = e.message
+  } finally {
+    uploadingKB.value = false
+    kbFile.value = null
+  }
+}
+
+async function removeKB() {
+  removingKB.value = true
+  try {
+    const { config } = await api.removeKnowledgeBase()
+    applyConfig(config)
+    toast.success('Base de conhecimento removida.')
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    removingKB.value = false
+  }
 }
 
 async function load() { loading.value = true; try { const { config } = await api.getAIConfig(); applyConfig(config) } catch (e) { toast.error(e.message) } finally { loading.value = false } }

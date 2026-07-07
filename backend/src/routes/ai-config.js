@@ -1,11 +1,44 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import multer from 'multer'
+import XLSX from 'xlsx'
+import { PDFParse } from 'pdf-parse'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { chat } from '../services/ai/openai.js'
+import { buildSystemContent } from '../services/ai/agent.js'
 
 export const aiConfigRouter = Router()
 aiConfigRouter.use(requireAuth, requireTenant)
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
+
+// Limite de caracteres do texto extraído, para não estourar a janela de contexto da IA.
+const KNOWLEDGE_BASE_MAX_CHARS = 15000
+
+async function extractText(file) {
+  const ext = file.originalname.split('.').pop().toLowerCase()
+
+  if (ext === 'pdf') {
+    const parser = new PDFParse({ data: file.buffer })
+    try {
+      const result = await parser.getText()
+      return result.text
+    } finally {
+      await parser.destroy()
+    }
+  }
+  if (ext === 'csv' || ext === 'txt') {
+    return file.buffer.toString('utf-8').replace(/^﻿/, '')
+  }
+  if (ext === 'xlsx' || ext === 'xls') {
+    const wb = XLSX.read(file.buffer, { type: 'buffer' })
+    return wb.SheetNames
+      .map((name) => XLSX.utils.sheet_to_csv(wb.Sheets[name]))
+      .join('\n\n')
+  }
+  throw new Error('Formato não suportado. Envie PDF, XLSX, CSV ou TXT.')
+}
 
 const schema = z.object({
   name:          z.string().min(1).max(100).optional(),
@@ -100,10 +133,10 @@ aiConfigRouter.post('/test', async (req, res) => {
     )
     const cfg = rows[0]
 
-    const messages = []
-    if (cfg?.system_prompt) messages.push({ role: 'system', content: cfg.system_prompt })
-    if (cfg?.main_prompt)   messages.push({ role: 'system', content: `Prompt principal: ${cfg.main_prompt}` })
-    messages.push({ role: 'user', content: message })
+    const messages = [
+      { role: 'system', content: buildSystemContent(cfg, null) },
+      { role: 'user', content: message },
+    ]
 
     const response = await chat({
       messages,
@@ -113,6 +146,50 @@ aiConfigRouter.post('/test', async (req, res) => {
     })
 
     res.json({ reply: response?.content || '' })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/ai-config/knowledge-base — upload de documento (catálogo de produtos/serviços)
+aiConfigRouter.post('/knowledge-base', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' })
+
+  try {
+    let text = (await extractText(req.file)).trim().replace(/\n{3,}/g, '\n\n')
+    if (!text) return res.status(400).json({ error: 'Não foi possível extrair texto do arquivo.' })
+
+    const truncated = text.length > KNOWLEDGE_BASE_MAX_CHARS
+    if (truncated) text = text.slice(0, KNOWLEDGE_BASE_MAX_CHARS)
+
+    const rows = unwrap(
+      await supabase.from('ai_configs').upsert({
+        tenant_id: req.user.tenantId,
+        knowledge_base: text,
+        knowledge_base_filename: req.file.originalname,
+        knowledge_base_updated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'tenant_id' }).select('*').single()
+    )
+    res.json({ config: rows, truncated })
+  } catch (e) {
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// DELETE /api/ai-config/knowledge-base
+aiConfigRouter.delete('/knowledge-base', async (req, res) => {
+  try {
+    const rows = unwrap(
+      await supabase.from('ai_configs').upsert({
+        tenant_id: req.user.tenantId,
+        knowledge_base: null,
+        knowledge_base_filename: null,
+        knowledge_base_updated_at: null,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'tenant_id' }).select('*').single()
+    )
+    res.json({ config: rows })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

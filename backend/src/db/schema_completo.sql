@@ -140,6 +140,9 @@ CREATE TABLE IF NOT EXISTS ai_configs (
   temperature   NUMERIC(3,2) NOT NULL DEFAULT 0.70,
   max_tokens    INTEGER      NOT NULL DEFAULT 1000,
   active        BOOLEAN      NOT NULL DEFAULT true,
+  knowledge_base            TEXT,
+  knowledge_base_filename   TEXT,
+  knowledge_base_updated_at TIMESTAMPTZ,
   created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
   UNIQUE (tenant_id)

@@ -50,10 +50,10 @@ function defaultSystemPrompt(tenantName) {
   )
 }
 
-function buildSystemContent(aiCfg, tenantName) {
+export function buildSystemContent(aiCfg, tenantName) {
   const now = new Date().toISOString()
   if (!aiCfg?.system_prompt && !aiCfg?.main_prompt) {
-    return defaultSystemPrompt(tenantName)
+    return defaultSystemPrompt(tenantName) + knowledgeBaseSuffix(aiCfg)
   }
   let content = aiCfg?.system_prompt
     ? `${aiCfg.system_prompt}\nData/hora atual: ${now} (America/Sao_Paulo).`
@@ -61,7 +61,17 @@ function buildSystemContent(aiCfg, tenantName) {
   if (aiCfg?.main_prompt) {
     content += `\n\n---\n${aiCfg.main_prompt}`
   }
-  return content
+  return content + knowledgeBaseSuffix(aiCfg)
+}
+
+function knowledgeBaseSuffix(aiCfg) {
+  if (!aiCfg?.knowledge_base) return ''
+  return (
+    '\n\n---\nBase de conhecimento (catálogo de produtos/serviços da empresa). ' +
+    'Use estas informações para responder o cliente com precisão sobre produtos, preços e condições. ' +
+    'Não invente itens que não estejam aqui:\n' +
+    aiCfg.knowledge_base
+  )
 }
 
 /** Busca configuração de IA do tenant (com fallback para padrões). */
