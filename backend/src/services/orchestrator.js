@@ -36,6 +36,20 @@ export function markSentByPlatform(tenantId, phone, text) {
   setTimeout(() => _sentByPlatform.delete(key), 30000)
 }
 
+/** Resolve o id interno (messages.id) da mensagem citada a partir do wa_message_id do webhook. */
+async function resolveReplyToId(tenantId, replyToWaId) {
+  if (!replyToWaId) return null
+  try {
+    const rows = unwrap(
+      await supabase.from('messages').select('id')
+        .eq('tenant_id', tenantId).eq('wa_message_id', replyToWaId).limit(1)
+    )
+    return rows?.[0]?.id || null
+  } catch {
+    return null
+  }
+}
+
 /** Baixa (Meta: Graph API / Evolution: descriptografia via API própria) a mídia recebida e persiste no storage. */
 async function resolveMedia({
   tenantId, provider, instanceName, mediaType, mediaId, mediaMimeType, mediaFilename,
@@ -57,7 +71,19 @@ async function resolveMedia({
       return null
     }
     const url = await uploadChatMedia(tenantId, buffer, mimetype || 'application/octet-stream', mediaFilename || mediaType)
-    return { url, mimetype: mimetype || null }
+
+    // transcreve áudio pra texto — sem isso a IA não "escuta" as mensagens de voz do lead
+    let transcript = null
+    if (mediaType === 'audio') {
+      try {
+        const { transcribeAudio } = await import('./ai/openai.js')
+        transcript = (await transcribeAudio(buffer, mimetype, mediaFilename || 'audio.ogg')) || null
+      } catch (e) {
+        console.warn('[orchestrator] falha ao transcrever áudio:', e.message)
+      }
+    }
+
+    return { url, mimetype: mimetype || null, transcript }
   } catch (e) {
     console.warn('[orchestrator] falha ao baixar/salvar mídia recebida:', e.message)
     return null
@@ -68,6 +94,7 @@ export async function handleInboundMessage({
   tenantId, from: rawFrom, text, provider, instanceName, pushName,
   mediaType, mediaId, mediaMimeType, mediaFilename,
   mediaMessageId, mediaRemoteJid, mediaFromMe,
+  waMessageId, replyToWaId,
 }) {
   const from = normalizePhone(rawFrom)
   // resolve channel_id pelo instance_name (se disponível)
@@ -140,23 +167,29 @@ export async function handleInboundMessage({
 
   console.log(`[orchestrator] lead upserted: id=${lead.id} phone=${from} status=${lead.conversation_status}`)
 
-  // 2) baixa mídia (se houver) e salva mensagem + logUsage em paralelo
-  const media = await resolveMedia({
-    tenantId, provider, instanceName, mediaType, mediaId, mediaMimeType, mediaFilename,
-    mediaMessageId, mediaRemoteJid, mediaFromMe,
-  })
+  // 2) baixa mídia (se houver), resolve reply_to_id e salva mensagem + logUsage em paralelo
+  const [media, replyToId] = await Promise.all([
+    resolveMedia({
+      tenantId, provider, instanceName, mediaType, mediaId, mediaMimeType, mediaFilename,
+      mediaMessageId, mediaRemoteJid, mediaFromMe,
+    }),
+    resolveReplyToId(tenantId, replyToWaId),
+  ])
+  const finalText = (mediaType === 'audio' && media?.transcript) ? media.transcript : text
   const [msgResult] = await Promise.all([
     supabase.from('messages').insert({
-      tenant_id: tenantId, lead_id: lead.id, role: 'lead', text, provider,
+      tenant_id: tenantId, lead_id: lead.id, role: 'lead', text: finalText, provider,
       media_url: media?.url || null,
       media_type: mediaType || null,
       media_mimetype: media?.mimetype || mediaMimeType || null,
       media_filename: mediaFilename || null,
+      wa_message_id: waMessageId || null,
+      reply_to_id: replyToId,
     }).select('id'),
     logUsage(tenantId, null, 'message_received', { provider }),
   ])
   const savedId = msgResult?.data?.[0]?.id || '(sem id)'
-  console.log(`[orchestrator] mensagem salva: id=${savedId} lead_id=${lead.id} text="${text?.slice(0, 40)}"`)
+  console.log(`[orchestrator] mensagem salva: id=${savedId} lead_id=${lead.id} text="${finalText?.slice(0, 40)}"`)
   if (msgResult?.error) console.error('[orchestrator] ERRO ao salvar mensagem:', msgResult.error.message)
 
   // 2.5) flow engine — retoma sessão ativa sempre; só inicia novo fluxo se não houver humano atendendo
@@ -275,6 +308,7 @@ export async function handleOutboundMessage({
   tenantId, to: rawTo, text, provider, instanceName,
   mediaType, mediaId, mediaMimeType, mediaFilename,
   mediaMessageId, mediaRemoteJid, mediaFromMe,
+  waMessageId, replyToWaId,
 }) {
   const to = normalizePhone(rawTo)
   const platformKey = `${tenantId}:${to}:${text}`
@@ -316,20 +350,26 @@ export async function handleOutboundMessage({
   )
   if (existing?.length) return
 
-  const media = await resolveMedia({
-    tenantId, provider, instanceName, mediaType, mediaId, mediaMimeType, mediaFilename,
-    mediaMessageId, mediaRemoteJid, mediaFromMe,
-  })
+  const [media, replyToId] = await Promise.all([
+    resolveMedia({
+      tenantId, provider, instanceName, mediaType, mediaId, mediaMimeType, mediaFilename,
+      mediaMessageId, mediaRemoteJid, mediaFromMe,
+    }),
+    resolveReplyToId(tenantId, replyToWaId),
+  ])
 
+  const finalText = (mediaType === 'audio' && media?.transcript) ? media.transcript : text
   await supabase.from('messages').insert({
     tenant_id: tenantId,
     lead_id: lead.id,
     role: 'agent',
-    text,
+    text: finalText,
     provider,
     media_url: media?.url || null,
     media_type: mediaType || null,
     media_mimetype: media?.mimetype || mediaMimeType || null,
     media_filename: mediaFilename || null,
+    wa_message_id: waMessageId || null,
+    reply_to_id: replyToId,
   })
 }

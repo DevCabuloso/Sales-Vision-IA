@@ -29,6 +29,7 @@ const routes = [
       { path: 'agenda',      name: 'agenda',       component: () => import('@/views/app/AgendaView.vue') },
       { path: 'templates',   name: 'templates',    component: () => import('@/views/app/TemplatesView.vue') },
       { path: 'broadcast',   name: 'broadcast',    component: () => import('@/views/app/BroadcastView.vue') },
+      { path: 'acompanhamentos', name: 'acompanhamentos', component: () => import('@/views/app/FollowupsView.vue') },
       { path: 'operadores',  name: 'operadores',   component: () => import('@/views/app/OperatorsView.vue') },
       { path: 'ia-config',   name: 'ia-config',    component: () => import('@/views/app/AIConfigView.vue') },
       { path: 'apis',        name: 'custom-apis',  component: () => import('@/views/app/CustomApisView.vue') },

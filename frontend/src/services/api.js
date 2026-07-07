@@ -216,6 +216,25 @@ export const api = {
   scheduleMessage: (id, payload) => http.post(`/chat/${id}/schedule`, payload).then((r) => r.data.scheduled),
   cancelScheduledMessage: (id, scheduleId) => http.delete(`/chat/${id}/schedule/${scheduleId}`).then((r) => r.data),
 
+  // chat — acompanhamentos (execução por lead)
+  getLeadFollowup: (id) => http.get(`/chat/${id}/followup`).then((r) => r.data.followup),
+  startLeadFollowup: (id, sequenceId) => http.post(`/chat/${id}/followup/start`, { sequence_id: sequenceId }).then((r) => r.data),
+  cancelLeadFollowup: (id, enrollmentId) => http.post(`/chat/${id}/followup/${enrollmentId}/cancel`).then((r) => r.data),
+  finishLeadFollowup: (id, enrollmentId) => http.post(`/chat/${id}/followup/${enrollmentId}/finish`).then((r) => r.data),
+  restartLeadFollowup: (id, enrollmentId) => http.post(`/chat/${id}/followup/${enrollmentId}/restart`).then((r) => r.data),
+
+  // acompanhamentos (templates de sequência)
+  listFollowupSequences: () => http.get('/followups').then((r) => r.data.sequences),
+  getFollowupSequence: (id) => http.get(`/followups/${id}`).then((r) => r.data),
+  createFollowupSequence: (payload) => http.post('/followups', payload).then((r) => r.data),
+  updateFollowupSequence: (id, payload) => http.patch(`/followups/${id}`, payload).then((r) => r.data),
+  deleteFollowupSequence: (id) => http.delete(`/followups/${id}`).then((r) => r.data),
+  duplicateFollowupSequence: (id) => http.post(`/followups/${id}/duplicate`).then((r) => r.data),
+  uploadFollowupStepMedia: (sequenceId, stepId, file) => {
+    const fd = new FormData(); fd.append('file', file)
+    return http.post(`/followups/${sequenceId}/steps/${stepId}/media`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then((r) => r.data.step)
+  },
+
   // flows (chatbot)
   listFlows: () => http.get('/flows').then((r) => r.data.flows),
   getFlow: (id) => http.get(`/flows/${id}`).then((r) => r.data.flow),

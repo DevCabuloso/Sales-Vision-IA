@@ -34,3 +34,24 @@ export async function chat({ messages, tools, toolChoice = 'auto', temperature =
   }
   return data.choices?.[0]?.message
 }
+
+/** Transcreve um áudio (buffer) para texto via Whisper da OpenAI. */
+export async function transcribeAudio(buffer, mimetype, filename = 'audio.ogg') {
+  if (!config.openai.apiKey) {
+    throw new Error('OPENAI_API_KEY não configurada no .env.')
+  }
+  const form = new FormData()
+  form.append('file', new Blob([buffer], { type: mimetype || 'audio/ogg' }), filename)
+  form.append('model', 'whisper-1')
+
+  const res = await fetch(`${BASE}/audio/transcriptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.openai.apiKey}` },
+    body: form,
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(data.error?.message || `OpenAI transcription erro ${res.status}`)
+  }
+  return data.text || ''
+}

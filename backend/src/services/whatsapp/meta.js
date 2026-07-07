@@ -17,13 +17,15 @@ async function getCreds(tenantId) {
 }
 
 /** Envia uma mensagem de texto via Meta WhatsApp Cloud API. */
-export async function sendText(tenantId, to, body) {
+export async function sendText(tenantId, to, body, { quotedWaId } = {}) {
   const { accessToken, phoneNumberId } = await getCreds(tenantId)
   const url = `https://graph.facebook.com/${config.meta.graphVersion}/${phoneNumberId}/messages`
+  const payload = { messaging_product: 'whatsapp', to, type: 'text', text: { body } }
+  if (quotedWaId) payload.context = { message_id: quotedWaId }
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body } }),
+    body: JSON.stringify(payload),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error?.message || `Meta API erro ${res.status}`)
@@ -34,7 +36,7 @@ export async function sendText(tenantId, to, body) {
  * Envia mídia (imagem, vídeo, áudio, documento) via Meta Cloud API.
  * Faz upload do buffer primeiro para obter um media_id, depois envia a mensagem.
  */
-export async function sendMedia(tenantId, to, { buffer, mimetype, filename, caption = '' }) {
+export async function sendMedia(tenantId, to, { buffer, mimetype, filename, caption = '', quotedWaId }) {
   const { accessToken, phoneNumberId } = await getCreds(tenantId)
   const base = `https://graph.facebook.com/${config.meta.graphVersion}`
 
@@ -64,15 +66,18 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
   if (caption) mediaPayload.caption = caption
   if (type === 'document') mediaPayload.filename = filename
 
+  const mediaMsgPayload = {
+    messaging_product: 'whatsapp',
+    to,
+    type,
+    [type]: mediaPayload,
+  }
+  if (quotedWaId) mediaMsgPayload.context = { message_id: quotedWaId }
+
   const res = await fetch(`${base}/${phoneNumberId}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      to,
-      type,
-      [type]: mediaPayload,
-    }),
+    body: JSON.stringify(mediaMsgPayload),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error?.message || `Meta API erro ${res.status}`)
@@ -120,9 +125,11 @@ export function parseWebhook(body) {
       for (const msg of value.messages || []) {
         const from = msg.from
         const pushName = nameMap[from] || null
+        const waMessageId = msg.id || null
+        const replyToWaId = msg.context?.id || null
 
         if (msg.type === 'text') {
-          out.push({ from, text: msg.text?.body || '', phoneNumberId, pushName })
+          out.push({ from, text: msg.text?.body || '', phoneNumberId, pushName, waMessageId, replyToWaId })
         } else if (['image', 'video', 'audio', 'document', 'sticker'].includes(msg.type)) {
           const media   = msg[msg.type] || {}
           const caption = media.caption || ''
@@ -136,6 +143,8 @@ export function parseWebhook(body) {
             mediaFilename: media.filename || null,
             phoneNumberId,
             pushName,
+            waMessageId,
+            replyToWaId,
           })
         }
       }

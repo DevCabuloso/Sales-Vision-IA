@@ -40,22 +40,22 @@ export async function sendMedia(tenantId, to, opts) {
   throw new Error('Nenhum provider de WhatsApp habilitado para este cliente.')
 }
 
-export async function sendText(tenantId, to, body) {
+export async function sendText(tenantId, to, body, opts) {
   const f = await getTenantFlags(tenantId)
 
   if (f.feat_hybrid) {
     try {
-      return await meta.sendText(tenantId, to, body)
+      return await meta.sendText(tenantId, to, body, opts)
     } catch (e) {
       console.warn(`[whatsapp] híbrido: Meta falhou (${e.message}), tentando Evolution`)
-      return await evolution.sendText(tenantId, to, body)
+      return await evolution.sendText(tenantId, to, body, opts)
     }
   }
-  if (f.feat_meta_api) return meta.sendText(tenantId, to, body)
-  if (f.feat_evolution_api) return evolution.sendText(tenantId, to, body)
+  if (f.feat_meta_api) return meta.sendText(tenantId, to, body, opts)
+  if (f.feat_evolution_api) return evolution.sendText(tenantId, to, body, opts)
 
   // detecta automaticamente se tem canal conectado na tabela channels
-  if (await hasConnectedChannel(tenantId)) return evolution.sendText(tenantId, to, body)
+  if (await hasConnectedChannel(tenantId)) return evolution.sendText(tenantId, to, body, opts)
 
   throw new Error('Nenhum provider de WhatsApp habilitado para este cliente.')
 }

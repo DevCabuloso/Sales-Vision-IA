@@ -26,6 +26,7 @@ import { opSettingsRouter } from './routes/op-settings.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { flowsRouter } from './routes/flows.js'
 import { reportsRouter } from './routes/reports.js'
+import { followupsRouter } from './routes/followups.js'
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -121,6 +122,7 @@ export function createApp() {
   app.use('/api/reports', reportsRouter)
   app.use('/api/notifications', notificationsRouter)
   app.use('/api/flows', flowsRouter)
+  app.use('/api/followups', followupsRouter)
 
   // 404
   app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }))

@@ -429,9 +429,17 @@
                 class="msg-wrapper"
                 :class="[msg.role, { 'msg-highlight': msgSearchQuery && msg.text?.toLowerCase().includes(msgSearchQuery.toLowerCase()), 'msg-group-start': isGroupStart(displayedMessages, msgIdx) }]"
               >
+                <button class="msg-reply-btn" title="Responder" @click="startReply(msg)">
+                  <v-icon icon="mdi-reply-outline" size="16" />
+                </button>
                 <div class="msg-bubble" :class="msg.role">
                   <div v-if="msg.role === 'agent' || msg.role === 'ai'" class="msg-role-badge">
                     {{ msg.role === 'ai' ? '⬦ IA' : '⬦ Agente' }}
+                  </div>
+
+                  <div v-if="msg.reply_to_id" class="quoted-msg-box">
+                    <div class="quoted-msg-sender">{{ quotedMessage(msg) ? quotedSenderLabel(quotedMessage(msg)) : 'Mensagem original' }}</div>
+                    <div class="quoted-msg-text">{{ quotedMessage(msg) ? quotedPreviewText(quotedMessage(msg)) : '—' }}</div>
                   </div>
 
                   <template v-if="msg.media_url">
@@ -576,6 +584,30 @@
                     :disabled="currentLead.conversation_status !== 'open'"
                     @click="openScheduleDialog"
                   >Agendar Mensagem</v-btn>
+                  <v-btn
+                    v-if="!followup"
+                    size="small" variant="tonal" color="primary" block
+                    prepend-icon="mdi-timeline-clock-outline"
+                    :disabled="currentLead.conversation_status !== 'open'"
+                    @click="openStartFollowupDialog"
+                  >Iniciar Acompanhamento</v-btn>
+                </div>
+              </div>
+
+              <!-- Acompanhamento ativo -->
+              <div v-if="followup" class="mt-4">
+                <div class="text-caption mb-2" style="color:#9FB0BC;font-weight:600;letter-spacing:.5px">ACOMPANHAMENTO ATIVO</div>
+                <div class="followup-status-card">
+                  <div class="text-body-2 font-weight-bold mb-1">{{ followup.sequence_name }}</div>
+                  <div class="text-caption mb-2" style="color:#9FB0BC">
+                    Etapa {{ followup.sent_count }} de {{ followup.total_steps }}
+                    <span v-if="followup.next_send_at"> · próximo envio {{ formatFollowupDate(followup.next_send_at) }}</span>
+                  </div>
+                  <div class="d-flex ga-2">
+                    <v-btn size="x-small" variant="tonal" :loading="followupActionLoading" @click="restartFollowup">Reiniciar</v-btn>
+                    <v-btn size="x-small" variant="tonal" color="success" :loading="followupActionLoading" @click="finishFollowup">Finalizar</v-btn>
+                    <v-btn size="x-small" variant="tonal" color="error" :loading="followupActionLoading" @click="cancelFollowup">Cancelar</v-btn>
+                  </div>
                 </div>
               </div>
 
@@ -646,6 +678,18 @@
           <div v-if="useSignature && signature" class="wa-signature-banner">
             <v-icon icon="mdi-pen" size="12" style="opacity:.6" />
             <span>{{ signature }}</span>
+          </div>
+
+          <!-- Preview de resposta (reply/quote) -->
+          <div v-if="replyingTo" class="wa-reply-preview">
+            <div class="wa-reply-preview-bar" />
+            <div class="wa-reply-preview-body">
+              <div class="wa-reply-preview-sender">{{ quotedSenderLabel(replyingTo) }}</div>
+              <div class="wa-reply-preview-text">{{ quotedPreviewText(replyingTo) }}</div>
+            </div>
+            <button class="wa-file-remove" @click="cancelReply">
+              <v-icon icon="mdi-close" size="14" />
+            </button>
           </div>
 
           <!-- Preview de arquivo -->
@@ -812,6 +856,35 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog: iniciar acompanhamento -->
+    <v-dialog v-model="startFollowupDialog" max-width="440">
+      <v-card class="pa-6">
+        <div class="d-flex align-center ga-2 mb-1">
+          <v-icon icon="mdi-timeline-clock-outline" color="primary" />
+          <span class="text-h6 font-weight-bold">Iniciar Acompanhamento</span>
+        </div>
+        <div class="text-body-2 mb-4" style="color:#9FB0BC">Escolha a sequência de mensagens a ser enviada automaticamente para este contato.</div>
+        <v-select
+          v-model="followupSequenceId"
+          :items="followupSequences"
+          item-title="name"
+          item-value="id"
+          label="Acompanhamento"
+          variant="outlined"
+          density="compact"
+          :no-data-text="'Nenhum acompanhamento cadastrado.'"
+        >
+          <template #item="{ props: iProps, item }">
+            <v-list-item v-bind="iProps" :subtitle="`${item.raw.steps_count} mensagem(ns)`" />
+          </template>
+        </v-select>
+        <div class="d-flex ga-3 justify-end mt-4">
+          <v-btn variant="text" @click="startFollowupDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" :loading="followupStarting" :disabled="!followupSequenceId" prepend-icon="mdi-play" @click="confirmStartFollowup">Iniciar</v-btn>
+        </div>
+      </v-card>
+    </v-dialog>
+
     <!-- Dialog: transferência em massa -->
     <v-dialog v-model="bulkTransferDialog" max-width="360">
       <v-card class="glass pa-2" border>
@@ -952,6 +1025,23 @@ const emojiCat       = ref('😊')
 const audioRecording = ref(false)
 const recordingTime  = ref('0:00')
 let mediaRecorder    = null
+
+// ——— responder mensagem (reply/quote) ———
+const replyingTo = ref(null)
+function startReply(msg) { replyingTo.value = msg; inputEl.value?.focus() }
+function cancelReply() { replyingTo.value = null }
+function quotedMessage(msg) {
+  if (!msg.reply_to_id) return null
+  return messages.value.find((m) => m.id === msg.reply_to_id) || null
+}
+function quotedPreviewText(msg) {
+  if (msg.media_url) return msg.media_type === 'image' ? '📷 Foto' : msg.media_type === 'video' ? '🎥 Vídeo' : msg.media_type === 'audio' ? '🎵 Áudio' : '📎 Arquivo'
+  return msg.text || ''
+}
+function quotedSenderLabel(msg) {
+  if (msg.role === 'lead') return currentLead.value?.name || 'Contato'
+  return msg.role === 'ai' ? 'IA' : 'Agente'
+}
 let audioChunks      = []
 let recTimer         = null
 
@@ -1022,11 +1112,14 @@ async function sendFile() {
   if (!attachedFile.value || !currentLead.value) return
   const file = attachedFile.value
   attachedFile.value = null
+  const replyToId = replyingTo.value?.id || null
+  replyingTo.value = null
   sending.value = true
   try {
     const fd = new FormData()
     fd.append('file', file)
     if (inputText.value.trim()) fd.append('caption', inputText.value.trim())
+    if (replyToId) fd.append('replyToId', replyToId)
     const { data } = await http.post(`/chat/${currentLead.value.id}/media`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
     if (!messages.value.some((m) => m.id === data.message.id)) messages.value.push(data.message)
     inputText.value = ''
@@ -1107,6 +1200,73 @@ const templates          = ref([])
 const templateOptions    = computed(() =>
   templates.value.map((t) => ({ title: `${t.name} (${t.category})`, value: t.id }))
 )
+
+// ——— acompanhamentos ———
+const followup               = ref(null)
+const startFollowupDialog    = ref(false)
+const followupSequences      = ref([])
+const followupSequenceId     = ref(null)
+const followupStarting       = ref(false)
+const followupActionLoading  = ref(false)
+
+async function loadFollowup() {
+  if (!currentLead.value) return
+  try { followup.value = await api.getLeadFollowup(currentLead.value.id) }
+  catch { /* silencioso */ }
+}
+
+async function openStartFollowupDialog() {
+  followupSequenceId.value = null
+  startFollowupDialog.value = true
+  try { followupSequences.value = await api.listFollowupSequences() }
+  catch (e) { toast(e.message, 'error') }
+}
+
+async function confirmStartFollowup() {
+  if (!followupSequenceId.value) return
+  followupStarting.value = true
+  try {
+    const { followup: f } = await api.startLeadFollowup(currentLead.value.id, followupSequenceId.value)
+    followup.value = f
+    startFollowupDialog.value = false
+    toast('Acompanhamento iniciado.')
+  } catch (e) {
+    toast(e.message, 'error')
+    await loadFollowup()
+  } finally { followupStarting.value = false }
+}
+
+async function cancelFollowup() {
+  if (!followup.value) return
+  followupActionLoading.value = true
+  try { await api.cancelLeadFollowup(currentLead.value.id, followup.value.id); followup.value = null; toast('Acompanhamento cancelado.') }
+  catch (e) { toast(e.message, 'error') }
+  finally { followupActionLoading.value = false }
+}
+
+async function finishFollowup() {
+  if (!followup.value) return
+  followupActionLoading.value = true
+  try { await api.finishLeadFollowup(currentLead.value.id, followup.value.id); followup.value = null; toast('Acompanhamento finalizado.') }
+  catch (e) { toast(e.message, 'error') }
+  finally { followupActionLoading.value = false }
+}
+
+async function restartFollowup() {
+  if (!followup.value) return
+  followupActionLoading.value = true
+  try {
+    const { followup: f } = await api.restartLeadFollowup(currentLead.value.id, followup.value.id)
+    followup.value = f
+    toast('Acompanhamento reiniciado.')
+  } catch (e) { toast(e.message, 'error') }
+  finally { followupActionLoading.value = false }
+}
+
+function formatFollowupDate(d) {
+  if (!d) return '—'
+  return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
 
 async function loadTemplates() {
   try { const { templates: t } = await api.listTemplates(); templates.value = t } catch { /* silencioso */ }
@@ -1355,6 +1515,7 @@ async function selectLead(lead) {
   messages.value = []
   oldestMsgId.value = null
   ticketLogs.value = []
+  followup.value = null
   openedAt[lead.id] = Date.now()
   showContactPanel.value = false
   showMsgSearch.value = false
@@ -1365,6 +1526,7 @@ async function selectLead(lead) {
   scrollToBottom()
   loadTicketLogs()
   loadScheduledMessages()
+  loadFollowup()
 }
 
 async function loadTicketLogs() {
@@ -1497,12 +1659,14 @@ async function sendMessage() {
   if (!inputText.value.trim() || !currentLead.value) return
   let text = inputText.value.trim()
   if (useSignature.value && signature.value) text = `*${signature.value}*\n${text}`
+  const replyToId = replyingTo.value?.id || null
   inputText.value = ''
+  replyingTo.value = null
   if (inputEl.value) { inputEl.value.style.height = 'auto' }
   showEmojiPicker.value = false
   sending.value = true
   try {
-    const { message } = await http.post(`/chat/${currentLead.value.id}/messages`, { text }).then((r) => r.data)
+    const { message } = await http.post(`/chat/${currentLead.value.id}/messages`, { text, replyToId }).then((r) => r.data)
     // o insert no banco dispara o realtime antes do envio ao WhatsApp terminar e esta requisição
     // responder — se o evento realtime já inseriu essa mensagem, não duplica aqui.
     if (!messages.value.some((m) => m.id === message.id)) messages.value.push(message)
@@ -1902,14 +2066,36 @@ onUnmounted(() => {
 .msg-separator-line { flex: 1; height: 1px; background: var(--sep); }
 .msg-separator-text { font-size: 11px; white-space: nowrap; }
 
-.msg-wrapper { display:flex; margin-top:6px; }
+.msg-wrapper { display:flex; align-items:center; gap:4px; margin-top:6px; }
 .msg-wrapper.msg-group-start { margin-top:14px; }
 .msg-wrapper.lead { justify-content:flex-start; }
 .msg-wrapper.ai, .msg-wrapper.agent { justify-content:flex-end; }
+.msg-wrapper.lead .msg-bubble { order:1; }
+.msg-wrapper.lead .msg-reply-btn { order:2; }
 .msg-bubble {
   position: relative;
   max-width:72%; padding:10px 14px; border-radius:14px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+}
+.msg-reply-btn {
+  display:flex; align-items:center; justify-content:center;
+  width:26px; height:26px; border-radius:50%; flex-shrink:0;
+  background:rgba(255,255,255,0.08); color:#9FB0BC;
+  opacity:0; transition:opacity .15s ease;
+}
+.msg-wrapper:hover .msg-reply-btn { opacity:1; }
+.msg-reply-btn:hover { background:rgba(255,255,255,0.16); color:#C4D4DF; }
+.quoted-msg-box {
+  border-left:3px solid rgba(99,102,241,0.7);
+  background:rgba(0,0,0,0.18);
+  border-radius:6px;
+  padding:4px 8px;
+  margin-bottom:6px;
+}
+.quoted-msg-sender { font-size:11px; font-weight:600; color:#8B93FF; }
+.quoted-msg-text {
+  font-size:12px; color:#C4D4DF; line-height:1.4;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%;
 }
 .msg-bubble.lead { background:rgba(255,255,255,0.08); border-radius:4px 14px 14px 14px; }
 .msg-bubble.ai { background:rgba(99,102,241,0.22); border-radius:14px 4px 14px 14px; }
@@ -2008,6 +2194,12 @@ onUnmounted(() => {
   display: flex; align-items: center; gap: 4px;
 }
 
+/* ———— ACOMPANHAMENTO ATIVO ———— */
+.followup-status-card {
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px; padding: 10px 12px;
+}
+
 /* ———— TRANSFER AVATAR ———— */
 .transfer-avatar {
   width: 28px; height: 28px; border-radius: 50%; background: rgba(99,102,241,0.2);
@@ -2051,6 +2243,16 @@ onUnmounted(() => {
 .wa-file-size { font-size: 11px; color: #6B7C88; flex-shrink: 0; }
 .wa-file-remove { background: none; border: none; cursor: pointer; color: #6B7C88; display: flex; transition: color .15s; }
 .wa-file-remove:hover { color: #EF4444; }
+
+.wa-reply-preview {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--sep-md);
+  border-radius: 10px; padding: 6px 10px; margin-bottom: 6px;
+}
+.wa-reply-preview-bar { width: 3px; align-self: stretch; border-radius: 2px; background: #6366F1; flex-shrink: 0; }
+.wa-reply-preview-body { flex: 1; min-width: 0; }
+.wa-reply-preview-sender { font-size: 11px; font-weight: 600; color: #8B93FF; }
+.wa-reply-preview-text { font-size: 12px; color: #9FB0BC; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .wa-input-row {
   display: flex;

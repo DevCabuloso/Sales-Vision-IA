@@ -15,8 +15,23 @@ async function getConnectedChannel(tenantId) {
   }
 }
 
+/**
+ * Monta o objeto "quoted" (citação) no formato Baileys/Evolution v2, se houver contexto.
+ * A Baileys exige também o conteúdo da mensagem citada (`message`), não só o `key` — sem
+ * ele o contexto sai vazio e o WhatsApp entrega a mensagem sem nenhuma citação visível.
+ */
+function buildQuoted(to, quotedWaId, quotedFromMe, quotedText) {
+  if (!quotedWaId) return undefined
+  return {
+    key: { id: quotedWaId, remoteJid: `${to}@s.whatsapp.net`, fromMe: !!quotedFromMe },
+    message: { conversation: quotedText || '' },
+  }
+}
+
 /** Envia texto via Evolution API. */
-export async function sendText(tenantId, to, body) {
+export async function sendText(tenantId, to, body, { quotedWaId, quotedFromMe, quotedText } = {}) {
+  const quoted = buildQuoted(to, quotedWaId, quotedFromMe, quotedText)
+
   // tenta canal global (tabela channels) primeiro
   const channel = await getConnectedChannel(tenantId)
   if (channel && config.evolution.apiUrl) {
@@ -24,7 +39,7 @@ export async function sendText(tenantId, to, body) {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
-      body: JSON.stringify({ number: to, text: body }),
+      body: JSON.stringify({ number: to, text: body, ...(quoted ? { quoted } : {}) }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.message || data.error || `Evolution erro ${res.status}`)
@@ -43,7 +58,7 @@ export async function sendText(tenantId, to, body) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: apiKey },
-    body: JSON.stringify({ number: to, text: body }),
+    body: JSON.stringify({ number: to, text: body, ...(quoted ? { quoted } : {}) }),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.message || data.error || `Evolution erro ${res.status}`)
@@ -51,14 +66,15 @@ export async function sendText(tenantId, to, body) {
 }
 
 /** Envia mídia (imagem, vídeo, áudio, documento) via Evolution API. */
-export async function sendMedia(tenantId, to, { buffer, mimetype, filename, caption = '' }) {
+export async function sendMedia(tenantId, to, { buffer, mimetype, filename, caption = '', quotedWaId, quotedFromMe, quotedText }) {
   const base64 = buffer.toString('base64')
   const mediatype = mimetype.startsWith('image/') ? 'image'
     : mimetype.startsWith('video/') ? 'video'
     : mimetype.startsWith('audio/') ? 'audio'
     : 'document'
 
-  const payload = { number: to, mediatype, mimetype, media: base64, fileName: filename, caption }
+  const quoted = buildQuoted(to, quotedWaId, quotedFromMe, quotedText)
+  const payload = { number: to, mediatype, mimetype, media: base64, fileName: filename, caption, ...(quoted ? { quoted } : {}) }
 
   const channel = await getConnectedChannel(tenantId)
   if (channel && config.evolution.apiUrl) {
@@ -179,12 +195,23 @@ export function parseWebhook(body) {
     return null
   }
 
+  // contextInfo carrega a citação (reply) — pode vir em qualquer um dos tipos de mensagem
+  const contextInfo =
+    msg.extendedTextMessage?.contextInfo ||
+    msg.imageMessage?.contextInfo ||
+    msg.videoMessage?.contextInfo ||
+    msg.audioMessage?.contextInfo ||
+    msg.documentMessage?.contextInfo ||
+    null
+
   const from = remoteJid.split('@')[0]
   const pushName = data?.pushName || null
   const finalText = text || `[${mediaType || 'mensagem'}]`
   return {
     from, text: finalText, mediaType, mediaMimeType, mediaFilename,
     mediaMessageId: data?.key?.id || null, mediaRemoteJid: remoteJid, mediaFromMe: fromMe,
+    waMessageId: data?.key?.id || null,
+    replyToWaId: contextInfo?.stanzaId || null,
     instanceName, fromMe, pushName,
   }
 }

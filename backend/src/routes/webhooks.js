@@ -94,6 +94,8 @@ webhooksRouter.post('/meta',
           mediaFilename: m.mediaFilename || null,
           provider:  'meta_whatsapp',
           pushName:  m.pushName || null,
+          waMessageId: m.waMessageId || null,
+          replyToWaId: m.replyToWaId || null,
         })
       }
 
@@ -166,6 +168,7 @@ webhooksRouter.post('/evolution',
           mediaType: parsed.mediaType, mediaMimeType: parsed.mediaMimeType, mediaFilename: parsed.mediaFilename,
           mediaMessageId: parsed.mediaMessageId, mediaRemoteJid: parsed.mediaRemoteJid, mediaFromMe: parsed.mediaFromMe,
           provider: 'evolution', instanceName,
+          waMessageId: parsed.waMessageId, replyToWaId: parsed.replyToWaId,
         })
         return
       }
@@ -175,6 +178,7 @@ webhooksRouter.post('/evolution',
         mediaType: parsed.mediaType, mediaMimeType: parsed.mediaMimeType, mediaFilename: parsed.mediaFilename,
         mediaMessageId: parsed.mediaMessageId, mediaRemoteJid: parsed.mediaRemoteJid, mediaFromMe: parsed.mediaFromMe,
         provider: 'evolution', instanceName, pushName: parsed.pushName,
+        waMessageId: parsed.waMessageId, replyToWaId: parsed.replyToWaId,
       })
     } catch (e) {
       console.error('[webhook evolution]', e.message)
@@ -222,6 +226,8 @@ webhooksRouter.post('/evolution/:tenantId',
           mediaFromMe: parsed.mediaFromMe,
           provider: 'evolution',
           instanceName: parsed.instanceName,
+          waMessageId: parsed.waMessageId,
+          replyToWaId: parsed.replyToWaId,
         })
         return
       }
@@ -239,6 +245,8 @@ webhooksRouter.post('/evolution/:tenantId',
         provider: 'evolution',
         instanceName: parsed.instanceName,
         pushName: parsed.pushName,
+        waMessageId: parsed.waMessageId,
+        replyToWaId: parsed.replyToWaId,
       })
     } catch (e) {
       console.error('[webhook evolution]', e.message)

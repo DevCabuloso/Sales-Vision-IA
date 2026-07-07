@@ -180,7 +180,7 @@ chatRouter.post('/start', async (req, res) => {
 chatRouter.get('/:leadId/messages', async (req, res) => {
   const { limit = 50, before, after } = req.query
   try {
-    let q = supabase.from('messages').select('id, role, text, provider, is_human_takeover, media_url, media_type, media_mimetype, media_filename, created_at')
+    let q = supabase.from('messages').select('id, role, text, provider, is_human_takeover, media_url, media_type, media_mimetype, media_filename, reply_to_id, created_at')
       .eq('lead_id', req.params.leadId)
       .eq('tenant_id', req.user.tenantId)
       .order('created_at', { ascending: !!after })
@@ -212,7 +212,10 @@ chatRouter.get('/:leadId/logs', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/messages
-const msgSchema = z.object({ text: z.string().min(1).max(4000) })
+const msgSchema = z.object({
+  text: z.string().min(1).max(4000),
+  replyToId: z.coerce.number().int().positive().optional().nullable(),
+})
 
 chatRouter.post('/:leadId/messages', async (req, res) => {
   const parsed = msgSchema.safeParse(req.body)
@@ -229,6 +232,18 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
       return res.status(403).json({ error: 'Ticket não está aberto. Atenda ou reabra antes de enviar mensagens.' })
     }
 
+    let quoted = null
+    if (parsed.data.replyToId) {
+      const quotedRows = unwrap(
+        await supabase.from('messages').select('id, role, text, wa_message_id')
+          .eq('id', parsed.data.replyToId).eq('lead_id', lead.id).eq('tenant_id', req.user.tenantId).limit(1)
+      )
+      quoted = quotedRows?.[0] || null
+      if (quoted && !quoted.wa_message_id) {
+        console.warn(`[chat] mensagem citada id=${quoted.id} não tem wa_message_id — resposta vai sair sem citação nativa no WhatsApp`)
+      }
+    }
+
     const row = unwrap(
       await supabase.from('messages').insert({
         tenant_id: req.user.tenantId,
@@ -236,6 +251,7 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
         role: 'agent',
         text: parsed.data.text,
         is_human_takeover: lead.human_takeover,
+        reply_to_id: quoted?.id || null,
       }).select('*').single()
     )
 
@@ -244,7 +260,15 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
         const { sendText } = await import('../services/whatsapp/index.js')
         const { markSentByPlatform } = await import('../services/orchestrator.js')
         markSentByPlatform(req.user.tenantId, lead.phone, parsed.data.text)
-        await sendText(req.user.tenantId, lead.phone, parsed.data.text)
+        const sent = await sendText(req.user.tenantId, lead.phone, parsed.data.text, {
+          quotedWaId: quoted?.wa_message_id || undefined,
+          quotedFromMe: quoted ? quoted.role !== 'lead' : undefined,
+          quotedText: quoted?.text || undefined,
+        })
+        if (sent?.id) {
+          await supabase.from('messages').update({ wa_message_id: sent.id }).eq('id', row.id)
+          row.wa_message_id = sent.id
+        }
       } catch (e) {
         console.warn('[chat] falha ao enviar WhatsApp:', e.message)
       }
@@ -358,6 +382,19 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
       console.warn('[chat/media] falha ao salvar no storage:', e.message)
     }
 
+    const replyToId = req.body.replyToId ? Number(req.body.replyToId) : null
+    let quoted = null
+    if (replyToId) {
+      const quotedRows = unwrap(
+        await supabase.from('messages').select('id, role, text, wa_message_id')
+          .eq('id', replyToId).eq('lead_id', lead.id).eq('tenant_id', req.user.tenantId).limit(1)
+      )
+      quoted = quotedRows?.[0] || null
+      if (quoted && !quoted.wa_message_id) {
+        console.warn(`[chat/media] mensagem citada id=${quoted.id} não tem wa_message_id — resposta vai sair sem citação nativa no WhatsApp`)
+      }
+    }
+
     const row = unwrap(
       await supabase.from('messages').insert({
         tenant_id: req.user.tenantId,
@@ -369,6 +406,7 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
         media_type: mediaType,
         media_mimetype: req.file.mimetype,
         media_filename: filename,
+        reply_to_id: quoted?.id || null,
       }).select('*').single()
     )
 
@@ -379,12 +417,19 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
         // Evolution ecoa a própria mensagem enviada via webhook (fromMe) com esse mesmo texto —
         // marca como "já processada" para não duplicar a mensagem no histórico.
         markSentByPlatform(req.user.tenantId, lead.phone, caption || `[${mediaType}]`)
-        await sendMedia(req.user.tenantId, lead.phone, {
+        const sent = await sendMedia(req.user.tenantId, lead.phone, {
           buffer: req.file.buffer,
           mimetype: req.file.mimetype,
           filename,
           caption,
+          quotedWaId: quoted?.wa_message_id || undefined,
+          quotedFromMe: quoted ? quoted.role !== 'lead' : undefined,
+          quotedText: quoted?.text || undefined,
         })
+        if (sent?.id) {
+          await supabase.from('messages').update({ wa_message_id: sent.id }).eq('id', row.id)
+          row.wa_message_id = sent.id
+        }
       } catch (e) {
         console.warn('[chat/media] WhatsApp:', e.message)
       }
@@ -584,6 +629,187 @@ chatRouter.post('/:leadId/resolve', async (req, res) => {
     })
     await logTicketEvent(req.user.tenantId, req.params.leadId, req.user.id, req.user.name, 'closed')
     res.json({ lead: row })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ─── ACOMPANHAMENTOS (sequências de mensagens automáticas) ──────
+
+async function materializeFollowupMessages(tenantId, leadId, enrollmentId, sequenceId, startedAt) {
+  const steps = unwrap(
+    await supabase.from('followup_steps').select('*')
+      .eq('sequence_id', sequenceId).eq('tenant_id', tenantId)
+      .order('order_index', { ascending: true })
+  )
+  if (!steps.length) return []
+
+  const start = new Date(startedAt).getTime()
+  return unwrap(
+    await supabase.from('followup_enrollment_messages').insert(
+      steps.map((s) => ({
+        tenant_id: tenantId,
+        enrollment_id: enrollmentId,
+        lead_id: leadId,
+        step_id: s.id,
+        order_index: s.order_index,
+        text: s.text,
+        media_url: s.media_url,
+        media_type: s.media_type,
+        media_mimetype: s.media_mimetype,
+        media_filename: s.media_filename,
+        send_at: new Date(start + s.delay_days * 86400000).toISOString(),
+      }))
+    ).select('*')
+  )
+}
+
+async function loadActiveFollowup(tenantId, leadId) {
+  const rows = unwrap(
+    await supabase.from('followup_enrollments').select('*')
+      .eq('lead_id', leadId).eq('tenant_id', tenantId).eq('status', 'active').limit(1)
+  )
+  const enrollment = rows[0]
+  if (!enrollment) return null
+
+  const [seqRows, messages] = await Promise.all([
+    supabase.from('followup_sequences').select('name').eq('id', enrollment.sequence_id).eq('tenant_id', tenantId).limit(1),
+    supabase.from('followup_enrollment_messages').select('order_index, status, send_at')
+      .eq('enrollment_id', enrollment.id).eq('tenant_id', tenantId)
+      .order('order_index', { ascending: true }),
+  ])
+  const sequenceName = unwrap(seqRows)[0]?.name || '—'
+  const msgs = unwrap(messages)
+  const sentCount = msgs.filter((m) => m.status === 'sent').length
+  const nextPending = msgs.find((m) => m.status === 'pending')
+
+  return {
+    id: enrollment.id,
+    sequence_id: enrollment.sequence_id,
+    sequence_name: sequenceName,
+    status: enrollment.status,
+    started_at: enrollment.started_at,
+    total_steps: msgs.length,
+    sent_count: sentCount,
+    next_send_at: nextPending?.send_at || null,
+  }
+}
+
+// GET /api/chat/:leadId/followup — acompanhamento ativo do lead (ou null)
+chatRouter.get('/:leadId/followup', async (req, res) => {
+  try {
+    const active = await loadActiveFollowup(req.user.tenantId, req.params.leadId)
+    res.json({ followup: active })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/chat/:leadId/followup/start — inicia um acompanhamento para o lead
+chatRouter.post('/:leadId/followup/start', async (req, res) => {
+  const { sequence_id } = req.body
+  if (!sequence_id) return res.status(400).json({ error: 'sequence_id obrigatório.' })
+
+  try {
+    const existing = await loadActiveFollowup(req.user.tenantId, req.params.leadId)
+    if (existing) return res.status(409).json({ error: 'Este contato já tem um acompanhamento ativo.', followup: existing })
+
+    const leadRows = unwrap(
+      await supabase.from('leads').select('id')
+        .eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!leadRows.length) return res.status(404).json({ error: 'Lead não encontrado.' })
+
+    const seqRows = unwrap(
+      await supabase.from('followup_sequences').select('id, name')
+        .eq('id', sequence_id).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!seqRows.length) return res.status(404).json({ error: 'Acompanhamento não encontrado.' })
+
+    const startedAt = new Date().toISOString()
+    const enrollment = unwrap(
+      await supabase.from('followup_enrollments').insert({
+        tenant_id: req.user.tenantId,
+        sequence_id,
+        lead_id: req.params.leadId,
+        created_by: req.user.id,
+        started_at: startedAt,
+      }).select('*').single()
+    )
+    await materializeFollowupMessages(req.user.tenantId, req.params.leadId, enrollment.id, sequence_id, startedAt)
+
+    res.status(201).json({ followup: await loadActiveFollowup(req.user.tenantId, req.params.leadId) })
+  } catch (e) {
+    if (e.message?.includes('23505')) return res.status(409).json({ error: 'Este contato já tem um acompanhamento ativo.' })
+    res.status(500).json({ error: e.message })
+  }
+})
+
+async function stopEnrollment(tenantId, leadId, enrollmentId, finalStatus) {
+  const rows = unwrap(
+    await supabase.from('followup_enrollments').select('id')
+      .eq('id', enrollmentId).eq('lead_id', leadId).eq('tenant_id', tenantId).eq('status', 'active').limit(1)
+  )
+  if (!rows.length) return false
+
+  await supabase.from('followup_enrollments').update({
+    status: finalStatus,
+    finished_at: new Date().toISOString(),
+  }).eq('id', enrollmentId).eq('tenant_id', tenantId)
+
+  await supabase.from('followup_enrollment_messages').update({ status: 'cancelled' })
+    .eq('enrollment_id', enrollmentId).eq('tenant_id', tenantId).eq('status', 'pending')
+
+  return true
+}
+
+// POST /api/chat/:leadId/followup/:enrollmentId/cancel
+chatRouter.post('/:leadId/followup/:enrollmentId/cancel', async (req, res) => {
+  try {
+    const stopped = await stopEnrollment(req.user.tenantId, req.params.leadId, req.params.enrollmentId, 'cancelled')
+    if (!stopped) return res.status(404).json({ error: 'Acompanhamento ativo não encontrado.' })
+    res.json({ cancelled: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/chat/:leadId/followup/:enrollmentId/finish
+chatRouter.post('/:leadId/followup/:enrollmentId/finish', async (req, res) => {
+  try {
+    const stopped = await stopEnrollment(req.user.tenantId, req.params.leadId, req.params.enrollmentId, 'completed')
+    if (!stopped) return res.status(404).json({ error: 'Acompanhamento ativo não encontrado.' })
+    res.json({ finished: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/chat/:leadId/followup/:enrollmentId/restart
+chatRouter.post('/:leadId/followup/:enrollmentId/restart', async (req, res) => {
+  try {
+    const rows = unwrap(
+      await supabase.from('followup_enrollments').select('sequence_id')
+        .eq('id', req.params.enrollmentId).eq('lead_id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!rows.length) return res.status(404).json({ error: 'Acompanhamento não encontrado.' })
+    const sequenceId = rows[0].sequence_id
+
+    await stopEnrollment(req.user.tenantId, req.params.leadId, req.params.enrollmentId, 'cancelled')
+
+    const startedAt = new Date().toISOString()
+    const enrollment = unwrap(
+      await supabase.from('followup_enrollments').insert({
+        tenant_id: req.user.tenantId,
+        sequence_id: sequenceId,
+        lead_id: req.params.leadId,
+        created_by: req.user.id,
+        started_at: startedAt,
+      }).select('*').single()
+    )
+    await materializeFollowupMessages(req.user.tenantId, req.params.leadId, enrollment.id, sequenceId, startedAt)
+
+    res.status(201).json({ followup: await loadActiveFollowup(req.user.tenantId, req.params.leadId) })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
