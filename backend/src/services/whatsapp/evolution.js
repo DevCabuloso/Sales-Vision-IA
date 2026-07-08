@@ -215,3 +215,40 @@ export function parseWebhook(body) {
     instanceName, fromMe, pushName,
   }
 }
+
+// ACK da Baileys (numérico) ou nome do status (Evolution v2) → nosso status interno
+const ACK_STATUS_MAP = {
+  0: 'failed', ERROR: 'failed',
+  1: 'sent', PENDING: 'sent',
+  2: 'sent', SERVER_ACK: 'sent',
+  3: 'delivered', DELIVERY_ACK: 'delivered',
+  4: 'read', READ: 'read',
+  5: 'read', PLAYED: 'read',
+}
+
+/**
+ * Extrai status de entrega de um webhook da Evolution (evento messages.update).
+ * Retorna [{ messageId, status, instanceName }] — status: 'sent' | 'delivered' | 'read' | 'failed'
+ */
+export function parseWebhookStatus(body) {
+  const event = body?.event
+  if (event !== 'messages.update') return []
+
+  const instanceName = body?.instance || body?.instanceName || null
+  const dataRaw = body?.data
+  const items = Array.isArray(dataRaw) ? dataRaw : (dataRaw ? [dataRaw] : [])
+
+  const out = []
+  for (const item of items) {
+    const messageId = item?.key?.id || item?.keyId || null
+    if (!messageId) continue
+    const rawAck = item?.update?.status ?? item?.status ?? item?.update?.ack ?? item?.ack
+    const status = ACK_STATUS_MAP[rawAck]
+    if (!status) {
+      console.log('[evolution.parseWebhookStatus] ack não reconhecido:', rawAck, '| item:', JSON.stringify(item).slice(0, 300))
+      continue
+    }
+    out.push({ messageId, status, instanceName })
+  }
+  return out
+}

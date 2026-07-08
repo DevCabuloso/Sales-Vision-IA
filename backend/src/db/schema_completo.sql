@@ -213,6 +213,8 @@ CREATE TABLE IF NOT EXISTS broadcast_campaigns (
   content         TEXT        NOT NULL,
   template_id     UUID        REFERENCES templates(id) ON DELETE SET NULL,
   scheduled_at    TIMESTAMPTZ,
+  min_interval_seconds INTEGER NOT NULL DEFAULT 2,
+  max_interval_seconds INTEGER NOT NULL DEFAULT 5,
   sent_count      INTEGER     NOT NULL DEFAULT 0,
   delivered_count INTEGER     NOT NULL DEFAULT 0,
   read_count      INTEGER     NOT NULL DEFAULT 0,
@@ -228,14 +230,19 @@ CREATE TABLE IF NOT EXISTS broadcast_contacts (
   id          BIGSERIAL   PRIMARY KEY,
   campaign_id UUID        NOT NULL REFERENCES broadcast_campaigns(id) ON DELETE CASCADE,
   tenant_id   UUID        NOT NULL REFERENCES tenants(id)             ON DELETE CASCADE,
-  name        TEXT,
-  phone       TEXT        NOT NULL,
-  status      TEXT        NOT NULL DEFAULT 'pending',
-  sent_at     TIMESTAMPTZ,
-  error       TEXT,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  name          TEXT,
+  phone         TEXT        NOT NULL,
+  status        TEXT        NOT NULL DEFAULT 'pending',
+  wa_message_id TEXT,
+  sent_at       TIMESTAMPTZ,
+  delivered_at  TIMESTAMPTZ,
+  read_at       TIMESTAMPTZ,
+  error         TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_broadcast_contacts_campaign ON broadcast_contacts(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_broadcast_contacts_wa_message_id
+  ON broadcast_contacts(wa_message_id) WHERE wa_message_id IS NOT NULL;
 
 -- ─── SCHEDULED MESSAGES (mensagem avulsa agendada por lead) ─────
 -- status: 'pending' | 'sent' | 'cancelled' | 'failed'

@@ -6,12 +6,19 @@ import { requireAuth, requireTenant } from '../middleware/auth.js'
 export const broadcastRouter = Router()
 broadcastRouter.use(requireAuth, requireTenant)
 
-const campaignSchema = z.object({
+const campaignBaseSchema = z.object({
   name:         z.string().min(1).max(200),
   content:      z.string().min(1).max(4000),
   template_id:  z.string().uuid().optional().nullable(),
   scheduled_at: z.string().datetime().optional().nullable(),
+  min_interval_seconds: z.number().int().min(1).max(600).optional(),
+  max_interval_seconds: z.number().int().min(1).max(600).optional(),
 })
+const intervalRefine = (d) =>
+  d.min_interval_seconds == null || d.max_interval_seconds == null || d.max_interval_seconds >= d.min_interval_seconds
+const intervalRefineOpts = { message: 'O intervalo máximo deve ser maior ou igual ao mínimo.', path: ['max_interval_seconds'] }
+
+const campaignSchema = campaignBaseSchema.refine(intervalRefine, intervalRefineOpts)
 
 // ─── CAMPAIGNS ───
 
@@ -55,9 +62,11 @@ broadcastRouter.post('/campaigns', async (req, res) => {
   }
 })
 
+const campaignPatchSchema = campaignBaseSchema.partial().refine(intervalRefine, intervalRefineOpts)
+
 // PATCH /api/broadcast/campaigns/:id
 broadcastRouter.patch('/campaigns/:id', async (req, res) => {
-  const partial = campaignSchema.partial().safeParse(req.body)
+  const partial = campaignPatchSchema.safeParse(req.body)
   if (!partial.success) return res.status(400).json({ error: partial.error.issues[0].message })
 
   try {
@@ -190,6 +199,7 @@ const importLeadsSchema = z.object({
   stages:   z.array(z.string()).optional(),
   queueIds: z.array(z.string().uuid()).optional(),
   tags:     z.array(z.string()).optional(),
+  leadIds:  z.array(z.string().uuid()).optional(),
 })
 
 // POST /api/broadcast/campaigns/:id/import-leads — importa da base de contatos/leads,
@@ -205,13 +215,18 @@ broadcastRouter.post('/campaigns/:id/import-leads', async (req, res) => {
     )
     if (!campRows.length) return res.status(404).json({ error: 'Campanha não encontrada.' })
 
-    const { stages, queueIds, tags } = parsed.data
+    const { stages, queueIds, tags, leadIds } = parsed.data
     let q = supabase.from('leads').select('name, phone')
       .eq('tenant_id', req.user.tenantId)
       .not('phone', 'is', null)
-    if (stages?.length) q = q.in('stage', stages)
-    if (queueIds?.length) q = q.in('queue_id', queueIds)
-    if (tags?.length) q = q.overlaps('tags', tags)
+    if (leadIds?.length) {
+      // seleção manual de contatos específicos — ignora os demais filtros
+      q = q.in('id', leadIds)
+    } else {
+      if (stages?.length) q = q.in('stage', stages)
+      if (queueIds?.length) q = q.in('queue_id', queueIds)
+      if (tags?.length) q = q.overlaps('tags', tags)
+    }
 
     const leads = unwrap(await q.limit(5000))
     if (!leads.length) return res.json({ matched: 0, imported: 0, skipped: 0 })
@@ -273,6 +288,11 @@ export async function processBroadcast(tenantId, campaign) {
       .order('id').limit(5000)
   )
 
+  // intervalo aleatório entre envios (evita padrão uniforme de robô); default 2-5s
+  const minSec = campaign.min_interval_seconds || 2
+  const maxSec = Math.max(campaign.max_interval_seconds || 5, minSec)
+  const nextDelayMs = () => (minSec + Math.random() * (maxSec - minSec)) * 1000
+
   let sent = 0
   let idx = 0
   for (const c of contacts) {
@@ -282,12 +302,15 @@ export async function processBroadcast(tenantId, campaign) {
       if (campCheck?.status !== 'sending') break
     }
     try {
-      await sendText(tenantId, c.phone, campaign.content)
-      await supabase.from('broadcast_contacts').update({ status: 'sent', sent_at: new Date().toISOString() })
-        .eq('id', c.id)
+      const result = await sendText(tenantId, c.phone, campaign.content)
+      await supabase.from('broadcast_contacts').update({
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+        wa_message_id: result?.id || null,
+      }).eq('id', c.id)
       sent++
-      // throttle: 1 por segundo para evitar bloqueio
-      await new Promise((r) => setTimeout(r, 1000))
+      // throttle: intervalo aleatório configurado na campanha, para simular envio humano
+      await new Promise((r) => setTimeout(r, nextDelayMs()))
     } catch (e) {
       await supabase.from('broadcast_contacts').update({ status: 'failed', error: e.message })
         .eq('id', c.id)

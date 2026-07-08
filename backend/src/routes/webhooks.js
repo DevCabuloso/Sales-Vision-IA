@@ -8,6 +8,59 @@ import { handleInboundMessage, handleOutboundMessage } from '../services/orchest
 
 export const webhooksRouter = Router()
 
+// Recalcula os contadores agregados da campanha a partir dos contatos (evita
+// race condition de incrementos concorrentes vindos de múltiplos webhooks).
+async function recomputeBroadcastCounts(campaignId) {
+  const rows = unwrap(
+    await supabase.from('broadcast_contacts').select('status').eq('campaign_id', campaignId)
+  )
+  const delivered = rows.filter((r) => r.status === 'delivered' || r.status === 'read').length
+  const read = rows.filter((r) => r.status === 'read').length
+  await supabase.from('broadcast_campaigns').update({
+    delivered_count: delivered,
+    read_count: read,
+    updated_at: new Date().toISOString(),
+  }).eq('id', campaignId)
+}
+
+// Aplica um evento de status (sent/delivered/read) a um contato de campanha,
+// casando pelo wa_message_id salvo no envio. Se não achar (mensagem de
+// conversa normal, não de campanha), simplesmente não faz nada.
+async function applyBroadcastStatus(tenantId, messageId, status) {
+  if (!messageId || !['delivered', 'read'].includes(status)) return
+  const patch = { status }
+  if (status === 'delivered') patch.delivered_at = new Date().toISOString()
+  if (status === 'read') patch.read_at = new Date().toISOString()
+
+  const rows = unwrap(
+    await supabase.from('broadcast_contacts')
+      .update(patch)
+      .eq('tenant_id', tenantId)
+      .eq('wa_message_id', messageId)
+      .neq('status', 'read') // não regride de 'read' para 'delivered' em evento fora de ordem
+      .select('campaign_id')
+  )
+  if (!rows?.length) return
+  await recomputeBroadcastCounts(rows[0].campaign_id)
+}
+
+// Resolve o tenant a partir do nome da instância Evolution (channels ou,
+// em fallback, integrations legado por-tenant).
+async function resolveEvolutionTenant(instanceName) {
+  if (!instanceName) return null
+  const chRows = unwrap(
+    await supabase.from('channels').select('tenant_id')
+      .eq('instance_name', instanceName).limit(1)
+  )
+  if (chRows?.[0]?.tenant_id) return chRows[0].tenant_id
+
+  const intRows = unwrap(
+    await supabase.from('integrations').select('tenant_id, meta')
+      .eq('provider', 'evolution').eq('status', 'connected')
+  )
+  return intRows?.find((r) => r.meta?.instanceName === instanceName)?.tenant_id || null
+}
+
 // GET /webhooks/ping
 webhooksRouter.get('/ping', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }))
 
@@ -103,7 +156,11 @@ webhooksRouter.post('/meta',
       for (const s of statuses) {
         if (s.status === 'failed') {
           console.error(`[webhook meta] mensagem ${s.messageId} falhou para ${s.recipientId}: ${s.error}`)
+          continue
         }
+        const match = rows.find((r) => r.meta?.phoneNumberId === s.phoneNumberId)
+        if (!match) continue
+        await applyBroadcastStatus(match.tenant_id, s.messageId, s.status)
       }
     } catch (e) {
       console.error('[webhook meta]', e.message)
@@ -130,31 +187,24 @@ webhooksRouter.post('/evolution',
 
     try {
       const event = req.body?.event || '(sem event)'
+
+      // Status de entrega (sent/delivered/read) — evento messages.update
+      const statuses = evolution.parseWebhookStatus(req.body)
+      if (statuses.length) {
+        for (const s of statuses) {
+          const tId = await resolveEvolutionTenant(s.instanceName)
+          if (!tId) continue
+          await applyBroadcastStatus(tId, s.messageId, s.status)
+        }
+      }
+
       const parsed = evolution.parseWebhook(req.body)
       if (!parsed) return
 
       const instanceName = parsed.instanceName
       console.log(`[webhook evolution] event=${event} instance=${instanceName}`)
 
-      // Resolve tenant pelo nome da instância (channels ou integrations)
-      let tenantId = null
-      if (instanceName) {
-        const chRows = unwrap(
-          await supabase.from('channels').select('tenant_id')
-            .eq('instance_name', instanceName).limit(1)
-        )
-        tenantId = chRows?.[0]?.tenant_id || null
-      }
-      if (!tenantId) {
-        // fallback: busca em integrations pelo instance_name no campo meta
-        const intRows = unwrap(
-          await supabase.from('integrations').select('tenant_id, meta')
-            .eq('provider', 'evolution').eq('status', 'connected')
-        )
-        const match = intRows?.find((r) => r.meta?.instanceName === instanceName)
-        tenantId = match?.tenant_id || null
-      }
-
+      const tenantId = await resolveEvolutionTenant(instanceName)
       if (!tenantId) {
         console.warn(`[webhook evolution] instância não reconhecida: ${instanceName}`)
         return
@@ -206,6 +256,14 @@ webhooksRouter.post('/evolution/:tenantId',
     try {
       const event = req.body?.event || '(sem event)'
       console.log(`[webhook evolution] tenant=${req.params.tenantId} event=${event}`)
+
+      // Status de entrega (sent/delivered/read) — evento messages.update
+      const statuses = evolution.parseWebhookStatus(req.body)
+      if (statuses.length) {
+        for (const s of statuses) {
+          await applyBroadcastStatus(req.params.tenantId, s.messageId, s.status)
+        }
+      }
 
       const parsed = evolution.parseWebhook(req.body)
       if (!parsed) return

@@ -72,6 +72,19 @@
               <v-col cols="6" class="text-center"><div class="text-h5 font-weight-black" style="color:#A78BFA">{{ activeCampaign.replied_count }}</div><div class="text-caption" style="color:#9FB0BC">Respondidas</div></v-col>
             </v-row>
           </v-card>
+
+          <v-card class="glass pa-5 mt-4" border>
+            <div class="text-subtitle-2 font-weight-bold mb-3">Intervalo entre envios</div>
+            <template v-if="['draft', 'scheduled'].includes(activeCampaign.status)">
+              <div class="d-flex ga-3 mb-3">
+                <v-text-field v-model.number="intervalForm.min_interval_seconds" label="Mínimo (s)" type="number" min="1" max="600" density="compact" variant="outlined" hide-details />
+                <v-text-field v-model.number="intervalForm.max_interval_seconds" label="Máximo (s)" type="number" min="1" max="600" density="compact" variant="outlined" hide-details />
+              </div>
+              <v-btn size="small" color="primary" variant="tonal" :loading="savingInterval" @click="doSaveInterval">Salvar intervalo</v-btn>
+              <v-alert v-if="intervalError" type="error" variant="tonal" density="compact" :text="intervalError" class="mt-2" />
+            </template>
+            <p v-else class="text-body-2" style="color:#9FB0BC">Entre {{ activeCampaign.min_interval_seconds }}s e {{ activeCampaign.max_interval_seconds }}s por mensagem.</p>
+          </v-card>
         </v-col>
 
         <v-col cols="12" md="8">
@@ -79,6 +92,7 @@
             <div class="d-flex align-center justify-space-between mb-4">
               <div class="text-subtitle-2 font-weight-bold">Contatos ({{ contacts.length }})</div>
               <div v-if="['draft', 'scheduled'].includes(activeCampaign.status)" class="d-flex ga-2">
+                <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-account-check-outline" @click="openSelectContacts">Selecionar Contatos</v-btn>
                 <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-account-multiple-outline" @click="openImportFromBase">Importar da Base</v-btn>
                 <v-btn size="small" color="primary" prepend-icon="mdi-import" @click="importDialog = true">Colar Lista</v-btn>
                 <v-btn v-if="contacts.length" size="small" variant="tonal" color="error" prepend-icon="mdi-broom" @click="doClearContacts">Limpar Lista</v-btn>
@@ -118,7 +132,12 @@
             @update:model-value="applyCampaignTemplate"
           />
           <v-textarea v-model="createForm.content" label="Mensagem" placeholder="Olá {nome}! Estamos com uma oferta especial..." rows="4" auto-grow maxlength="4000" class="mb-3" />
-          <v-text-field v-model="createForm.scheduled_at" label="Agendar para (opcional)" type="datetime-local" />
+          <v-text-field v-model="createForm.scheduled_at" label="Agendar para (opcional)" type="datetime-local" class="mb-3" />
+          <div class="text-caption mb-1" style="color:#9FB0BC">Intervalo entre cada envio (segundos) — evita padrão de robô</div>
+          <div class="d-flex ga-3">
+            <v-text-field v-model.number="createForm.min_interval_seconds" label="Mínimo" type="number" min="1" max="600" density="compact" variant="outlined" style="max-width:120px" />
+            <v-text-field v-model.number="createForm.max_interval_seconds" label="Máximo" type="number" min="1" max="600" density="compact" variant="outlined" style="max-width:120px" />
+          </div>
           <v-alert v-if="createError" type="error" variant="tonal" density="compact" :text="createError" class="mt-2" />
         </v-card-text>
         <v-card-actions class="px-4 pb-4">
@@ -174,6 +193,41 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Dialog: selecionar contatos individualmente -->
+    <v-dialog v-model="selectDialog" max-width="650">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Selecionar Contatos</v-card-title>
+        <v-card-text>
+          <v-text-field
+            v-model="leadSearch" label="Buscar por nome ou telefone" prepend-inner-icon="mdi-magnify"
+            density="compact" variant="outlined" clearable class="mb-3"
+          />
+          <div class="text-caption mb-2" style="color:#9FB0BC">{{ selectedLeadIds.length }} selecionado(s) de {{ availableLeads.length }} contato(s) disponíveis</div>
+          <v-data-table
+            v-model="selectedLeadIds"
+            :headers="leadHeaders"
+            :items="availableLeads"
+            :loading="loadingLeads"
+            item-value="id"
+            show-select
+            density="compact"
+            class="bg-transparent"
+            height="360"
+            fixed-header
+            :items-per-page="50"
+          >
+            <template #no-data><div class="py-6 text-center" style="color:#6B7C88">Nenhum contato disponível.</div></template>
+          </v-data-table>
+          <v-alert v-if="selectError" type="error" variant="tonal" density="compact" :text="selectError" class="mt-2" />
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="selectDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" :loading="selecting" :disabled="!selectedLeadIds.length" @click="doSelectContacts">Adicionar {{ selectedLeadIds.length || '' }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -196,7 +250,10 @@ const importDialog = ref(false)
 const importText = ref('')
 const importError = ref('')
 const createError = ref('')
-const createForm = reactive({ name: '', content: '', scheduled_at: '', template_id: null })
+const createForm = reactive({ name: '', content: '', scheduled_at: '', template_id: null, min_interval_seconds: 2, max_interval_seconds: 5 })
+const intervalForm = reactive({ min_interval_seconds: 2, max_interval_seconds: 5 })
+const savingInterval = ref(false)
+const intervalError = ref('')
 const templates = ref([])
 const templateOptions = computed(() =>
   templates.value.map((t) => ({ title: `${t.name} (${t.category})`, value: t.id }))
@@ -211,6 +268,27 @@ const stageOptions = ['Novo Lead', 'Em Qualificação', 'Qualificado', 'Reunião
 const queues = ref([])
 const tagOptions = ref([])
 const queueOptions = computed(() => queues.value.map((q) => ({ title: q.name, value: q.id })))
+
+// ——— selecionar contatos individualmente já cadastrados no sistema ———
+const selectDialog = ref(false)
+const selecting = ref(false)
+const selectError = ref('')
+const allLeads = ref([])
+const loadingLeads = ref(false)
+const leadSearch = ref('')
+const selectedLeadIds = ref([])
+const leadHeaders = [
+  { title: 'Nome', key: 'name' },
+  { title: 'Telefone', key: 'phone' },
+  { title: 'Etapa', key: 'stage' },
+]
+const availableLeads = computed(() => {
+  const existingPhones = new Set(contacts.value.map((c) => c.phone))
+  const term = leadSearch.value.trim().toLowerCase()
+  return allLeads.value
+    .filter((l) => l.phone && !existingPhones.has(l.phone))
+    .filter((l) => !term || (l.name || '').toLowerCase().includes(term) || l.phone.includes(term))
+})
 
 const headers = [
   { title: 'Campanha', key: 'name' },
@@ -236,7 +314,7 @@ function formatDate(d) { if (!d) return '—'; return new Date(d).toLocaleDateSt
 
 async function load() { loading.value = true; try { const { campaigns: c } = await api.listCampaigns(); campaigns.value = c } catch (e) { toast.error(e.message) } finally { loading.value = false } }
 
-function openCreate() { Object.assign(createForm, { name: '', content: '', scheduled_at: '', template_id: null }); createError.value = ''; createDialog.value = true }
+function openCreate() { Object.assign(createForm, { name: '', content: '', scheduled_at: '', template_id: null, min_interval_seconds: 2, max_interval_seconds: 5 }); createError.value = ''; createDialog.value = true }
 
 function applyCampaignTemplate(templateId) {
   const tpl = templates.value.find((t) => t.id === templateId)
@@ -249,6 +327,9 @@ async function loadTemplates() {
 
 async function saveCampaign() {
   if (!createForm.name || !createForm.content) { createError.value = 'Nome e mensagem são obrigatórios.'; return }
+  const minInt = createForm.min_interval_seconds || 2
+  const maxInt = createForm.max_interval_seconds || 5
+  if (maxInt < minInt) { createError.value = 'O intervalo máximo deve ser maior ou igual ao mínimo.'; return }
   saving.value = true
   try {
     const { campaign } = await api.createCampaign({
@@ -256,6 +337,8 @@ async function saveCampaign() {
       content: createForm.content,
       template_id: createForm.template_id || null,
       scheduled_at: createForm.scheduled_at ? new Date(createForm.scheduled_at).toISOString() : null,
+      min_interval_seconds: minInt,
+      max_interval_seconds: maxInt,
     })
     campaigns.value.unshift(campaign); createDialog.value = false; toast.success('Campanha criada.')
   }
@@ -264,7 +347,23 @@ async function saveCampaign() {
 
 async function openManage(camp) {
   activeCampaign.value = camp; loadingContacts.value = true
+  intervalError.value = ''
+  Object.assign(intervalForm, { min_interval_seconds: camp.min_interval_seconds || 2, max_interval_seconds: camp.max_interval_seconds || 5 })
   try { const { contacts: c } = await api.listBroadcastContacts(camp.id); contacts.value = c } catch (e) { toast.error(e.message) } finally { loadingContacts.value = false }
+}
+
+async function doSaveInterval() {
+  const minInt = intervalForm.min_interval_seconds || 2
+  const maxInt = intervalForm.max_interval_seconds || 5
+  if (maxInt < minInt) { intervalError.value = 'O intervalo máximo deve ser maior ou igual ao mínimo.'; return }
+  intervalError.value = ''; savingInterval.value = true
+  try {
+    const { campaign } = await api.updateCampaign(activeCampaign.value.id, { min_interval_seconds: minInt, max_interval_seconds: maxInt })
+    activeCampaign.value = { ...activeCampaign.value, ...campaign }
+    const idx = campaigns.value.findIndex((c) => c.id === campaign.id)
+    if (idx !== -1) campaigns.value[idx] = { ...campaigns.value[idx], ...campaign }
+    toast.success('Intervalo atualizado.')
+  } catch (e) { intervalError.value = e.message } finally { savingInterval.value = false }
 }
 
 async function doRemoveContact(item) {
@@ -311,6 +410,28 @@ async function doImportFromBase() {
     importBaseDialog.value = false
     toast.success(`${imported} contato(s) importado(s)${skipped ? ` (${skipped} já estavam na lista)` : ''}.`)
   } catch (e) { importBaseError.value = e.message } finally { importingBase.value = false }
+}
+
+async function openSelectContacts() {
+  selectError.value = ''
+  selectedLeadIds.value = []
+  leadSearch.value = ''
+  selectDialog.value = true
+  if (!allLeads.value.length) {
+    loadingLeads.value = true
+    try { allLeads.value = await api.listLeads() } catch (e) { selectError.value = e.message } finally { loadingLeads.value = false }
+  }
+}
+
+async function doSelectContacts() {
+  if (!selectedLeadIds.value.length) return
+  selectError.value = ''; selecting.value = true
+  try {
+    const { imported, skipped } = await api.importLeadsToCampaign(activeCampaign.value.id, { leadIds: selectedLeadIds.value })
+    await openManage(activeCampaign.value)
+    selectDialog.value = false
+    toast.success(`${imported} contato(s) adicionado(s)${skipped ? ` (${skipped} já estavam na lista)` : ''}.`)
+  } catch (e) { selectError.value = e.message } finally { selecting.value = false }
 }
 
 async function loadFilterOptions() {
