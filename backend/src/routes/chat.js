@@ -41,16 +41,18 @@ async function logTicketEvent(tenantId, leadId, userId, userName, action, toUser
 // GET /api/chat — lista conversas
 chatRouter.get('/', async (req, res) => {
   try {
-    const { stage, assigned_to } = req.query
+    const { stage, assigned_to, type } = req.query
 
     let q = supabase.from('leads')
-      .select('id, name, phone, stage, human_takeover, conversation_status, assigned_to, channel_id, updated_at')
+      .select('id, name, phone, stage, human_takeover, conversation_status, assigned_to, channel_id, is_group, group_subject, updated_at')
       .eq('tenant_id', req.user.tenantId)
       .order('updated_at', { ascending: false })
       .limit(300)
 
     if (stage) q = q.eq('stage', stage)
     if (assigned_to) q = q.eq('assigned_to', assigned_to)
+    if (type === 'group') q = q.eq('is_group', true)
+    if (type === 'private') q = q.eq('is_group', false)
 
     const leads = unwrap(await q)
     if (!leads.length) return res.json({ leads: [] })
@@ -83,9 +85,29 @@ chatRouter.get('/', async (req, res) => {
     }))
 
     if (!isManager(req.user.role)) {
-      result = result.filter((l) =>
-        l.conversation_status === 'pending' || l.assigned_to === req.user.id
-      )
+      const hasGroups = result.some((l) => l.is_group)
+      let groupAccessByLead = {}
+      let showGroupsToAll = true
+      if (hasGroups) {
+        const groupLeadIds = result.filter((l) => l.is_group).map((l) => l.id)
+        const [accessRows, tenantRow] = await Promise.all([
+          supabase.from('whatsapp_group_access').select('lead_id, user_id').in('lead_id', groupLeadIds),
+          supabase.from('tenants').select('op_settings').eq('id', req.user.tenantId).limit(1),
+        ])
+        for (const row of unwrap(accessRows)) {
+          (groupAccessByLead[row.lead_id] ||= []).push(row.user_id)
+        }
+        showGroupsToAll = unwrap(tenantRow)?.[0]?.op_settings?.show_groups_to_all !== false
+      }
+
+      result = result.filter((l) => {
+        if (l.is_group) {
+          const granted = groupAccessByLead[l.id]
+          if (granted?.length) return granted.includes(req.user.id)
+          return showGroupsToAll
+        }
+        return l.conversation_status === 'pending' || l.assigned_to === req.user.id
+      })
     }
 
     res.json({ leads: result })
@@ -180,7 +202,7 @@ chatRouter.post('/start', async (req, res) => {
 chatRouter.get('/:leadId/messages', async (req, res) => {
   const { limit = 50, before, after } = req.query
   try {
-    let q = supabase.from('messages').select('id, role, text, provider, is_human_takeover, media_url, media_type, media_mimetype, media_filename, reply_to_id, created_at')
+    let q = supabase.from('messages').select('id, role, text, provider, is_human_takeover, media_url, media_type, media_mimetype, media_filename, reply_to_id, sender_jid, sender_name, created_at')
       .eq('lead_id', req.params.leadId)
       .eq('tenant_id', req.user.tenantId)
       .order('created_at', { ascending: !!after })
@@ -206,6 +228,55 @@ chatRouter.get('/:leadId/logs', async (req, res) => {
         .limit(50)
     )
     res.json({ logs: rows })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/chat/:leadId/group-access — lista operadores do tenant + quem já tem acesso ao grupo
+chatRouter.get('/:leadId/group-access', async (req, res) => {
+  if (!isManager(req.user.role)) return res.status(403).json({ error: 'Acesso restrito a administradores.' })
+  try {
+    const leadRows = unwrap(
+      await supabase.from('leads').select('id, is_group')
+        .eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!leadRows.length) return res.status(404).json({ error: 'Conversa não encontrada.' })
+    if (!leadRows[0].is_group) return res.status(400).json({ error: 'Esta conversa não é um grupo.' })
+
+    const [operators, access] = await Promise.all([
+      supabase.from('users').select('id, name, email').eq('tenant_id', req.user.tenantId).eq('active', true).order('name'),
+      supabase.from('whatsapp_group_access').select('user_id').eq('lead_id', req.params.leadId),
+    ])
+    res.json({
+      operators: unwrap(operators),
+      granted_user_ids: unwrap(access).map((r) => r.user_id),
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// PUT /api/chat/:leadId/group-access — substitui a lista de usuários com acesso ao grupo
+chatRouter.put('/:leadId/group-access', async (req, res) => {
+  if (!isManager(req.user.role)) return res.status(403).json({ error: 'Acesso restrito a administradores.' })
+  const userIds = Array.isArray(req.body?.user_ids) ? req.body.user_ids : null
+  if (!userIds) return res.status(400).json({ error: 'user_ids deve ser um array.' })
+  try {
+    const leadRows = unwrap(
+      await supabase.from('leads').select('id, is_group')
+        .eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!leadRows.length) return res.status(404).json({ error: 'Conversa não encontrada.' })
+    if (!leadRows[0].is_group) return res.status(400).json({ error: 'Esta conversa não é um grupo.' })
+
+    await supabase.from('whatsapp_group_access').delete().eq('lead_id', req.params.leadId)
+    if (userIds.length) {
+      await supabase.from('whatsapp_group_access').insert(
+        userIds.map((uid) => ({ tenant_id: req.user.tenantId, lead_id: req.params.leadId, user_id: uid }))
+      )
+    }
+    res.json({ granted_user_ids: userIds })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

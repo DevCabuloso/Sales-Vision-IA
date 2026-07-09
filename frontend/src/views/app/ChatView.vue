@@ -195,6 +195,16 @@
         </div>
       </div>
 
+      <div class="sidebar-type-tabs">
+        <button class="type-tab-btn" :class="{ active: filterType === 'all' }" @click="filterType = 'all'">Todos</button>
+        <button class="type-tab-btn" :class="{ active: filterType === 'private' }" @click="filterType = 'private'">
+          <v-icon icon="mdi-account-outline" size="12" class="mr-1" />Privados
+        </button>
+        <button class="type-tab-btn" :class="{ active: filterType === 'group' }" @click="filterType = 'group'">
+          <v-icon icon="mdi-account-group" size="12" class="mr-1" />Grupos
+        </button>
+      </div>
+
       <div class="sidebar-tabs">
         <button v-for="tab in tabs" :key="tab.key" class="tab-btn" :class="{ active: activeTab === tab.key }" @click="activeTab = tab.key">
           <v-icon :icon="tab.icon" size="13" class="mr-1" />
@@ -228,6 +238,9 @@
               {{ operatorName(conv.assigned_to) }}
             </div>
             <div class="conv-row3">
+              <v-chip v-if="conv.is_group" size="x-small" variant="tonal" color="indigo" class="conv-tag">
+                <v-icon icon="mdi-account-group" size="10" class="mr-1" />Grupo
+              </v-chip>
               <v-chip v-if="conv.stage" size="x-small" variant="tonal" :color="stageColor(conv.stage)" class="conv-tag">{{ conv.stage }}</v-chip>
               <v-chip size="x-small" variant="tonal" color="success" class="conv-tag">
                 <v-icon icon="mdi-whatsapp" size="10" class="mr-1" />{{ conv.channel_name || 'WhatsApp' }}
@@ -436,6 +449,9 @@
                   <div v-if="msg.role === 'agent' || msg.role === 'ai'" class="msg-role-badge">
                     {{ msg.role === 'ai' ? '⬦ IA' : '⬦ Agente' }}
                   </div>
+                  <div v-if="currentLead?.is_group && msg.role === 'lead'" class="msg-role-badge" style="color:#A5B4FC">
+                    {{ msg.sender_name || (msg.sender_jid ? msg.sender_jid.split('@')[0] : 'Participante') }}
+                  </div>
 
                   <div v-if="msg.reply_to_id" class="quoted-msg-box">
                     <div class="quoted-msg-sender">{{ quotedMessage(msg) ? quotedSenderLabel(quotedMessage(msg)) : 'Mensagem original' }}</div>
@@ -549,6 +565,32 @@
                     {{ tag }}
                   </span>
                 </div>
+              </div>
+
+              <!-- Acesso ao grupo -->
+              <div v-if="currentLead.is_group && isManagerRole" class="mt-4">
+                <div class="text-caption mb-2" style="color:#9FB0BC;font-weight:600;letter-spacing:.5px">ACESSO AO GRUPO</div>
+                <div class="text-caption mb-2" style="color:#6B7C88">
+                  Sem seleção, vale a configuração geral de Operação ("Mostrar grupos para todos os agentes"). Selecionando alguém aqui, só quem foi marcado enxerga este grupo.
+                </div>
+                <div v-if="groupAccessLoading" class="text-center py-2">
+                  <v-progress-circular indeterminate size="18" color="primary" />
+                </div>
+                <template v-else>
+                  <div class="d-flex flex-column ga-1" style="max-height:180px; overflow-y:auto">
+                    <v-checkbox
+                      v-for="op in groupOperators" :key="op.id"
+                      v-model="groupGrantedIds" :value="op.id"
+                      :label="op.name || op.email"
+                      color="primary" hide-details density="compact"
+                    />
+                  </div>
+                  <v-btn
+                    size="small" variant="tonal" color="primary" block class="mt-2"
+                    :loading="groupAccessSaving"
+                    @click="saveGroupAccess"
+                  >Salvar acesso</v-btn>
+                </template>
               </div>
 
               <!-- Ações rápidas -->
@@ -694,10 +736,11 @@
 
           <!-- Preview de arquivo -->
           <div v-if="attachedFile" class="wa-file-preview">
-            <v-icon :icon="fileTypeIcon(attachedFile)" size="18" color="primary" />
+            <img v-if="attachedFilePreviewUrl" :src="attachedFilePreviewUrl" class="wa-file-thumb" alt="" />
+            <v-icon v-else :icon="fileTypeIcon(attachedFile)" size="18" color="primary" />
             <span class="wa-file-name">{{ attachedFile.name }}</span>
             <span class="wa-file-size">{{ formatFileSize(attachedFile.size) }}</span>
-            <button class="wa-file-remove" @click="attachedFile = null">
+            <button class="wa-file-remove" @click="clearAttachedFile">
               <v-icon icon="mdi-close" size="14" />
             </button>
           </div>
@@ -744,6 +787,7 @@
               @keydown.enter.exact.prevent="sendOrFile"
               @input="autoResizeInput"
               @click="showEmojiPicker = false"
+              @paste="onPaste"
             />
 
             <!-- Gravar áudio -->
@@ -956,6 +1000,13 @@ import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const auth  = useAuthStore()
+const isManagerRole = computed(() => ['owner', 'admin'].includes(auth.user?.role))
+
+// ——— acesso ao grupo ———
+const groupOperators     = ref([])
+const groupGrantedIds    = ref([])
+const groupAccessLoading = ref(false)
+const groupAccessSaving  = ref(false)
 
 // ——— estado da sidebar ———
 const search             = ref('')
@@ -977,6 +1028,7 @@ const filterStage        = ref(null)  // mantido por compat (kanban select)
 const filterKanban       = ref(null)
 const filterOperator     = ref(null)
 const filterLabel        = ref(null)
+const filterType         = ref('all') // 'all' | 'group' | 'private'
 
 // select mode
 const selectMode         = ref(false)
@@ -1019,6 +1071,7 @@ const availableLabels    = ref([])
 const inputEl        = ref(null)
 const fileInputRef   = ref(null)
 const attachedFile   = ref(null)
+const attachedFilePreviewUrl = ref(null)
 const showEmojiPicker= ref(false)
 const useSignature   = ref(false)
 const emojiCat       = ref('😊')
@@ -1084,8 +1137,37 @@ function onFileSelected(ev) {
   const file = ev.target.files?.[0]
   if (!file) return
   if (file.size > 64 * 1024 * 1024) { toast('Arquivo maior que 64 MB.', 'error'); return }
-  attachedFile.value = file
+  setAttachedFile(file)
   ev.target.value = ''
+}
+
+function setAttachedFile(file) {
+  if (attachedFilePreviewUrl.value) URL.revokeObjectURL(attachedFilePreviewUrl.value)
+  attachedFile.value = file
+  attachedFilePreviewUrl.value = file.type.startsWith('image/') ? URL.createObjectURL(file) : null
+}
+
+function clearAttachedFile() {
+  if (attachedFilePreviewUrl.value) URL.revokeObjectURL(attachedFilePreviewUrl.value)
+  attachedFile.value = null
+  attachedFilePreviewUrl.value = null
+}
+
+function onPaste(ev) {
+  const items = ev.clipboardData?.items
+  if (!items) return
+  for (const item of items) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (!file) continue
+      if (file.size > 64 * 1024 * 1024) { toast('Imagem maior que 64 MB.', 'error'); return }
+      ev.preventDefault()
+      const ext = file.type.split('/')[1] || 'png'
+      const named = file.name && file.name !== 'image.png' ? file : new File([file], `imagem-colada.${ext}`, { type: file.type })
+      setAttachedFile(named)
+      return
+    }
+  }
 }
 
 function fileTypeIcon(f) {
@@ -1111,7 +1193,7 @@ async function sendOrFile() {
 async function sendFile() {
   if (!attachedFile.value || !currentLead.value) return
   const file = attachedFile.value
-  attachedFile.value = null
+  clearAttachedFile()
   const replyToId = replyingTo.value?.id || null
   replyingTo.value = null
   sending.value = true
@@ -1302,8 +1384,6 @@ const activeFiltersCount = computed(() => {
   return n
 })
 
-function tabCount(key) { return convs.value.filter((c) => (c.conversation_status || 'pending') === key).length }
-
 // pré-computa ticketNum para todos os leads quando convs mudar,
 // evitando recalcular por lead em cada keystroke de busca
 const ticketNumMap = computed(() => {
@@ -1312,10 +1392,12 @@ const ticketNumMap = computed(() => {
   return map
 })
 
-const filteredConvs = computed(() => {
-  let list = filterShowAll.value
-    ? convs.value.filter((c) => filterStatuses.value.includes(c.conversation_status || 'pending'))
-    : convs.value.filter((c) => (c.conversation_status || 'pending') === activeTab.value)
+// tudo que filtra a lista MENOS o status (aberto/pendente/fechado) — serve
+// tanto pra montar a lista final quanto pra contar quantos itens cada aba de
+// status teria sob os filtros atuais (ex: com "Grupos" selecionado, a
+// contagem de Pendentes/Abertos/Fechados já deve refletir só os grupos)
+const baseFilteredConvs = computed(() => {
+  let list = convs.value
 
   if (search.value.trim()) {
     const q = search.value.toLowerCase()
@@ -1326,6 +1408,7 @@ const filteredConvs = computed(() => {
     )
   }
   if (filterOnlyUnread.value)    list = list.filter((c) => c.unread > 0)
+  if (filterType.value !== 'all') list = list.filter((c) => filterType.value === 'group' ? c.is_group : !c.is_group)
   if (filterChannels.value.length) list = list.filter((c) => filterChannels.value.includes(c.channel_name || 'WhatsApp'))
   if (filterOperator.value)      list = list.filter((c) => c.assigned_to === filterOperator.value)
   if (filterStages.value.length) list = list.filter((c) => filterStages.value.includes(c.stage))
@@ -1339,6 +1422,17 @@ const filteredConvs = computed(() => {
     const to = new Date(filterDateTo.value); to.setHours(23, 59, 59)
     list = list.filter((c) => new Date(c.updated_at || c.created_at) <= to)
   }
+  return list
+})
+
+function tabCount(key) {
+  return baseFilteredConvs.value.filter((c) => (c.conversation_status || 'pending') === key).length
+}
+
+const filteredConvs = computed(() => {
+  let list = filterShowAll.value
+    ? baseFilteredConvs.value.filter((c) => filterStatuses.value.includes(c.conversation_status || 'pending'))
+    : baseFilteredConvs.value.filter((c) => (c.conversation_status || 'pending') === activeTab.value)
 
   if (sortByUnread.value)       list = [...list].sort((a, b) => (b.unread || 0) - (a.unread || 0))
   else if (filterInvertOrder.value) list = [...list].reverse()
@@ -1527,6 +1621,31 @@ async function selectLead(lead) {
   loadTicketLogs()
   loadScheduledMessages()
   loadFollowup()
+  if (lead.is_group && isManagerRole.value) loadGroupAccess()
+}
+
+// ——— acesso ao grupo (só gerente vê/mexe) ———
+async function loadGroupAccess() {
+  if (!currentLead.value) return
+  groupAccessLoading.value = true
+  try {
+    const { operators, granted_user_ids } = await api.getGroupAccess(currentLead.value.id)
+    groupOperators.value = operators || []
+    groupGrantedIds.value = granted_user_ids || []
+  } catch { /* silencioso */ }
+  finally { groupAccessLoading.value = false }
+}
+async function saveGroupAccess() {
+  if (!currentLead.value) return
+  groupAccessSaving.value = true
+  try {
+    await api.setGroupAccess(currentLead.value.id, groupGrantedIds.value)
+    toast('Acesso ao grupo atualizado.')
+  } catch (e) {
+    toast(e.message || 'Falha ao salvar acesso.', 'error')
+  } finally {
+    groupAccessSaving.value = false
+  }
 }
 
 async function loadTicketLogs() {
@@ -1846,6 +1965,7 @@ onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
   if (convsPollTimer) clearInterval(convsPollTimer)
   clearTimeout(reloadConvsTimeout)
+  if (attachedFilePreviewUrl.value) URL.revokeObjectURL(attachedFilePreviewUrl.value)
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop()
     mediaRecorder.stream?.getTracks().forEach((t) => t.stop())
@@ -1958,6 +2078,15 @@ onUnmounted(() => {
 .fp-date-input:focus { border-color: rgba(99,102,241,0.6); }
 .fp-select { margin: 4px 16px; }
 
+.sidebar-type-tabs { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--sep); flex-shrink: 0; }
+.type-tab-btn {
+  padding: 4px 10px; border-radius: 20px;
+  font-size: 11px; font-weight: 600; color: #6B7C88;
+  background: rgba(255,255,255,0.03); border: 1px solid var(--sep); cursor: pointer; transition: all 0.15s;
+  display: flex; align-items: center;
+}
+.type-tab-btn:hover { color: #9FB0BC; border-color: var(--sep-md); }
+.type-tab-btn.active { color: #E2E8F0; background: rgba(99,102,241,0.16); border-color: #6366F1; }
 .sidebar-tabs { display: flex; border-bottom: 1px solid var(--sep); flex-shrink: 0; }
 .tab-btn {
   flex: 1; padding: 9px 2px;
@@ -2239,6 +2368,7 @@ onUnmounted(() => {
   background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2);
   border-radius: 10px; padding: 6px 10px; margin-bottom: 6px;
 }
+.wa-file-thumb { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
 .wa-file-name { flex: 1; font-size: 12px; color: #C8D6E0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-file-size { font-size: 11px; color: #6B7C88; flex-shrink: 0; }
 .wa-file-remove { background: none; border: none; cursor: pointer; color: #6B7C88; display: flex; transition: color .15s; }

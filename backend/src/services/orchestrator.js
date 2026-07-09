@@ -95,7 +95,22 @@ export async function handleInboundMessage({
   mediaType, mediaId, mediaMimeType, mediaFilename,
   mediaMessageId, mediaRemoteJid, mediaFromMe,
   waMessageId, replyToWaId,
+  isGroup, senderJid,
 }) {
+  // grupo: só processa se o tenant ligou "Habilitar suporte a grupos"
+  // (tenants.op_settings.ignore_group_messages === false). Por padrão essa
+  // chave não existe/é true, então mensagem de grupo continua sendo
+  // ignorada exatamente como antes — comportamento igual pra quem não mexeu
+  // na configuração. Checa isso ANTES de qualquer query de lead/canal pra
+  // não gastar nada com grupo desabilitado (caso mais comum hoje).
+  if (isGroup) {
+    const opSettings = await ttlGet(`opsettings:${tenantId}`, 300, async () => {
+      const rows = unwrap(await supabase.from('tenants').select('op_settings').eq('id', tenantId).limit(1))
+      return rows?.[0]?.op_settings || {}
+    })
+    if (opSettings.ignore_group_messages !== false) return { reply: null, scheduled: null }
+  }
+
   const from = normalizePhone(rawFrom)
   // resolve channel_id pelo instance_name (se disponível)
   let channelId = null
@@ -109,21 +124,39 @@ export async function handleInboundMessage({
     } catch { /* ignora */ }
   }
 
-  // 1) lead (upsert por telefone)
-  const upsertPayload = { tenant_id: tenantId, phone: from, name: pushName || from, updated_at: new Date().toISOString() }
+  // 1) lead (upsert por telefone) — grupo usa o JID do grupo como "telefone".
+  // Em grupo, pushName é de quem MANDOU a mensagem, não do grupo — nunca usar
+  // como nome provisório aqui (evita o nome do lead "piscar" com o nome de um
+  // participante aleatório até o group_subject real ser resolvido abaixo).
+  const upsertPayload = { tenant_id: tenantId, phone: from, name: isGroup ? from : (pushName || from), updated_at: new Date().toISOString() }
   if (channelId) upsertPayload.channel_id = channelId
+  if (isGroup) upsertPayload.is_group = true
 
   const lead = unwrap(
     await supabase.from('leads').upsert(
       upsertPayload,
       { onConflict: 'tenant_id,phone', ignoreDuplicates: false }
-    ).select('id, name, stage, assigned_to, conversation_status, human_takeover').single()
+    ).select('id, name, stage, assigned_to, conversation_status, human_takeover, is_group, group_subject').single()
   )
 
-  // atualiza o nome se ainda é o número e agora temos o pushName
-  if (pushName && lead.name === from) {
+  // atualiza o nome se ainda é o número e agora temos o pushName — só pra
+  // conversa privada; em grupo o pushName é de quem MANDOU a mensagem, não
+  // do grupo, então nunca deve virar o nome da conversa
+  if (!isGroup && pushName && lead.name === from) {
     await supabase.from('leads').update({ name: pushName }).eq('id', lead.id)
     lead.name = pushName
+  }
+
+  // nome do grupo: busca uma vez na Evolution (webhook não traz o "subject"),
+  // fica cacheado em leads.group_subject pras próximas mensagens do mesmo grupo
+  if (isGroup && !lead.group_subject) {
+    const groupJid = mediaRemoteJid || `${from}@g.us`
+    const subject = await whatsapp.evolution.getGroupSubject(instanceName, groupJid).catch(() => null)
+    if (subject) {
+      await supabase.from('leads').update({ group_subject: subject, name: subject }).eq('id', lead.id)
+      lead.group_subject = subject
+      lead.name = subject
+    }
   }
 
   // garante channel_id atualizado se lead já existia
@@ -185,12 +218,19 @@ export async function handleInboundMessage({
       media_filename: mediaFilename || null,
       wa_message_id: waMessageId || null,
       reply_to_id: replyToId,
+      sender_jid: isGroup ? (senderJid || null) : null,
+      sender_name: isGroup ? (pushName || null) : null,
     }).select('id'),
     logUsage(tenantId, null, 'message_received', { provider }),
   ])
   const savedId = msgResult?.data?.[0]?.id || '(sem id)'
   console.log(`[orchestrator] mensagem salva: id=${savedId} lead_id=${lead.id} text="${finalText?.slice(0, 40)}"`)
   if (msgResult?.error) console.error('[orchestrator] ERRO ao salvar mensagem:', msgResult.error.message)
+
+  // grupo: fica só no atendimento humano — mensagem já está salva/visível no
+  // Chat, mas não passa por fluxo nem IA (evita a IA falando num grupo com
+  // várias pessoas ao mesmo tempo)
+  if (isGroup) return { reply: null, scheduled: null }
 
   // 2.5) flow engine — retoma sessão ativa sempre; só inicia novo fluxo se não houver humano atendendo
   try {

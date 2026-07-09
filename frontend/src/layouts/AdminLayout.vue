@@ -85,6 +85,7 @@ const navManagement = [
 ]
 const navSystem = [
   { title: 'Configurações', icon: 'mdi-cog-outline', to: '/admin/configuracoes' },
+  { title: 'Documentação', icon: 'mdi-book-open-page-variant-outline', to: '/admin/documentacao' },
 ]
 
 async function logout() { await auth.logout(); router.push('/login') }

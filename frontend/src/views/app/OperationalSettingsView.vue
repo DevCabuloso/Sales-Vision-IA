@@ -280,16 +280,20 @@
 
         <div class="setting-row">
           <div class="setting-info">
-            <div class="text-body-2 font-weight-medium">Ignorar mensagens de grupo</div>
-            <div class="text-caption text-muted">O sistema não abre tickets para interações em grupos do WhatsApp</div>
+            <div class="text-body-2 font-weight-medium">Habilitar suporte a grupos</div>
+            <div class="text-caption text-muted">Mensagens de grupos do WhatsApp passam a virar conversas no Chat, atendidas por um humano (a IA nunca responde em grupo)</div>
           </div>
-          <v-switch v-model="s.ignore_group_messages" color="primary" hide-details density="compact" />
+          <v-switch
+            :model-value="!s.ignore_group_messages"
+            @update:model-value="(v) => (s.ignore_group_messages = !v)"
+            color="primary" hide-details density="compact"
+          />
         </div>
 
         <div class="setting-row">
           <div class="setting-info">
             <div class="text-body-2 font-weight-medium">Mostrar grupos para todos os agentes</div>
-            <div class="text-caption text-muted">A aba de grupos fica visível para toda a equipe, não apenas supervisores</div>
+            <div class="text-caption text-muted">Vale só pra grupos sem acesso restrito definido (configurado dentro de cada conversa de grupo, no Chat) — um grupo com acesso restrito só aparece pra quem foi selecionado, mesmo com isso ligado</div>
           </div>
           <v-switch v-model="s.show_groups_to_all" color="primary" hide-details density="compact" />
         </div>

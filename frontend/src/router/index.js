@@ -56,6 +56,7 @@ const routes = [
       { path: 'usuarios', name: 'admin-users', component: () => import('@/views/admin/UsersView.vue') },
       { path: 'monitoramento', name: 'admin-monitoring', component: () => import('@/views/admin/MonitoringView.vue') },
       { path: 'configuracoes', name: 'admin-settings', component: () => import('@/views/admin/SettingsView.vue') },
+      { path: 'documentacao', name: 'admin-docs', component: () => import('@/views/admin/DocumentationView.vue') },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

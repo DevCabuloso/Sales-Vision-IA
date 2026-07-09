@@ -212,6 +212,8 @@ export const api = {
   listChatOperators: () => http.get('/chat/operators').then((r) => r.data.operators),
   getTicketLogs: (id) => http.get(`/chat/${id}/logs`).then((r) => r.data.logs),
   transferTicketTo: (id, userId) => http.post(`/chat/${id}/transfer-to`, { userId }).then((r) => r.data),
+  getGroupAccess: (id) => http.get(`/chat/${id}/group-access`).then((r) => r.data),
+  setGroupAccess: (id, userIds) => http.put(`/chat/${id}/group-access`, { user_ids: userIds }).then((r) => r.data),
   listScheduledMessages: (id) => http.get(`/chat/${id}/schedule`).then((r) => r.data.scheduled),
   scheduleMessage: (id, payload) => http.post(`/chat/${id}/schedule`, payload).then((r) => r.data.scheduled),
   cancelScheduledMessage: (id, scheduleId) => http.delete(`/chat/${id}/schedule/${scheduleId}`).then((r) => r.data),

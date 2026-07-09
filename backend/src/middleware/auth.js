@@ -1,6 +1,28 @@
 import { verifyToken } from '../services/auth.js'
 import { supabase, unwrap } from '../db/supabase.js'
 
+// requireAuth roda em praticamente toda requisição autenticada da plataforma —
+// sem cache, isso é uma ida ao Supabase por request só pra confirmar que o
+// usuário ainda existe/está ativo, além do que a própria rota já consulta.
+// TTL curto: uma desativação/exclusão de usuário demora no máximo isso pra
+// valer (trade-off deliberado entre carga no banco e atualização instantânea).
+const USER_CACHE_TTL_MS = 30_000
+const userCache = new Map() // userId -> { user, expiresAt }
+
+function getCachedUser(userId) {
+  const entry = userCache.get(userId)
+  if (!entry) return null
+  if (Date.now() > entry.expiresAt) {
+    userCache.delete(userId)
+    return null
+  }
+  return entry.user
+}
+
+function setCachedUser(userId, user) {
+  userCache.set(userId, { user, expiresAt: Date.now() + USER_CACHE_TTL_MS })
+}
+
 /**
  * Valida o token (httpOnly cookie OU Bearer header) e popula
  * req.user = { id, role, tenantId, email }.
@@ -15,13 +37,19 @@ export async function requireAuth(req, res, next) {
     if (!token) return res.status(401).json({ error: 'Token ausente.' })
 
     const payload = verifyToken(token)
-    const rows = unwrap(
-      await supabase.from('users')
-        .select('id, tenant_id, email, name, role, active')
-        .eq('id', payload.sub)
-        .limit(1)
-    )
-    const u = rows?.[0]
+
+    let u = getCachedUser(payload.sub)
+    if (!u) {
+      const rows = unwrap(
+        await supabase.from('users')
+          .select('id, tenant_id, email, name, role, active')
+          .eq('id', payload.sub)
+          .limit(1)
+      )
+      u = rows?.[0] || null
+      if (u) setCachedUser(payload.sub, u)
+    }
+
     if (!u || !u.active) {
       return res.status(401).json({ error: 'Usuário inválido ou inativo.' })
     }

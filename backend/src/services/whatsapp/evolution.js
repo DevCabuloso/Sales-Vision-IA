@@ -149,8 +149,11 @@ export function parseWebhook(body) {
     console.warn('[evolution.parseWebhook] sem remoteJid, descartando. body.data type:', Array.isArray(body?.data) ? 'array' : typeof body?.data)
     return null
   }
-  // descarta mensagens de grupos/broadcasts
-  if (remoteJid.endsWith('@g.us') || remoteJid.endsWith('@broadcast')) return null
+  // descarta broadcast lists (não são conversa de verdade); grupos (@g.us)
+  // são tratados como conversa normal — quem decide se processa ou não é o
+  // orchestrator, a partir de tenants.op_settings.ignore_group_messages
+  if (remoteJid.endsWith('@broadcast')) return null
+  const isGroup = remoteJid.endsWith('@g.us')
 
   const fromMe = data?.key?.fromMe === true
 
@@ -206,12 +209,16 @@ export function parseWebhook(body) {
 
   const from = remoteJid.split('@')[0]
   const pushName = data?.pushName || null
+  // em grupo, quem de fato mandou a mensagem é `participant` (remoteJid é o
+  // JID do grupo) — o pushName já reflete o remetente em ambos os casos
+  const senderJid = isGroup ? (data?.key?.participant || null) : null
   const finalText = text || `[${mediaType || 'mensagem'}]`
   return {
     from, text: finalText, mediaType, mediaMimeType, mediaFilename,
     mediaMessageId: data?.key?.id || null, mediaRemoteJid: remoteJid, mediaFromMe: fromMe,
     waMessageId: data?.key?.id || null,
     replyToWaId: contextInfo?.stanzaId || null,
+    isGroup, senderJid,
     instanceName, fromMe, pushName,
   }
 }
@@ -251,4 +258,25 @@ export function parseWebhookStatus(body) {
     out.push({ messageId, status, instanceName })
   }
   return out
+}
+
+/**
+ * Busca o nome de exibição (subject) de um grupo do WhatsApp na Evolution API.
+ * Retorna null em qualquer falha (endpoint indisponível, grupo não encontrado,
+ * ou o campo `subject` vier vazio — a própria Evolution tem esse bug documentado
+ * em algumas versões) para o chamador decidir o fallback, sem derrubar o fluxo
+ * de recebimento de mensagem por causa disso.
+ */
+export async function getGroupSubject(instanceName, groupJid) {
+  if (!config.evolution.apiUrl || !instanceName || !groupJid) return null
+  try {
+    const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/group/findGroupInfos/${instanceName}?groupJid=${encodeURIComponent(groupJid)}&getParticipants=false`
+    const res = await fetch(url, { headers: { apikey: config.evolution.apiKey } })
+    if (!res.ok) return null
+    const data = await res.json().catch(() => null)
+    return data?.subject || null
+  } catch (e) {
+    console.warn('[evolution.getGroupSubject] falha ao buscar nome do grupo:', e.message)
+    return null
+  }
 }

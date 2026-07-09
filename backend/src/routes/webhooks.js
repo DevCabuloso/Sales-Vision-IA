@@ -229,6 +229,7 @@ webhooksRouter.post('/evolution',
         mediaMessageId: parsed.mediaMessageId, mediaRemoteJid: parsed.mediaRemoteJid, mediaFromMe: parsed.mediaFromMe,
         provider: 'evolution', instanceName, pushName: parsed.pushName,
         waMessageId: parsed.waMessageId, replyToWaId: parsed.replyToWaId,
+        isGroup: parsed.isGroup, senderJid: parsed.senderJid,
       })
     } catch (e) {
       console.error('[webhook evolution]', e.message)
@@ -305,6 +306,8 @@ webhooksRouter.post('/evolution/:tenantId',
         pushName: parsed.pushName,
         waMessageId: parsed.waMessageId,
         replyToWaId: parsed.replyToWaId,
+        isGroup: parsed.isGroup,
+        senderJid: parsed.senderJid,
       })
     } catch (e) {
       console.error('[webhook evolution]', e.message)

@@ -36,8 +36,29 @@ const authLimiter = rateLimit({
   message: { error: 'Muitas tentativas. Aguarde 15 minutos.' },
 })
 
+// Limite geral pra toda a API — hoje só login/registro tinham rate limit.
+// Sem isso, um pico (bug de polling, script, abuso) enfileira tudo no Supabase
+// pra qualquer cliente conectado, em vez de ser rejeitado rápido só pra quem
+// estourou. Janela e teto generosos de propósito: uma equipe inteira pode
+// estar atrás do mesmo IP de escritório (NAT), e a UI já faz polling/realtime
+// com frequência normal — o alvo aqui é abuso/loop, não uso legítimo intenso.
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas requisições. Tente novamente em instantes.' },
+})
+
 export function createApp() {
   const app = express()
+
+  // Em produção o Express fica atrás do nginx (proxy reverso na mesma
+  // máquina) — sem isso, req.ip é sempre o IP do nginx (127.0.0.1) pra
+  // TODAS as requisições, e qualquer rate limit por IP (inclusive o
+  // authLimiter abaixo, que já existia) vira um balde único compartilhado
+  // por todo mundo em vez de um por cliente real.
+  app.set('trust proxy', 1)
 
   app.use(helmet())
   app.use(cors({ origin: config.frontendUrl, credentials: true }))
@@ -97,6 +118,8 @@ export function createApp() {
       res.status(500).json({ error: String(e.message) })
     }
   })
+
+  app.use('/api', apiLimiter)
 
   app.use('/api/auth/login', authLimiter)
   app.use('/api/auth/register', authLimiter)
