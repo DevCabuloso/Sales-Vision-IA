@@ -67,4 +67,15 @@ export const config = {
     apiKey: process.env.EVOLUTION_API_KEY || '',
     webhookSecret: process.env.EVOLUTION_WEBHOOK_SECRET || '',
   },
+
+  infinitepay: {
+    handle: process.env.INFINITEPAY_HANDLE || '',
+    apiUrl: 'https://api.checkout.infinitepay.io/links',
+  },
+
+  billing: {
+    trialPlanTier: process.env.TRIAL_PLAN_TIER || 'pro',
+    trialPlanPriceCents: parseInt(process.env.TRIAL_PLAN_PRICE_CENTS || '49700', 10),
+    trialDays: parseInt(process.env.TRIAL_DAYS || '7', 10),
+  },
 }

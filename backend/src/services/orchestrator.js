@@ -5,6 +5,7 @@ import * as whatsapp from './whatsapp/index.js'
 import { logUsage } from './usage.js'
 import { isWithinBusinessHours, getOffMessage } from '../routes/business-hours.js'
 import { uploadChatMedia } from './mediaStorage.js'
+import { decryptJSON } from './crypto.js'
 
 // Cache TTL simples para reduzir queries repetidas por mensagem recebida
 const _cache = new Map()
@@ -77,7 +78,11 @@ async function resolveMedia({
     if (mediaType === 'audio') {
       try {
         const { transcribeAudio } = await import('./ai/openai.js')
-        transcript = (await transcribeAudio(buffer, mimetype, mediaFilename || 'audio.ogg')) || null
+        const aiCfgRows = unwrap(
+          await supabase.from('ai_configs').select('openai_api_key').eq('tenant_id', tenantId).limit(1)
+        )
+        const apiKey = aiCfgRows?.[0]?.openai_api_key ? decryptJSON(aiCfgRows[0].openai_api_key) : undefined
+        transcript = (await transcribeAudio(buffer, mimetype, mediaFilename || 'audio.ogg', apiKey)) || null
       } catch (e) {
         console.warn('[orchestrator] falha ao transcrever áudio:', e.message)
       }
@@ -131,6 +136,10 @@ export async function handleInboundMessage({
   const upsertPayload = { tenant_id: tenantId, phone: from, name: isGroup ? from : (pushName || from), updated_at: new Date().toISOString() }
   if (channelId) upsertPayload.channel_id = channelId
   if (isGroup) upsertPayload.is_group = true
+  // remoteJid real reportado pelo Baileys na mensagem recebida — mais confiável que
+  // reconstruir "telefone@s.whatsapp.net" na hora de editar/apagar (ver comentário
+  // na migration_chat_actions.sql sobre o modo LID do WhatsApp).
+  if (mediaRemoteJid) upsertPayload.wa_remote_jid = mediaRemoteJid
 
   const lead = unwrap(
     await supabase.from('leads').upsert(
@@ -149,14 +158,9 @@ export async function handleInboundMessage({
 
   // nome do grupo: busca uma vez na Evolution (webhook não traz o "subject"),
   // fica cacheado em leads.group_subject pras próximas mensagens do mesmo grupo
-  if (isGroup && !lead.group_subject) {
+  if (isGroup) {
     const groupJid = mediaRemoteJid || `${from}@g.us`
-    const subject = await whatsapp.evolution.getGroupSubject(instanceName, groupJid).catch(() => null)
-    if (subject) {
-      await supabase.from('leads').update({ group_subject: subject, name: subject }).eq('id', lead.id)
-      lead.group_subject = subject
-      lead.name = subject
-    }
+    await resolveGroupSubject(lead, instanceName, groupJid)
   }
 
   // garante channel_id atualizado se lead já existia
@@ -340,6 +344,17 @@ export async function handleInboundMessage({
   return { reply, scheduled }
 }
 
+/** Busca e persiste o nome do grupo uma única vez (cacheado em leads.group_subject). */
+async function resolveGroupSubject(lead, instanceName, groupJid) {
+  if (lead.group_subject) return
+  const subject = await whatsapp.evolution.getGroupSubject(instanceName, groupJid).catch(() => null)
+  if (subject) {
+    await supabase.from('leads').update({ group_subject: subject, name: subject }).eq('id', lead.id)
+    lead.group_subject = subject
+    lead.name = subject
+  }
+}
+
 /**
  * Registra uma mensagem enviada diretamente pelo WhatsApp (fromMe=true).
  * Salva como mensagem do operador sem acionar a IA.
@@ -349,7 +364,19 @@ export async function handleOutboundMessage({
   mediaType, mediaId, mediaMimeType, mediaFilename,
   mediaMessageId, mediaRemoteJid, mediaFromMe,
   waMessageId, replyToWaId,
+  isGroup,
 }) {
+  // mesmo gate de handleInboundMessage — se grupo não estiver habilitado pro
+  // tenant, nem chega a criar/atualizar lead (evita que um "oi" mandado pelo
+  // próprio atendente pro grupo crie uma conversa fantasma na plataforma)
+  if (isGroup) {
+    const opSettings = await ttlGet(`opsettings:${tenantId}`, 300, async () => {
+      const rows = unwrap(await supabase.from('tenants').select('op_settings').eq('id', tenantId).limit(1))
+      return rows?.[0]?.op_settings || {}
+    })
+    if (opSettings.ignore_group_messages !== false) return
+  }
+
   const to = normalizePhone(rawTo)
   const platformKey = `${tenantId}:${to}:${text}`
   if (_sentByPlatform.has(platformKey)) {
@@ -369,13 +396,19 @@ export async function handleOutboundMessage({
 
   const upsertPayload = { tenant_id: tenantId, phone: to, name: to, updated_at: new Date().toISOString() }
   if (channelId) upsertPayload.channel_id = channelId
+  if (isGroup) upsertPayload.is_group = true
 
   const lead = unwrap(
     await supabase.from('leads').upsert(
       upsertPayload,
       { onConflict: 'tenant_id,phone', ignoreDuplicates: false }
-    ).select('id').single()
+    ).select('id, group_subject').single()
   )
+
+  if (isGroup) {
+    const groupJid = mediaRemoteJid || `${to}@g.us`
+    await resolveGroupSubject(lead, instanceName, groupJid)
+  }
 
   // Evita duplicata quando a IA envia via Evolution e o webhook fromMe volta imediatamente
   const cutoff = new Date(Date.now() - 15000).toISOString()

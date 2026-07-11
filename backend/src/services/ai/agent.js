@@ -1,6 +1,7 @@
 import { chat } from './openai.js'
 import { getFreeBusy, createEvent } from '../googleCalendar.js'
 import { supabase, unwrap } from '../../db/supabase.js'
+import { decryptJSON } from '../crypto.js'
 
 // Ferramentas que a IA pode chamar durante a conversa.
 const tools = [
@@ -92,6 +93,7 @@ async function getTenantAIConfig(tenantId) {
  */
 export async function runAgent({ tenantId, tenantName, history }) {
   const aiCfg = await getTenantAIConfig(tenantId)
+  const apiKey = aiCfg?.openai_api_key ? decryptJSON(aiCfg.openai_api_key) : undefined
 
   const sysContent = buildSystemContent(aiCfg, tenantName)
   const messages = [{ role: 'system', content: sysContent }]
@@ -115,6 +117,7 @@ export async function runAgent({ tenantId, tenantName, history }) {
       temperature: aiCfg?.temperature ?? 0.4,
       maxTokens:   aiCfg?.max_tokens,
       model:       aiCfg?.model,
+      apiKey,
     })
     messages.push(msg)
 

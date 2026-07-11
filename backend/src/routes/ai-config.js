@@ -7,6 +7,7 @@ import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { chat } from '../services/ai/openai.js'
 import { buildSystemContent } from '../services/ai/agent.js'
+import { encrypt, decryptJSON } from '../services/crypto.js'
 
 export const aiConfigRouter = Router()
 aiConfigRouter.use(requireAuth, requireTenant)
@@ -47,7 +48,15 @@ const schema = z.object({
   main_prompt:   z.string().max(8000).optional().nullable(),
   temperature:   z.number().min(0).max(2).optional(),
   max_tokens:    z.number().int().min(100).max(32000).optional(),
+  openai_api_key: z.string().min(10).optional().nullable(),
 })
+
+/** Remove a chave em texto puro da resposta — devolve só se está configurada. */
+function sanitizeConfig(row) {
+  if (!row) return row
+  const { openai_api_key, ...rest } = row
+  return { ...rest, has_openai_key: !!openai_api_key }
+}
 
 // GET /api/ai-config
 aiConfigRouter.get('/', async (req, res) => {
@@ -56,7 +65,7 @@ aiConfigRouter.get('/', async (req, res) => {
       await supabase.from('ai_configs').select('*')
         .eq('tenant_id', req.user.tenantId).limit(1)
     )
-    res.json({ config: rows[0] || null })
+    res.json({ config: sanitizeConfig(rows[0]) || null })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -68,14 +77,16 @@ aiConfigRouter.put('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
   try {
+    const { openai_api_key, ...data } = parsed.data
+    const payload = { tenant_id: req.user.tenantId, ...data, updated_at: new Date().toISOString() }
+    // só grava/limpa a chave se o campo veio no body — omitido = mantém a chave atual
+    if ('openai_api_key' in parsed.data) {
+      payload.openai_api_key = openai_api_key ? encrypt(openai_api_key) : null
+    }
     const rows = unwrap(
-      await supabase.from('ai_configs').upsert({
-        tenant_id: req.user.tenantId,
-        ...parsed.data,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'tenant_id' }).select('*').single()
+      await supabase.from('ai_configs').upsert(payload, { onConflict: 'tenant_id' }).select('*').single()
     )
-    res.json({ config: rows })
+    res.json({ config: sanitizeConfig(rows) })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -143,6 +154,7 @@ aiConfigRouter.post('/test', async (req, res) => {
       temperature: cfg?.temperature ?? 0.7,
       maxTokens:   cfg?.max_tokens ?? 1000,
       model:       cfg?.model,
+      apiKey:      cfg?.openai_api_key ? decryptJSON(cfg.openai_api_key) : undefined,
     })
 
     res.json({ reply: response?.content || '' })

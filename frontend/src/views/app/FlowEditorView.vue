@@ -169,6 +169,13 @@
               variant="outlined" density="compact"
               hide-details placeholder="Opcional"
             />
+            <label class="lbl mt3">Transferir para a fila</label>
+            <v-select
+              v-model="selectedNode.data.passo.queue_id"
+              :items="queues" item-title="name" item-value="id"
+              variant="outlined" density="compact" hide-details clearable
+              placeholder="Sem fila específica"
+            />
           </template>
         </div>
       </transition>
@@ -259,6 +266,7 @@ const selectedNode   = ref(null)
 const saving         = ref(false)
 const settingsDialog = ref(false)
 const flowCfg        = ref({})
+const queues          = ref([])
 
 const connectDialog = ref(false)
 const connectText   = ref('')
@@ -291,6 +299,8 @@ const pendingOpts = computed(() => {
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 onMounted(async () => {
+  http.get('/queues').then(({ data }) => { queues.value = data.queues }).catch(() => {})
+
   const { data } = await http.get(`/flows/${route.params.id}`)
   flow.value = data.flow
 

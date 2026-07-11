@@ -116,10 +116,35 @@
               <div v-if="msg.sender_id !== auth.user?.id" class="ig-msg-avatar" :style="{ background: avatarColor(msg.sender?.name || '') }">
                 {{ initials(msg.sender?.name) }}
               </div>
+              <div class="ig-msg-actions">
+                <button v-if="!msg.deleted_at" class="ig-msg-action-btn" title="Encaminhar" @click="openForward(msg)">
+                  <v-icon icon="mdi-share-outline" size="14" />
+                </button>
+                <button v-if="msg.sender_id === auth.user?.id && !msg.deleted_at" class="ig-msg-action-btn" title="Editar" @click="startEdit(msg)">
+                  <v-icon icon="mdi-pencil-outline" size="14" />
+                </button>
+                <button v-if="canDeleteMsg(msg)" class="ig-msg-action-btn" title="Apagar" @click="confirmDeleteMsg(msg)">
+                  <v-icon icon="mdi-trash-can-outline" size="14" />
+                </button>
+              </div>
               <div class="ig-msg-bubble" :class="msg.sender_id === auth.user?.id ? 'mine' : 'theirs'">
                 <div v-if="msg.sender_id !== auth.user?.id" class="ig-msg-sender">{{ msg.sender?.name || 'Desconhecido' }}</div>
-                <div class="ig-msg-text">{{ msg.text }}</div>
-                <div class="ig-msg-time">{{ formatTime(msg.created_at) }}</div>
+
+                <div v-if="msg.deleted_at" class="ig-msg-text ig-msg-deleted"><v-icon icon="mdi-cancel" size="13" /> Mensagem apagada</div>
+                <template v-else-if="editingMsgId === msg.id">
+                  <textarea v-model="editText" class="ig-msg-edit-input" rows="2" @keydown.enter.exact.prevent="saveEdit(msg)" @keydown.esc="cancelEdit" />
+                  <div class="ig-msg-edit-actions">
+                    <button class="ig-msg-edit-btn" @click="cancelEdit">Cancelar</button>
+                    <button class="ig-msg-edit-btn primary" @click="saveEdit(msg)">Salvar</button>
+                  </div>
+                </template>
+                <a v-else-if="msg.location_lat != null" :href="`https://www.google.com/maps?q=${msg.location_lat},${msg.location_lng}`" target="_blank" rel="noopener" class="ig-msg-location-card">
+                  <v-icon icon="mdi-map-marker" size="18" />
+                  <span>Localização compartilhada</span>
+                </a>
+                <div v-else class="ig-msg-text">{{ msg.text }}</div>
+
+                <div class="ig-msg-time">{{ msg.edited_at ? 'editado · ' : '' }}{{ formatTime(msg.created_at) }}</div>
               </div>
             </div>
           </template>
@@ -186,6 +211,9 @@
 
         <!-- Input -->
         <div class="ig-input-bar">
+          <button class="ig-location-btn" title="Enviar localização" :disabled="sendingLocation" @click="shareLocation">
+            <v-icon icon="mdi-map-marker-outline" size="20" />
+          </button>
           <v-textarea
             v-model="draft"
             placeholder="Mensagem interna..."
@@ -281,6 +309,50 @@
       </v-card>
     </v-dialog>
 
+    <!-- ══ Dialog: Apagar mensagem ══ -->
+    <v-dialog v-model="deleteMsgDialog" max-width="360">
+      <v-card class="pa-2" border
+        style="background:rgb(var(--v-theme-surface));border-radius:16px;border:1px solid rgba(255,255,255,0.08)!important;box-shadow:0 8px 32px rgba(0,0,0,0.5)"
+      >
+        <v-card-title class="text-h6 font-weight-bold pt-3 px-4">Apagar mensagem</v-card-title>
+        <v-card-text class="px-4">Tem certeza que deseja apagar esta mensagem?</v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="deleteMsgDialog = false">Cancelar</v-btn>
+          <v-btn color="error" :loading="deletingMsg" @click="doDeleteMsg">Apagar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- ══ Dialog: Encaminhar mensagem ══ -->
+    <v-dialog v-model="forwardDialog" max-width="420">
+      <v-card class="pa-2" border
+        style="background:rgb(var(--v-theme-surface));border-radius:16px;border:1px solid rgba(255,255,255,0.08)!important;box-shadow:0 8px 32px rgba(0,0,0,0.5)"
+      >
+        <v-card-title class="text-h6 font-weight-bold pt-3 px-4">Encaminhar mensagem</v-card-title>
+        <v-card-text class="px-4">
+          <div class="forward-list">
+            <button
+              v-for="g in groups" :key="g.id" class="forward-item"
+              :class="{ selected: forwardSelected.includes(g.id) }"
+              :disabled="g.id === activeGroup?.id"
+              @click="toggleForwardTarget(g.id)"
+            >
+              <div class="ig-avatar" :style="{ background: avatarColor(g.name) }">{{ initials(g.name) }}</div>
+              <span>{{ g.name }}</span>
+              <v-icon v-if="forwardSelected.includes(g.id)" icon="mdi-check-circle" size="18" color="primary" class="ml-auto" />
+            </button>
+          </div>
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <span v-if="forwardSelected.length" class="text-caption" style="color:#9FB0BC">{{ forwardSelected.length }} selecionado(s)</span>
+          <v-spacer />
+          <v-btn variant="text" @click="forwardDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" variant="flat" :disabled="!forwardSelected.length" :loading="forwarding" @click="doForward">Enviar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-snackbar v-model="snack.show" :color="snack.color" timeout="3000">{{ snack.text }}</v-snackbar>
   </div>
 </template>
@@ -315,6 +387,83 @@ const showMembers      = ref(false)
 const addMemberSelected = ref(null)
 const addingMember     = ref(false)
 const removingMember   = ref(null)
+
+// ——— editar / apagar / encaminhar mensagem ———
+function canDeleteMsg(msg) {
+  if (msg.deleted_at) return false
+  return msg.sender_id === auth.user?.id || isAdmin.value
+}
+
+const editingMsgId = ref(null)
+const editText      = ref('')
+function startEdit(msg) { editingMsgId.value = msg.id; editText.value = msg.text || '' }
+function cancelEdit() { editingMsgId.value = null; editText.value = '' }
+async function saveEdit(msg) {
+  if (!editText.value.trim()) return
+  try {
+    const { message } = await api.editInternalMessage(activeGroup.value.id, msg.id, editText.value.trim())
+    const idx = messages.value.findIndex((m) => m.id === msg.id)
+    if (idx !== -1) messages.value[idx] = { ...messages.value[idx], ...message }
+    cancelEdit()
+  } catch (e) { toast(e.message, 'error') }
+}
+
+const deleteMsgDialog = ref(false)
+const deletingMsg     = ref(false)
+const msgToDelete     = ref(null)
+function confirmDeleteMsg(msg) { msgToDelete.value = msg; deleteMsgDialog.value = true }
+async function doDeleteMsg() {
+  if (!msgToDelete.value) return
+  deletingMsg.value = true
+  try {
+    await api.deleteInternalMessage(activeGroup.value.id, msgToDelete.value.id)
+    const idx = messages.value.findIndex((m) => m.id === msgToDelete.value.id)
+    if (idx !== -1) messages.value[idx] = { ...messages.value[idx], deleted_at: new Date().toISOString(), text: null }
+    deleteMsgDialog.value = false
+  } catch (e) { toast(e.message, 'error') } finally { deletingMsg.value = false }
+}
+
+const forwardDialog   = ref(false)
+const forwardSelected = ref([])
+const forwarding      = ref(false)
+const msgToForward     = ref(null)
+function openForward(msg) { msgToForward.value = msg; forwardSelected.value = []; forwardDialog.value = true }
+function toggleForwardTarget(groupId) {
+  if (groupId === activeGroup.value?.id) return
+  const i = forwardSelected.value.indexOf(groupId)
+  if (i === -1) forwardSelected.value.push(groupId)
+  else forwardSelected.value.splice(i, 1)
+}
+async function doForward() {
+  if (!msgToForward.value || !forwardSelected.value.length) return
+  forwarding.value = true
+  try {
+    const results = await Promise.allSettled(
+      forwardSelected.value.map((toGroupId) => api.forwardInternalMessage(activeGroup.value.id, msgToForward.value.id, toGroupId))
+    )
+    const failed = results.filter((r) => r.status === 'rejected').length
+    forwardDialog.value = false
+    if (failed) toast(`Encaminhada para ${results.length - failed} de ${results.length} grupo(s).`, 'error')
+    else toast(results.length > 1 ? 'Mensagem encaminhada para todos os selecionados.' : 'Mensagem encaminhada.')
+  } finally { forwarding.value = false }
+}
+
+// ——— localização ———
+const sendingLocation = ref(false)
+function shareLocation() {
+  if (!activeGroup.value || !navigator.geolocation) { toast('Geolocalização não disponível neste navegador.', 'error'); return }
+  sendingLocation.value = true
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      try {
+        const { message } = await api.sendInternalLocation(activeGroup.value.id, pos.coords.latitude, pos.coords.longitude)
+        messages.value.push(message)
+        scrollToBottom()
+      } catch (e) { toast(e.message, 'error') } finally { sendingLocation.value = false }
+    },
+    () => { toast('Não foi possível obter sua localização.', 'error'); sendingLocation.value = false },
+  )
+}
 
 const nonMembers = computed(() => {
   const memberIds = new Set((activeGroup.value?.members ?? []).map((m) => m.user_id))
@@ -727,6 +876,42 @@ onUnmounted(() => {
   margin-top: 4px;
   text-align: right;
 }
+
+.ig-msg-actions { display:flex; align-items:center; gap:2px; opacity:0; transition:opacity .15s ease; flex-shrink:0; }
+.ig-msg-wrapper:hover .ig-msg-actions { opacity:1; }
+.ig-msg-action-btn {
+  display:flex; align-items:center; justify-content:center;
+  width:24px; height:24px; border-radius:50%; flex-shrink:0; border:none; cursor:pointer;
+  background:rgba(255,255,255,0.08); color:#9FB0BC;
+}
+.ig-msg-action-btn:hover { background:rgba(255,255,255,0.16); color:#C4D4DF; }
+.ig-msg-deleted { display:flex; align-items:center; gap:6px; font-style:italic; color:#6B7C88; }
+.ig-msg-edit-input {
+  width:100%; min-width:200px; background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.12);
+  border-radius:8px; padding:6px 8px; color:inherit; font-size:13px; font-family:inherit; resize:vertical;
+}
+.ig-msg-edit-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }
+.ig-msg-edit-btn { background:none; border:none; cursor:pointer; font-size:11px; color:#9FB0BC; padding:4px 8px; }
+.ig-msg-edit-btn.primary { color:#A5B4FC; font-weight:700; }
+.ig-msg-location-card {
+  display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:10px;
+  background:rgba(99,102,241,0.15); color:inherit; text-decoration:none; font-size:13px;
+}
+.ig-location-btn {
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  width:38px; height:38px; border-radius:50%; border:none; cursor:pointer;
+  background:rgba(255,255,255,0.06); color:#9FB0BC;
+}
+.ig-location-btn:hover:not(:disabled) { background:rgba(255,255,255,0.12); color:#C4D4DF; }
+.ig-location-btn:disabled { opacity:.4; cursor:default; }
+.forward-list { max-height:320px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
+.forward-item {
+  display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:10px;
+  background:none; border:none; cursor:pointer; color:inherit; text-align:left; width:100%;
+}
+.forward-item:hover:not(:disabled) { background:rgba(255,255,255,0.06); }
+.forward-item.selected { background:rgba(99,102,241,0.14); }
+.forward-item:disabled { opacity:.35; cursor:default; }
 
 /* Botões de ação do header */
 .ig-header-actions {

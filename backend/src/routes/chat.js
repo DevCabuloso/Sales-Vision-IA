@@ -44,7 +44,7 @@ chatRouter.get('/', async (req, res) => {
     const { stage, assigned_to, type } = req.query
 
     let q = supabase.from('leads')
-      .select('id, name, phone, stage, human_takeover, conversation_status, assigned_to, channel_id, is_group, group_subject, updated_at')
+      .select('id, name, phone, stage, human_takeover, conversation_status, assigned_to, channel_id, queue_id, is_group, group_subject, updated_at')
       .eq('tenant_id', req.user.tenantId)
       .order('updated_at', { ascending: false })
       .limit(300)
@@ -87,17 +87,24 @@ chatRouter.get('/', async (req, res) => {
     if (!isManager(req.user.role)) {
       const hasGroups = result.some((l) => l.is_group)
       let groupAccessByLead = {}
-      let showGroupsToAll = true
+
+      const [myQueueRows, tenantRow] = await Promise.all([
+        supabase.from('queue_operators').select('queue_id').eq('user_id', req.user.id),
+        supabase.from('tenants').select('op_settings').eq('id', req.user.tenantId).limit(1),
+      ])
+      const myQueueIds = new Set(unwrap(myQueueRows).map((r) => r.queue_id))
+      const opSettings = unwrap(tenantRow)?.[0]?.op_settings || {}
+      const showGroupsToAll = opSettings.show_groups_to_all !== false
+      const showUnassigned = opSettings.show_unassigned_tickets !== false
+
       if (hasGroups) {
         const groupLeadIds = result.filter((l) => l.is_group).map((l) => l.id)
-        const [accessRows, tenantRow] = await Promise.all([
-          supabase.from('whatsapp_group_access').select('lead_id, user_id').in('lead_id', groupLeadIds),
-          supabase.from('tenants').select('op_settings').eq('id', req.user.tenantId).limit(1),
-        ])
-        for (const row of unwrap(accessRows)) {
+        const accessRows = unwrap(
+          await supabase.from('whatsapp_group_access').select('lead_id, user_id').in('lead_id', groupLeadIds)
+        )
+        for (const row of accessRows) {
           (groupAccessByLead[row.lead_id] ||= []).push(row.user_id)
         }
-        showGroupsToAll = unwrap(tenantRow)?.[0]?.op_settings?.show_groups_to_all !== false
       }
 
       result = result.filter((l) => {
@@ -106,7 +113,10 @@ chatRouter.get('/', async (req, res) => {
           if (granted?.length) return granted.includes(req.user.id)
           return showGroupsToAll
         }
-        return l.conversation_status === 'pending' || l.assigned_to === req.user.id
+        if (l.assigned_to === req.user.id) return true
+        if (l.conversation_status !== 'pending') return false
+        if (!l.queue_id) return showUnassigned
+        return myQueueIds.has(l.queue_id)
       })
     }
 
@@ -202,7 +212,7 @@ chatRouter.post('/start', async (req, res) => {
 chatRouter.get('/:leadId/messages', async (req, res) => {
   const { limit = 50, before, after } = req.query
   try {
-    let q = supabase.from('messages').select('id, role, text, provider, is_human_takeover, media_url, media_type, media_mimetype, media_filename, reply_to_id, sender_jid, sender_name, created_at')
+    let q = supabase.from('messages').select('id, role, text, provider, is_human_takeover, media_url, media_type, media_mimetype, media_filename, reply_to_id, sender_jid, sender_name, created_at, edited_at, deleted_at, forwarded_from_id, location_lat, location_lng')
       .eq('lead_id', req.params.leadId)
       .eq('tenant_id', req.user.tenantId)
       .order('created_at', { ascending: !!after })
@@ -337,8 +347,10 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
           quotedText: quoted?.text || undefined,
         })
         if (sent?.id) {
-          await supabase.from('messages').update({ wa_message_id: sent.id }).eq('id', row.id)
+          await supabase.from('messages').update({ wa_message_id: sent.id, provider: sent.provider, wa_remote_jid: sent.remoteJid || null }).eq('id', row.id)
           row.wa_message_id = sent.id
+          row.provider = sent.provider
+          row.wa_remote_jid = sent.remoteJid || null
         }
       } catch (e) {
         console.warn('[chat] falha ao enviar WhatsApp:', e.message)
@@ -498,11 +510,224 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
           quotedText: quoted?.text || undefined,
         })
         if (sent?.id) {
-          await supabase.from('messages').update({ wa_message_id: sent.id }).eq('id', row.id)
+          await supabase.from('messages').update({ wa_message_id: sent.id, provider: sent.provider, wa_remote_jid: sent.remoteJid || null }).eq('id', row.id)
           row.wa_message_id = sent.id
+          row.provider = sent.provider
+          row.wa_remote_jid = sent.remoteJid || null
         }
       } catch (e) {
         console.warn('[chat/media] WhatsApp:', e.message)
+      }
+    }
+
+    res.status(201).json({ message: row })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// PATCH /api/chat/:leadId/messages/:messageId — edita mensagem já enviada
+// Só funciona em canais Evolution (a Cloud API da Meta não tem endpoint de edição)
+// e só para mensagens que a própria plataforma enviou (role='agent').
+const editMsgSchema = z.object({ text: z.string().min(1).max(4000) })
+chatRouter.patch('/:leadId/messages/:messageId', async (req, res) => {
+  const parsed = editMsgSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  try {
+    const rows = unwrap(
+      await supabase.from('messages').select('id, role, provider, wa_message_id, wa_remote_jid, deleted_at')
+        .eq('id', req.params.messageId).eq('lead_id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    const msg = rows?.[0]
+    if (!msg) return res.status(404).json({ error: 'Mensagem não encontrada.' })
+    if (msg.deleted_at) return res.status(400).json({ error: 'Mensagem já foi apagada.' })
+    if (msg.role !== 'agent') return res.status(403).json({ error: 'Só é possível editar mensagens enviadas pela plataforma.' })
+    if (msg.provider !== 'evolution') return res.status(400).json({ error: 'Editar mensagem só está disponível em canais Evolution.' })
+    if (!msg.wa_message_id) {
+      return res.status(400).json({ error: 'Mensagem antiga (enviada antes desta atualização) — não é possível editar.' })
+    }
+
+    // prefere o remoteJid do LEAD (capturado de mensagens recebidas, mais confiável em
+    // conversas no modo LID) e só cai pro remoteJid gravado na própria mensagem se o lead
+    // ainda não tiver um (ex: lead que só recebeu mensagens nossas, nunca respondeu).
+    const leadRows = unwrap(await supabase.from('leads').select('wa_remote_jid').eq('id', req.params.leadId).limit(1))
+    const remoteJid = leadRows?.[0]?.wa_remote_jid || msg.wa_remote_jid
+    if (!remoteJid) {
+      return res.status(400).json({ error: 'Não sabemos o identificador dessa conversa no WhatsApp ainda — não é possível editar.' })
+    }
+
+    const { editMessage } = await import('../services/whatsapp/index.js')
+    try {
+      await editMessage(req.user.tenantId, { waMessageId: msg.wa_message_id, remoteJid, newText: parsed.data.text })
+    } catch (e) {
+      // Bug conhecido da Evolution API: falha ao editar mensagens em conversas no modo
+      // de endereçamento LID (@lid) do WhatsApp, mesmo com o remoteJid correto.
+      if (/remotejid/i.test(e.message)) {
+        return res.status(400).json({ error: 'Não foi possível editar esta mensagem — limitação do WhatsApp/Evolution nesta conversa. Tente apagar e enviar novamente.' })
+      }
+      throw e
+    }
+
+    const updated = unwrap(
+      await supabase.from('messages')
+        .update({ text: parsed.data.text, edited_at: new Date().toISOString() })
+        .eq('id', msg.id).select('*').single()
+    )
+    res.json({ message: updated })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// DELETE /api/chat/:leadId/messages/:messageId — apaga uma mensagem "para todos"
+// (diferente de DELETE /:leadId, que apaga a conversa inteira). Só Evolution, só mensagens próprias.
+chatRouter.delete('/:leadId/messages/:messageId', async (req, res) => {
+  try {
+    const rows = unwrap(
+      await supabase.from('messages').select('id, role, provider, wa_message_id, wa_remote_jid, deleted_at')
+        .eq('id', req.params.messageId).eq('lead_id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    const msg = rows?.[0]
+    if (!msg) return res.status(404).json({ error: 'Mensagem não encontrada.' })
+    if (msg.deleted_at) return res.json({ deleted: true }) // idempotente
+    if (msg.role !== 'agent') return res.status(403).json({ error: 'Só é possível apagar mensagens enviadas pela plataforma.' })
+    if (msg.provider !== 'evolution') return res.status(400).json({ error: 'Apagar mensagem só está disponível em canais Evolution.' })
+
+    const leadRowsDel = unwrap(await supabase.from('leads').select('wa_remote_jid').eq('id', req.params.leadId).limit(1))
+    const remoteJidDel = leadRowsDel?.[0]?.wa_remote_jid || msg.wa_remote_jid
+
+    if (msg.wa_message_id && remoteJidDel) {
+      const { deleteMessage } = await import('../services/whatsapp/index.js')
+      try {
+        await deleteMessage(req.user.tenantId, { waMessageId: msg.wa_message_id, remoteJid: remoteJidDel })
+      } catch (e) {
+        // Mesma limitação conhecida da Evolution API em conversas no modo LID — ver PATCH acima.
+        if (/remotejid/i.test(e.message)) {
+          return res.status(400).json({ error: 'Não foi possível apagar esta mensagem no WhatsApp — limitação do WhatsApp/Evolution nesta conversa.' })
+        }
+        throw e
+      }
+    }
+
+    unwrap(
+      await supabase.from('messages')
+        .update({ text: '', media_url: null, deleted_at: new Date().toISOString() })
+        .eq('id', msg.id)
+    )
+    res.json({ deleted: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/chat/:leadId/messages/:messageId/forward — encaminha uma mensagem para outro lead
+const forwardSchema = z.object({ toLeadId: z.string().min(1) })
+chatRouter.post('/:leadId/messages/:messageId/forward', async (req, res) => {
+  const parsed = forwardSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Selecione um lead de destino.' })
+  try {
+    const msgRows = unwrap(
+      await supabase.from('messages').select('*')
+        .eq('id', req.params.messageId).eq('lead_id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    const original = msgRows?.[0]
+    if (!original || original.deleted_at) return res.status(404).json({ error: 'Mensagem não encontrada.' })
+
+    const destRows = unwrap(
+      await supabase.from('leads').select('id, phone, human_takeover, conversation_status')
+        .eq('id', parsed.data.toLeadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    const dest = destRows?.[0]
+    if (!dest) return res.status(404).json({ error: 'Lead de destino não encontrado.' })
+    if (dest.conversation_status !== 'open') return res.status(403).json({ error: 'Ticket de destino não está aberto.' })
+
+    const { sendText, sendMedia, sendLocation } = await import('../services/whatsapp/index.js')
+
+    const insertPayload = {
+      tenant_id: req.user.tenantId,
+      lead_id: dest.id,
+      role: 'agent',
+      is_human_takeover: dest.human_takeover,
+      forwarded_from_id: original.id,
+      text: original.text,
+    }
+    let sent = null
+
+    if (original.location_lat != null) {
+      insertPayload.location_lat = original.location_lat
+      insertPayload.location_lng = original.location_lng
+      if (dest.phone) {
+        sent = await sendLocation(req.user.tenantId, dest.phone, { latitude: original.location_lat, longitude: original.location_lng })
+      }
+    } else if (original.media_url) {
+      insertPayload.media_url = original.media_url
+      insertPayload.media_type = original.media_type
+      insertPayload.media_mimetype = original.media_mimetype
+      insertPayload.media_filename = original.media_filename
+      if (dest.phone) {
+        try {
+          const buf = await fetch(original.media_url).then((r) => r.arrayBuffer())
+          sent = await sendMedia(req.user.tenantId, dest.phone, {
+            buffer: Buffer.from(buf), mimetype: original.media_mimetype, filename: original.media_filename, caption: '',
+          })
+        } catch (e) {
+          console.warn('[chat/forward] falha ao reenviar mídia:', e.message)
+        }
+      }
+    } else if (dest.phone) {
+      sent = await sendText(req.user.tenantId, dest.phone, original.text || '')
+    }
+
+    if (sent?.id) {
+      insertPayload.wa_message_id = sent.id
+      insertPayload.provider = sent.provider
+    }
+
+    const row = unwrap(await supabase.from('messages').insert(insertPayload).select('*').single())
+    res.status(201).json({ message: row })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/chat/:leadId/location — envia localização (funciona em Meta e Evolution)
+const locationSchema = z.object({ latitude: z.number(), longitude: z.number() })
+chatRouter.post('/:leadId/location', async (req, res) => {
+  const parsed = locationSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Localização inválida.' })
+  try {
+    const leadRows = unwrap(
+      await supabase.from('leads').select('id, phone, human_takeover, conversation_status')
+        .eq('id', req.params.leadId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    const lead = leadRows?.[0]
+    if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' })
+    if (lead.conversation_status !== 'open') return res.status(403).json({ error: 'Ticket não está aberto.' })
+
+    const row = unwrap(
+      await supabase.from('messages').insert({
+        tenant_id: req.user.tenantId,
+        lead_id: lead.id,
+        role: 'agent',
+        text: 'Localização compartilhada',
+        is_human_takeover: lead.human_takeover,
+        location_lat: parsed.data.latitude,
+        location_lng: parsed.data.longitude,
+      }).select('*').single()
+    )
+
+    if (lead.phone) {
+      try {
+        const { sendLocation } = await import('../services/whatsapp/index.js')
+        const sent = await sendLocation(req.user.tenantId, lead.phone, { latitude: parsed.data.latitude, longitude: parsed.data.longitude })
+        if (sent?.id) {
+          await supabase.from('messages').update({ wa_message_id: sent.id, provider: sent.provider, wa_remote_jid: sent.remoteJid || null }).eq('id', row.id)
+          row.wa_message_id = sent.id
+          row.provider = sent.provider
+          row.wa_remote_jid = sent.remoteJid || null
+        }
+      } catch (e) {
+        console.warn('[chat] falha ao enviar localização:', e.message)
       }
     }
 

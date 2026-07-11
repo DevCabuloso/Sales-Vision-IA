@@ -15,6 +15,14 @@ async function getConnectedChannel(tenantId) {
   }
 }
 
+/** Extrai a mensagem de erro real da resposta da Evolution — o texto útil às vezes vem
+ *  em data.message, às vezes em data.error, às vezes só dentro de data.response.message
+ *  (array), dependendo do tipo de erro (ex: erro de validação de payload). */
+function evoErrorMessage(data, status) {
+  const nested = Array.isArray(data?.response?.message) ? data.response.message.join(', ') : data?.response?.message
+  return data?.message || nested || data?.error || `Evolution erro ${status}`
+}
+
 /**
  * Monta o objeto "quoted" (citação) no formato Baileys/Evolution v2, se houver contexto.
  * A Baileys exige também o conteúdo da mensagem citada (`message`), não só o `key` — sem
@@ -42,8 +50,8 @@ export async function sendText(tenantId, to, body, { quotedWaId, quotedFromMe, q
       body: JSON.stringify({ number: to, text: body, ...(quoted ? { quoted } : {}) }),
     })
     const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(data.message || data.error || `Evolution erro ${res.status}`)
-    return { id: data.key?.id || null, provider: 'evolution' }
+    if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
+    return { id: data.key?.id || null, remoteJid: data.key?.remoteJid || null, provider: 'evolution' }
   }
 
   // fallback: credenciais antigas por-tenant em integrations
@@ -61,8 +69,8 @@ export async function sendText(tenantId, to, body, { quotedWaId, quotedFromMe, q
     body: JSON.stringify({ number: to, text: body, ...(quoted ? { quoted } : {}) }),
   })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.message || data.error || `Evolution erro ${res.status}`)
-  return { id: data.key?.id || null, provider: 'evolution' }
+  if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
+  return { id: data.key?.id || null, remoteJid: data.key?.remoteJid || null, provider: 'evolution' }
 }
 
 /** Envia mídia (imagem, vídeo, áudio, documento) via Evolution API. */
@@ -85,10 +93,67 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
       body: JSON.stringify(payload),
     })
     const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(data.message || data.error || `Evolution erro ${res.status}`)
-    return { id: data.key?.id || null, provider: 'evolution' }
+    if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
+    return { id: data.key?.id || null, remoteJid: data.key?.remoteJid || null, provider: 'evolution' }
   }
   throw new Error('Canal Evolution não conectado.')
+}
+
+/** Envia uma localização (o próprio WhatsApp do destinatário renderiza o mapa). */
+export async function sendLocation(tenantId, to, { latitude, longitude, name, address, quotedWaId, quotedFromMe, quotedText }) {
+  const quoted = buildQuoted(to, quotedWaId, quotedFromMe, quotedText)
+  const channel = await getConnectedChannel(tenantId)
+  if (!channel || !config.evolution.apiUrl) throw new Error('Canal Evolution não conectado.')
+
+  const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/message/sendLocation/${channel.instance_name}`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
+    body: JSON.stringify({ number: to, latitude, longitude, name, address, ...(quoted ? { quoted } : {}) }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
+  return { id: data.key?.id || null, remoteJid: data.key?.remoteJid || null, provider: 'evolution' }
+}
+
+/**
+ * Edita uma mensagem já enviada (só funciona para mensagens enviadas pela própria
+ * sessão, dentro da janela de tempo que o WhatsApp permite — a Evolution só repassa
+ * a edição, quem decide se aceita é o próprio WhatsApp).
+ */
+export async function editMessage(tenantId, { waMessageId, remoteJid, newText }) {
+  const channel = await getConnectedChannel(tenantId)
+  if (!channel || !config.evolution.apiUrl) throw new Error('Canal Evolution não conectado.')
+
+  const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/chat/updateMessage/${channel.instance_name}`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
+    body: JSON.stringify({
+      number: remoteJid.split('@')[0],
+      key: { remoteJid, fromMe: true, id: waMessageId },
+      text: newText,
+    }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
+  return { ok: true }
+}
+
+/** Apaga uma mensagem "para todos" (só mensagens enviadas pela própria sessão, dentro da janela do WhatsApp). */
+export async function deleteMessage(tenantId, { waMessageId, remoteJid }) {
+  const channel = await getConnectedChannel(tenantId)
+  if (!channel || !config.evolution.apiUrl) throw new Error('Canal Evolution não conectado.')
+
+  const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/chat/deleteMessageForEveryone/${channel.instance_name}`
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
+    body: JSON.stringify({ id: waMessageId, remoteJid, fromMe: true }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
+  return { ok: true }
 }
 
 /**
@@ -158,6 +223,14 @@ export function parseWebhook(body) {
   const fromMe = data?.key?.fromMe === true
 
   const msg = data?.message || {}
+
+  // DIAGNÓSTICO TEMPORÁRIO — mensagens de membros de grupo não estavam
+  // aparecendo no Chat; nenhuma virava mensagem salva apesar de muitos
+  // eventos chegando. Dump completo pra ver o formato real antes de ajustar
+  // a extração de texto/mídia. Remover depois de identificar a causa.
+  if (isGroup && !fromMe) {
+    console.log('[DEBUG-GROUP-MSG]', JSON.stringify({ msgKeys: Object.keys(msg), msg }).slice(0, 1500))
+  }
 
   // extrai texto cobrindo todos os tipos comuns da Evolution v2
   const text =

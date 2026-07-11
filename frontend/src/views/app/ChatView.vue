@@ -442,9 +442,20 @@
                 class="msg-wrapper"
                 :class="[msg.role, { 'msg-highlight': msgSearchQuery && msg.text?.toLowerCase().includes(msgSearchQuery.toLowerCase()), 'msg-group-start': isGroupStart(displayedMessages, msgIdx) }]"
               >
-                <button class="msg-reply-btn" title="Responder" @click="startReply(msg)">
-                  <v-icon icon="mdi-reply-outline" size="16" />
-                </button>
+                <div class="msg-actions">
+                  <button class="msg-reply-btn" title="Responder" @click="startReply(msg)">
+                    <v-icon icon="mdi-reply-outline" size="16" />
+                  </button>
+                  <button v-if="!msg.deleted_at" class="msg-reply-btn" title="Encaminhar" @click="openForward(msg)">
+                    <v-icon icon="mdi-share-outline" size="16" />
+                  </button>
+                  <button v-if="canEditMsg(msg)" class="msg-reply-btn" title="Editar" @click="startEdit(msg)">
+                    <v-icon icon="mdi-pencil-outline" size="16" />
+                  </button>
+                  <button v-if="canEditMsg(msg)" class="msg-reply-btn" title="Apagar" @click="confirmDeleteMsg(msg)">
+                    <v-icon icon="mdi-trash-can-outline" size="16" />
+                  </button>
+                </div>
                 <div class="msg-bubble" :class="msg.role">
                   <div v-if="msg.role === 'agent' || msg.role === 'ai'" class="msg-role-badge">
                     {{ msg.role === 'ai' ? '⬦ IA' : '⬦ Agente' }}
@@ -458,7 +469,23 @@
                     <div class="quoted-msg-text">{{ quotedMessage(msg) ? quotedPreviewText(quotedMessage(msg)) : '—' }}</div>
                   </div>
 
-                  <template v-if="msg.media_url">
+                  <template v-if="msg.deleted_at">
+                    <div class="msg-text msg-deleted"><v-icon icon="mdi-cancel" size="14" /> Mensagem apagada</div>
+                  </template>
+                  <template v-else-if="editingMsgId === msg.id">
+                    <textarea v-model="editText" class="msg-edit-input" rows="2" @keydown.enter.exact.prevent="saveEdit(msg)" @keydown.esc="cancelEdit" />
+                    <div class="msg-edit-actions">
+                      <button class="msg-edit-btn" @click="cancelEdit">Cancelar</button>
+                      <button class="msg-edit-btn primary" @click="saveEdit(msg)">Salvar</button>
+                    </div>
+                  </template>
+                  <template v-else-if="msg.location_lat != null">
+                    <a :href="`https://www.google.com/maps?q=${msg.location_lat},${msg.location_lng}`" target="_blank" rel="noopener" class="msg-location-card">
+                      <v-icon icon="mdi-map-marker" size="20" />
+                      <span>Localização compartilhada</span>
+                    </a>
+                  </template>
+                  <template v-else-if="msg.media_url">
                     <img
                       v-if="msg.media_type === 'image' || msg.media_type === 'sticker'"
                       :src="msg.media_url" class="msg-media-image"
@@ -475,7 +502,7 @@
                   </template>
                   <div v-else class="msg-text">{{ msg.text }}</div>
 
-                  <div class="msg-time">{{ formatTime(msg.created_at) }}</div>
+                  <div class="msg-time">{{ msg.edited_at ? 'editado · ' : '' }}{{ formatTime(msg.created_at) }}</div>
                 </div>
               </div>
             </template>
@@ -769,6 +796,9 @@
               <button class="wa-icon-btn" title="Anexar arquivo" @click="fileInputRef.click()">
                 <v-icon icon="mdi-paperclip" size="22" />
               </button>
+              <button class="wa-icon-btn" title="Enviar localização" :disabled="sendingLocation" @click="shareLocation">
+                <v-icon icon="mdi-map-marker-outline" size="22" />
+              </button>
               <button class="wa-icon-btn" :class="{ active: useSignature }" title="Assinatura" @click="useSignature = !useSignature">
                 <v-icon icon="mdi-pen" size="19" />
               </button>
@@ -987,6 +1017,49 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog: apagar mensagem -->
+    <v-dialog v-model="deleteMsgDialog" max-width="380">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Apagar mensagem</v-card-title>
+        <v-card-text>
+          Apagar esta mensagem para todos no WhatsApp? Essa ação não pode ser desfeita.
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="deleteMsgDialog = false">Cancelar</v-btn>
+          <v-btn color="error" variant="flat" :loading="deletingMsg" @click="doDeleteMsg">Apagar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Dialog: encaminhar mensagem -->
+    <v-dialog v-model="forwardDialog" max-width="420">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Encaminhar mensagem</v-card-title>
+        <v-card-text>
+          <v-text-field v-model="forwardSearch" variant="outlined" density="compact" placeholder="Buscar conversa..." hide-details prepend-inner-icon="mdi-magnify" class="mb-3" />
+          <div class="forward-list">
+            <button
+              v-for="c in forwardCandidates" :key="c.id" class="forward-item"
+              :class="{ selected: forwardSelected.includes(c.id) }"
+              @click="toggleForwardTarget(c.id)"
+            >
+              <div class="forward-avatar" :style="{ background: avatarColor(c) }">{{ (c.name || c.phone || '?').slice(0, 2).toUpperCase() }}</div>
+              <span>{{ c.name || c.phone }}</span>
+              <v-icon v-if="forwardSelected.includes(c.id)" icon="mdi-check-circle" size="18" color="primary" class="ml-auto" />
+            </button>
+            <div v-if="!forwardCandidates.length" class="text-caption text-center py-4" style="color:#6B7C88">Nenhuma conversa encontrada.</div>
+          </div>
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <span v-if="forwardSelected.length" class="text-caption" style="color:#9FB0BC">{{ forwardSelected.length }} selecionado(s)</span>
+          <v-spacer />
+          <v-btn variant="text" @click="forwardDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" variant="flat" :disabled="!forwardSelected.length" :loading="forwarding" @click="doForward">Enviar</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-snackbar v-model="snack.show" :color="snack.color" timeout="3000">{{ snack.text }}</v-snackbar>
   </div>
 </template>
@@ -1028,7 +1101,7 @@ const filterStage        = ref(null)  // mantido por compat (kanban select)
 const filterKanban       = ref(null)
 const filterOperator     = ref(null)
 const filterLabel        = ref(null)
-const filterType         = ref('all') // 'all' | 'group' | 'private'
+const filterType         = ref('private') // 'all' | 'group' | 'private' — padrão continua igual a antes da feature de grupos
 
 // select mode
 const selectMode         = ref(false)
@@ -1083,6 +1156,90 @@ let mediaRecorder    = null
 const replyingTo = ref(null)
 function startReply(msg) { replyingTo.value = msg; inputEl.value?.focus() }
 function cancelReply() { replyingTo.value = null }
+
+// ——— editar / apagar mensagem ———
+// editar e apagar-pra-todos só existem de verdade via Evolution API — a Cloud API
+// da Meta não tem esses endpoints, então o botão nem aparece pra mensagens dela.
+function canEditMsg(msg) { return msg.role === 'agent' && msg.provider === 'evolution' && !msg.deleted_at }
+
+const editingMsgId = ref(null)
+const editText      = ref('')
+function startEdit(msg) { editingMsgId.value = msg.id; editText.value = msg.text || '' }
+function cancelEdit() { editingMsgId.value = null; editText.value = '' }
+async function saveEdit(msg) {
+  if (!editText.value.trim()) return
+  try {
+    const { message } = await api.editMessage(currentLead.value.id, msg.id, editText.value.trim())
+    const idx = messages.value.findIndex((m) => m.id === msg.id)
+    if (idx !== -1) messages.value[idx] = { ...messages.value[idx], ...message }
+    cancelEdit()
+  } catch (e) { toast(e.message, 'error') }
+}
+
+const deleteMsgDialog = ref(false)
+const deletingMsg     = ref(false)
+const msgToDelete     = ref(null)
+function confirmDeleteMsg(msg) { msgToDelete.value = msg; deleteMsgDialog.value = true }
+async function doDeleteMsg() {
+  if (!msgToDelete.value) return
+  deletingMsg.value = true
+  try {
+    await api.deleteMessage(currentLead.value.id, msgToDelete.value.id)
+    const idx = messages.value.findIndex((m) => m.id === msgToDelete.value.id)
+    if (idx !== -1) messages.value[idx] = { ...messages.value[idx], deleted_at: new Date().toISOString(), text: null, media_url: null }
+    deleteMsgDialog.value = false
+  } catch (e) { toast(e.message, 'error') } finally { deletingMsg.value = false }
+}
+
+// ——— encaminhar mensagem ———
+const forwardDialog   = ref(false)
+const forwardSearch   = ref('')
+const forwardSelected = ref([])
+const forwarding      = ref(false)
+const msgToForward     = ref(null)
+function openForward(msg) { msgToForward.value = msg; forwardSearch.value = ''; forwardSelected.value = []; forwardDialog.value = true }
+function toggleForwardTarget(leadId) {
+  const i = forwardSelected.value.indexOf(leadId)
+  if (i === -1) forwardSelected.value.push(leadId)
+  else forwardSelected.value.splice(i, 1)
+}
+const forwardCandidates = computed(() => {
+  const q = forwardSearch.value.trim().toLowerCase()
+  return convs.value
+    .filter((c) => c.id !== currentLead.value?.id)
+    .filter((c) => !q || (c.name || '').toLowerCase().includes(q) || (c.phone || '').includes(q))
+    .slice(0, 30)
+})
+async function doForward() {
+  if (!msgToForward.value || !forwardSelected.value.length) return
+  forwarding.value = true
+  try {
+    const results = await Promise.allSettled(
+      forwardSelected.value.map((toLeadId) => api.forwardMessage(currentLead.value.id, msgToForward.value.id, toLeadId))
+    )
+    const failed = results.filter((r) => r.status === 'rejected').length
+    forwardDialog.value = false
+    if (failed) toast(`Encaminhada para ${results.length - failed} de ${results.length} conversa(s).`, 'error')
+    else toast(results.length > 1 ? 'Mensagem encaminhada para todos os selecionados.' : 'Mensagem encaminhada.')
+  } finally { forwarding.value = false }
+}
+
+// ——— localização ———
+const sendingLocation = ref(false)
+function shareLocation() {
+  if (!currentLead.value || !navigator.geolocation) { toast('Geolocalização não disponível neste navegador.', 'error'); return }
+  sendingLocation.value = true
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      try {
+        const { message } = await api.sendLocation(currentLead.value.id, pos.coords.latitude, pos.coords.longitude)
+        if (!messages.value.some((m) => m.id === message.id)) messages.value.push(message)
+        scrollToBottom()
+      } catch (e) { toast(e.message, 'error') } finally { sendingLocation.value = false }
+    },
+    () => { toast('Não foi possível obter sua localização.', 'error'); sendingLocation.value = false },
+  )
+}
 function quotedMessage(msg) {
   if (!msg.reply_to_id) return null
   return messages.value.find((m) => m.id === msg.reply_to_id) || null
@@ -2200,12 +2357,13 @@ onUnmounted(() => {
 .msg-wrapper.lead { justify-content:flex-start; }
 .msg-wrapper.ai, .msg-wrapper.agent { justify-content:flex-end; }
 .msg-wrapper.lead .msg-bubble { order:1; }
-.msg-wrapper.lead .msg-reply-btn { order:2; }
+.msg-wrapper.lead .msg-actions { order:2; }
 .msg-bubble {
   position: relative;
   max-width:72%; padding:10px 14px; border-radius:14px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.25);
 }
+.msg-actions { display:flex; align-items:center; gap:2px; flex-shrink:0; }
 .msg-reply-btn {
   display:flex; align-items:center; justify-content:center;
   width:26px; height:26px; border-radius:50%; flex-shrink:0;
@@ -2214,6 +2372,29 @@ onUnmounted(() => {
 }
 .msg-wrapper:hover .msg-reply-btn { opacity:1; }
 .msg-reply-btn:hover { background:rgba(255,255,255,0.16); color:#C4D4DF; }
+.msg-deleted { display:flex; align-items:center; gap:6px; font-style:italic; color:#6B7C88; }
+.msg-edit-input {
+  width:100%; min-width:220px; background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.12);
+  border-radius:8px; padding:6px 8px; color:inherit; font-size:14px; font-family:inherit; resize:vertical;
+}
+.msg-edit-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }
+.msg-edit-btn { background:none; border:none; cursor:pointer; font-size:12px; color:#9FB0BC; padding:4px 8px; }
+.msg-edit-btn.primary { color:#A5B4FC; font-weight:700; }
+.msg-location-card {
+  display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:10px;
+  background:rgba(99,102,241,0.15); color:inherit; text-decoration:none; font-size:13px;
+}
+.forward-list { max-height:320px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
+.forward-item {
+  display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:10px;
+  background:none; border:none; cursor:pointer; color:inherit; text-align:left; width:100%;
+}
+.forward-item:hover { background:rgba(255,255,255,0.06); }
+.forward-item.selected { background:rgba(99,102,241,0.14); }
+.forward-avatar {
+  width:30px; height:30px; border-radius:50%; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:white;
+}
 .quoted-msg-box {
   border-left:3px solid rgba(99,102,241,0.7);
   background:rgba(0,0,0,0.18);

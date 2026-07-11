@@ -15,6 +15,24 @@ const routes = [
     meta: { public: true },
   },
   {
+    path: '/teste-gratis',
+    name: 'trial-landing',
+    component: () => import('@/views/public/TrialLandingView.vue'),
+    meta: { public: true },
+  },
+  {
+    path: '/pagamento/retorno',
+    name: 'payment-return',
+    component: () => import('@/views/public/PaymentReturnView.vue'),
+    meta: { public: true },
+  },
+  {
+    path: '/onboarding',
+    name: 'onboarding',
+    component: () => import('@/views/OnboardingView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/',
     component: () => import('@/layouts/AppLayout.vue'),
     meta: { requiresAuth: true },
@@ -89,6 +107,11 @@ router.beforeEach((to) => {
   // não-owner não acessa rotas de admin
   if (to.meta.requiresOwner && !auth.isOwner) {
     return { name: 'dashboard' }
+  }
+
+  // cliente pagou o trial mas ainda não passou pelo onboarding — força o wizard
+  if (auth.isAuthenticated && !auth.isOwner && !auth.onboardingCompleted && to.name !== 'onboarding') {
+    return { name: 'onboarding' }
   }
 
   // já autenticado na tela de login

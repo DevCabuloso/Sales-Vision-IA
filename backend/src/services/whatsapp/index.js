@@ -60,4 +60,29 @@ export async function sendText(tenantId, to, body, opts) {
   throw new Error('Nenhum provider de WhatsApp habilitado para este cliente.')
 }
 
+export async function sendLocation(tenantId, to, opts) {
+  const f = await getTenantFlags(tenantId)
+  if (f.feat_hybrid) {
+    try {
+      return await meta.sendLocation(tenantId, to, opts)
+    } catch (e) {
+      console.warn(`[whatsapp] híbrido: Meta falhou para localização (${e.message}), tentando Evolution`)
+      return await evolution.sendLocation(tenantId, to, opts)
+    }
+  }
+  if (f.feat_meta_api) return meta.sendLocation(tenantId, to, opts)
+  if (f.feat_evolution_api || await hasConnectedChannel(tenantId)) {
+    return evolution.sendLocation(tenantId, to, opts)
+  }
+  throw new Error('Nenhum provider de WhatsApp habilitado para este cliente.')
+}
+
+/** Editar/apagar só existem de verdade na Evolution API — a Cloud API da Meta não expõe esses recursos. */
+export async function editMessage(tenantId, opts) {
+  return evolution.editMessage(tenantId, opts)
+}
+export async function deleteMessage(tenantId, opts) {
+  return evolution.deleteMessage(tenantId, opts)
+}
+
 export { meta, evolution }

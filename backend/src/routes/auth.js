@@ -50,11 +50,22 @@ authRouter.post('/login', async (req, res) => {
     if (user.tenant_id) {
       const t = unwrap(
         await supabase.from('tenants')
-          .select('name, slug, status, feat_meta_api, feat_evolution_api, feat_hybrid, feat_google_cal, feat_broadcast, feat_kanban, feat_agenda, feat_contacts, feat_ia_config, feat_operators, feat_custom_apis')
+          .select('name, slug, status, trial_ends_at, onboarding_completed, feat_meta_api, feat_evolution_api, feat_hybrid, feat_google_cal, feat_broadcast, feat_kanban, feat_agenda, feat_contacts, feat_ia_config, feat_operators, feat_custom_apis')
           .eq('id', user.tenant_id).limit(1)
       )
       tenant = t?.[0] || null
     }
+
+    if (user.role !== 'owner' && tenant?.status === 'pending_payment') {
+      return res.status(402).json({ error: 'Pagamento pendente. Finalize o pagamento para ativar sua conta.' })
+    }
+
+    // trial vencido: suspende de forma preguiçosa no login, sem depender de cron
+    if (tenant?.status === 'trial' && tenant.trial_ends_at && new Date(tenant.trial_ends_at) < new Date()) {
+      await supabase.from('tenants').update({ status: 'suspended' }).eq('id', user.tenant_id)
+      tenant.status = 'suspended'
+    }
+
     if (user.role !== 'owner' && tenant?.status === 'suspended') {
       return res.status(403).json({ error: 'Conta suspensa. Contate o suporte.' })
     }
@@ -79,6 +90,7 @@ authRouter.post('/login', async (req, res) => {
         tenantSlug: tenant?.slug || null,
         permissions: user.permissions || null,
         is_restricted: user.is_restricted || false,
+        onboardingCompleted: tenant ? (tenant.onboarding_completed ?? true) : true,
         features: tenant ? {
           meta_api:    tenant.feat_meta_api    ?? false,
           evolution:   tenant.feat_evolution_api ?? false,
@@ -165,11 +177,23 @@ authRouter.post('/register', async (req, res) => {
         tenantId: user.tenant_id,
         tenantName: tenant.name,
         tenantSlug: tenant.slug,
+        onboardingCompleted: true,
       },
     })
   } catch (e) {
     console.error('[register]', e.message)
     res.status(500).json({ error: e.message || 'Erro interno. Tente novamente.' })
+  }
+})
+
+// PATCH /api/auth/onboarding-complete — marca o wizard de onboarding como concluído
+authRouter.patch('/onboarding-complete', requireAuth, async (req, res) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: 'Esta rota exige um cliente (tenant).' })
+  try {
+    await supabase.from('tenants').update({ onboarding_completed: true }).eq('id', req.user.tenantId)
+    res.json({ onboardingCompleted: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
   }
 })
 

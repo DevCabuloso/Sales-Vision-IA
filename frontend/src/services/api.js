@@ -47,6 +47,11 @@ export const api = {
   register: (name, companyName, email, password) =>
     http.post('/auth/register', { name, companyName, email, password }).then((r) => r.data),
   logout: () => http.post('/auth/logout').then((r) => r.data),
+  completeOnboarding: () => http.patch('/auth/onboarding-complete').then((r) => r.data),
+
+  // billing — teste grátis (checkout InfinitePay)
+  trialSignup: (payload) => http.post('/billing/trial-signup', payload).then((r) => r.data),
+  getOrderStatus: (orderNsu) => http.get(`/billing/orders/${orderNsu}/status`).then((r) => r.data),
 
   // leads
   listLeads: () => http.get('/leads').then((r) => r.data.leads),
@@ -74,7 +79,7 @@ export const api = {
 
   // ai config
   getAIStatus: () => http.get('/ai-config/status').then((r) => r.data),
-  toggleAI: () => http.post('/ai-config/toggle').then((r) => r.data),
+  toggleAI: (aiEnabled) => http.post('/ai-config/toggle', aiEnabled === undefined ? undefined : { ai_enabled: aiEnabled }).then((r) => r.data),
   getAIConfig: () => http.get('/ai-config').then((r) => r.data),
   saveAIConfig: (payload) => http.put('/ai-config', payload).then((r) => r.data),
   testAIConfig: (message) => http.post('/ai-config/test', { message }).then((r) => r.data),
@@ -202,6 +207,16 @@ export const api = {
   deleteInternalGroup: (id) => http.delete(`/internal-groups/${id}`).then((r) => r.data),
   listInternalMessages: (groupId, params) => http.get(`/internal-groups/${groupId}/messages`, { params }).then((r) => r.data),
   sendInternalMessage: (groupId, text) => http.post(`/internal-groups/${groupId}/messages`, { text }).then((r) => r.data),
+  editInternalMessage: (groupId, id, text) => http.patch(`/internal-groups/${groupId}/messages/${id}`, { text }).then((r) => r.data),
+  deleteInternalMessage: (groupId, id) => http.delete(`/internal-groups/${groupId}/messages/${id}`).then((r) => r.data),
+  forwardInternalMessage: (groupId, id, toGroupId) => http.post(`/internal-groups/${groupId}/messages/${id}/forward`, { toGroupId }).then((r) => r.data),
+  sendInternalLocation: (groupId, latitude, longitude) => http.post(`/internal-groups/${groupId}/location`, { latitude, longitude }).then((r) => r.data),
+
+  // chat externo — editar/apagar/encaminhar mensagem, localização
+  editMessage: (leadId, id, text) => http.patch(`/chat/${leadId}/messages/${id}`, { text }).then((r) => r.data),
+  deleteMessage: (leadId, id) => http.delete(`/chat/${leadId}/messages/${id}`).then((r) => r.data),
+  forwardMessage: (leadId, id, toLeadId) => http.post(`/chat/${leadId}/messages/${id}/forward`, { toLeadId }).then((r) => r.data),
+  sendLocation: (leadId, latitude, longitude) => http.post(`/chat/${leadId}/location`, { latitude, longitude }).then((r) => r.data),
 
   // chat — status de atendimento
   attendChat: (id) => http.post(`/chat/${id}/attend`).then((r) => r.data),

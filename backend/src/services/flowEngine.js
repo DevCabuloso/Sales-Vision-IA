@@ -249,7 +249,11 @@ async function runNode(flow, node, session, tenantId, leadId) {
             await saveMsg(tenantId, leadId, 'ai', msg)
           }
           await supabase.from('leads')
-            .update({ human_takeover: true, updated_at: new Date().toISOString() })
+            .update({
+              human_takeover: true,
+              ...(node.queue_id ? { queue_id: node.queue_id } : {}),
+              updated_at: new Date().toISOString(),
+            })
             .eq('id', leadId)
           await saveMsg(tenantId, leadId, 'system', '— Atendimento transferido para humano pelo chatbot —')
           await closeSession(session.id, 'transferred')
@@ -352,7 +356,11 @@ async function runNode(flow, node, session, tenantId, leadId) {
         await saveMsg(tenantId, leadId, 'ai', msg)
       }
       await supabase.from('leads')
-        .update({ human_takeover: true, updated_at: new Date().toISOString() })
+        .update({
+          human_takeover: true,
+          ...(node.queue_id ? { queue_id: node.queue_id } : {}),
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', leadId)
       await saveMsg(tenantId, leadId, 'system', '— Atendimento transferido para humano pelo chatbot —')
       await closeSession(session.id, 'transferred')

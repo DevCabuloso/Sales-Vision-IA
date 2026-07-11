@@ -24,6 +24,7 @@ export const useAuthStore = defineStore('auth', () => {
   // A sessão real é validada pelo httpOnly cookie a cada request ao backend.
   const isAuthenticated = computed(() => !!user.value)
   const isOwner = computed(() => user.value?.role === 'owner')
+  const onboardingCompleted = computed(() => user.value?.onboardingCompleted ?? true)
 
   async function login(email, password) {
     const { user: u } = await api.login(email, password)
@@ -65,6 +66,14 @@ export const useAuthStore = defineStore('auth', () => {
     if (u) { user.value = u; userStore.set(u) }
   }
 
+  async function completeOnboarding() {
+    await api.completeOnboarding()
+    if (user.value) {
+      user.value = { ...user.value, onboardingCompleted: true }
+      userStore.set(user.value)
+    }
+  }
+
   function impersonate(t, u) {
     token.value = t
     user.value = u
@@ -72,5 +81,5 @@ export const useAuthStore = defineStore('auth', () => {
     userStore.setSession(u)
   }
 
-  return { user, token, isAuthenticated, isOwner, login, loginSuperAdmin, register, logout, clearSession, hydrate, impersonate }
+  return { user, token, isAuthenticated, isOwner, onboardingCompleted, login, loginSuperAdmin, register, logout, clearSession, hydrate, impersonate, completeOnboarding }
 })

@@ -32,6 +32,24 @@ export async function sendText(tenantId, to, body, { quotedWaId } = {}) {
   return { id: data.messages?.[0]?.id, provider: 'meta_whatsapp' }
 }
 
+/** Envia uma localização via Meta WhatsApp Cloud API (o app do destinatário renderiza o mapa). */
+export async function sendLocation(tenantId, to, { latitude, longitude, name, address }) {
+  const { accessToken, phoneNumberId } = await getCreds(tenantId)
+  const url = `https://graph.facebook.com/${config.meta.graphVersion}/${phoneNumberId}/messages`
+  const payload = {
+    messaging_product: 'whatsapp', to, type: 'location',
+    location: { latitude, longitude, name, address },
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error?.message || `Meta API erro ${res.status}`)
+  return { id: data.messages?.[0]?.id, provider: 'meta_whatsapp' }
+}
+
 /**
  * Envia mídia (imagem, vídeo, áudio, documento) via Meta Cloud API.
  * Faz upload do buffer primeiro para obter um media_id, depois envia a mensagem.

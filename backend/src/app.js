@@ -27,6 +27,7 @@ import { notificationsRouter } from './routes/notifications.js'
 import { flowsRouter } from './routes/flows.js'
 import { reportsRouter } from './routes/reports.js'
 import { followupsRouter } from './routes/followups.js'
+import { billingRouter } from './routes/billing.js'
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -123,8 +124,11 @@ export function createApp() {
 
   app.use('/api/auth/login', authLimiter)
   app.use('/api/auth/register', authLimiter)
+  app.use('/api/billing/trial-signup', authLimiter)
+  app.use('/api/billing/orders', authLimiter)
 
   app.use('/api/auth', authRouter)
+  app.use('/api/billing', billingRouter)
   app.use('/api/leads', leadsRouter)
   app.use('/api/appointments', appointmentsRouter)
   app.use('/api/integrations', integrationsRouter)

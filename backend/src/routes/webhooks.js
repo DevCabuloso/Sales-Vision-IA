@@ -219,6 +219,7 @@ webhooksRouter.post('/evolution',
           mediaMessageId: parsed.mediaMessageId, mediaRemoteJid: parsed.mediaRemoteJid, mediaFromMe: parsed.mediaFromMe,
           provider: 'evolution', instanceName,
           waMessageId: parsed.waMessageId, replyToWaId: parsed.replyToWaId,
+          isGroup: parsed.isGroup,
         })
         return
       }
@@ -287,6 +288,7 @@ webhooksRouter.post('/evolution/:tenantId',
           instanceName: parsed.instanceName,
           waMessageId: parsed.waMessageId,
           replyToWaId: parsed.replyToWaId,
+          isGroup: parsed.isGroup,
         })
         return
       }
