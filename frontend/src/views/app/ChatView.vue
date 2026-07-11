@@ -294,7 +294,7 @@
           <!-- Linha 1: info do contato + status -->
           <div class="d-flex align-center justify-space-between flex-wrap ga-2 w-100">
             <div class="d-flex align-center ga-3">
-              <v-btn v-if="isMobile" icon="mdi-arrow-left" variant="text" size="small" @click="mobilePanel = 'list'" />
+              <v-btn v-if="isMobile" icon="mdi-arrow-left" variant="text" size="small" @click="backToList" />
               <div class="header-avatar" :style="{ background: avatarColor(currentLead) }">
                 {{ (currentLead.name || currentLead.phone).slice(0, 2).toUpperCase() }}
               </div>
@@ -456,7 +456,7 @@
                     <v-icon icon="mdi-trash-can-outline" size="16" />
                   </button>
                 </div>
-                <div class="msg-bubble" :class="msg.role">
+                <div class="msg-bubble" :class="[msg.role, { 'msg-bubble-sticker': msg.media_type === 'sticker' }]">
                   <div v-if="msg.role === 'agent' || msg.role === 'ai'" class="msg-role-badge">
                     {{ msg.role === 'ai' ? '⬦ IA' : '⬦ Agente' }}
                   </div>
@@ -487,7 +487,12 @@
                   </template>
                   <template v-else-if="msg.media_url">
                     <img
-                      v-if="msg.media_type === 'image' || msg.media_type === 'sticker'"
+                      v-if="msg.media_type === 'sticker'"
+                      :src="msg.media_url" class="msg-media-sticker"
+                      @click="openMediaViewer(msg.media_url)"
+                    />
+                    <img
+                      v-else-if="msg.media_type === 'image'"
                       :src="msg.media_url" class="msg-media-image"
                       @click="openMediaViewer(msg.media_url)"
                     />
@@ -1066,12 +1071,13 @@
 
 <script setup>
 import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, http } from '@/services/api'
 import { useMessageRealtime, useRealtime } from '@/composables/useRealtime'
 import { useAuthStore } from '@/stores/auth'
 
-const route = useRoute()
+const route  = useRoute()
+const router = useRouter()
 const auth  = useAuthStore()
 const isManagerRole = computed(() => ['owner', 'admin'].includes(auth.user?.role))
 
@@ -1772,13 +1778,23 @@ async function selectLead(lead) {
   showMsgSearch.value = false
   msgSearchQuery.value = ''
   syncConv(lead.id, { unread: 0 })
-  if (isMobile.value) mobilePanel.value = 'chat'
+  if (isMobile.value) {
+    mobilePanel.value = 'chat'
+    if (route.name !== 'chat-lead' || route.params.id !== lead.id) {
+      router.replace({ name: 'chat-lead', params: { id: lead.id } })
+    }
+  }
   await loadMessages()
   scrollToBottom()
   loadTicketLogs()
   loadScheduledMessages()
   loadFollowup()
   if (lead.is_group && isManagerRole.value) loadGroupAccess()
+}
+
+function backToList() {
+  mobilePanel.value = 'list'
+  if (route.name === 'chat-lead') router.replace({ name: 'chat' })
 }
 
 // ——— acesso ao grupo (só gerente vê/mexe) ———
@@ -2430,6 +2446,10 @@ onUnmounted(() => {
 .msg-highlight .msg-bubble { outline: 2px solid rgba(99,102,241,0.5); outline-offset: 2px; }
 
 .msg-media-image { max-width: 260px; max-height: 260px; border-radius: 10px; display: block; cursor: pointer; object-fit: cover; }
+/* Sticker: tamanho real pequeno, sem fundo/bolha, igual ao WhatsApp */
+.msg-media-sticker { width: 110px; height: 110px; max-width: 110px; max-height: 110px; display: block; cursor: pointer; object-fit: contain; background: transparent; }
+.msg-bubble-sticker { background: none !important; box-shadow: none; padding: 0; }
+.msg-bubble-sticker::before { display: none; }
 .msg-media-video { max-width: 280px; max-height: 320px; border-radius: 10px; display: block; }
 .msg-media-audio { width: 240px; }
 .msg-media-doc {

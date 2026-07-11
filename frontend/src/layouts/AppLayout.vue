@@ -144,7 +144,7 @@
         <ThemeSwitcher />
       </header>
 
-      <main class="main-content" :class="{ 'has-bottom-nav': isMobile, 'full-page': isFullPage }">
+      <main class="main-content" :class="{ 'has-bottom-nav': isMobile && !hideBottomNav, 'full-page': isFullPage }">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
             <component :is="Component" />
@@ -152,8 +152,8 @@
         </router-view>
       </main>
 
-      <!-- Bottom navigation (mobile) -->
-      <nav v-if="isMobile" class="bottom-nav">
+      <!-- Bottom navigation (mobile) — escondida ao abrir uma conversa, para não atrapalhar o chat -->
+      <nav v-if="isMobile && !hideBottomNav" class="bottom-nav">
         <button v-for="item in bottomNavItems" :key="item.to" class="bottom-nav-item" :class="{ active: isActive(item.to) }" @click="navigate(item.to)">
           <v-icon :icon="item.icon" size="22" />
           <span>{{ item.title }}</span>
@@ -267,6 +267,9 @@ onUnmounted(() => {
 const isAdmin    = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
 // Rotas que ocupam 100% do espaço disponível — sem padding, sem scroll externo
 const isFullPage = computed(() => /^\/(flows\/.+|chat)/.test(route.path))
+// Ao abrir uma conversa (chat-lead) no mobile, some com a bottom-nav: o próprio
+// ChatView já tem botão de voltar, e a nav só atrapalharia o composer/mensagens
+const hideBottomNav = computed(() => route.name === 'chat-lead')
 const locale  = useLocaleStore()
 const t       = (k) => locale.t(k)
 
