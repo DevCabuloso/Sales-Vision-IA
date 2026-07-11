@@ -131,7 +131,7 @@ async function resumeFlow(session, userText, tenantId, leadId) {
     await closeSession(session.id, 'timeout')
     if (flow.fallback_text) {
       const phone = await getLeadPhone(tenantId, leadId)
-      if (phone) await whatsapp.sendText(tenantId, phone, flow.fallback_text).catch(() => {})
+      if (phone) await whatsapp.sendText(tenantId, phone, flow.fallback_text).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
     }
     return
   }
@@ -162,7 +162,7 @@ async function resumeFlow(session, userText, tenantId, leadId) {
     await runNode(flow, nextNode, updatedSession, tenantId, leadId)
   } else if (flow.fallback_text) {
     const phone = await getLeadPhone(tenantId, leadId)
-    if (phone) await whatsapp.sendText(tenantId, phone, flow.fallback_text).catch(() => {})
+    if (phone) await whatsapp.sendText(tenantId, phone, flow.fallback_text).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
   }
 }
 
@@ -235,7 +235,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
     case 'passo': {
       const txt = interpolate(node.mensagem || '', vars)
       if (phone && txt) {
-        await whatsapp.sendText(tenantId, phone, txt).catch(() => {})
+        await whatsapp.sendText(tenantId, phone, txt).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
         await saveMsg(tenantId, leadId, 'ai', txt)
       }
       switch (node.saida) {
@@ -245,7 +245,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
         case 'transferir': {
           const msg = node.msg_transferencia ? interpolate(node.msg_transferencia, vars) : null
           if (msg && phone) {
-            await whatsapp.sendText(tenantId, phone, msg).catch(() => {})
+            await whatsapp.sendText(tenantId, phone, msg).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
             await saveMsg(tenantId, leadId, 'ai', msg)
           }
           await supabase.from('leads')
@@ -272,7 +272,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
     case 'mensagem': {
       const txt = interpolate(node.conteudo || '', vars)
       if (phone && txt) {
-        await whatsapp.sendText(tenantId, phone, txt).catch(() => {})
+        await whatsapp.sendText(tenantId, phone, txt).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
         await saveMsg(tenantId, leadId, 'ai', txt)
       }
       await advance()
@@ -283,7 +283,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
     case 'captura': {
       const txt = interpolate(node.pergunta || '', vars)
       if (phone && txt) {
-        await whatsapp.sendText(tenantId, phone, txt).catch(() => {})
+        await whatsapp.sendText(tenantId, phone, txt).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
         await saveMsg(tenantId, leadId, 'ai', txt)
       }
       // Não avança — próximo resumeFlow() tratará a resposta
@@ -308,7 +308,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
         )
         const out = await runAgent({ tenantId, tenantName, history: histRows || [] })
         if (out?.reply && phone) {
-          await whatsapp.sendText(tenantId, phone, out.reply).catch(() => {})
+          await whatsapp.sendText(tenantId, phone, out.reply).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
           await saveMsg(tenantId, leadId, 'ai', out.reply)
         }
       } catch (e) {
@@ -352,7 +352,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
     case 'transferencia': {
       const msg = node.mensagem ? interpolate(node.mensagem, vars) : null
       if (msg && phone) {
-        await whatsapp.sendText(tenantId, phone, msg).catch(() => {})
+        await whatsapp.sendText(tenantId, phone, msg).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
         await saveMsg(tenantId, leadId, 'ai', msg)
       }
       await supabase.from('leads')

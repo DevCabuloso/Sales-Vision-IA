@@ -52,6 +52,14 @@ export async function isWithinBusinessHours(tenantId) {
   } catch { return true }
 }
 
+/** Fuso horário operacional do tenant (usado também pelo agendamento de acompanhamentos) */
+export async function getTenantTimezone(tenantId) {
+  try {
+    const rows = unwrap(await supabase.from('business_hours').select('timezone').eq('tenant_id', tenantId).limit(1))
+    return rows[0]?.timezone || 'America/Sao_Paulo'
+  } catch { return 'America/Sao_Paulo' }
+}
+
 export async function getOffMessage(tenantId) {
   try {
     const rows = unwrap(await supabase.from('business_hours').select('off_message').eq('tenant_id', tenantId).limit(1))

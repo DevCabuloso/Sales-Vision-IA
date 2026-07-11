@@ -67,9 +67,45 @@ export function requireOwner(req, res, next) {
   next()
 }
 
-export function requireTenant(req, res, next) {
+// Cache curto do status do tenant (suspenso/trial expirado) — mesmo racional de
+// USER_CACHE_TTL_MS: evita ida ao Supabase em toda request, com defasagem pequena
+// e aceitável entre o dono suspender um cliente e isso valer de fato.
+const TENANT_CACHE_TTL_MS = 30_000
+const tenantCache = new Map() // tenantId -> { status, trial_ends_at, expiresAt }
+
+export function invalidateTenantStatusCache(tenantId) {
+  tenantCache.delete(tenantId)
+}
+
+async function getTenantStatus(tenantId) {
+  const cached = tenantCache.get(tenantId)
+  if (cached && Date.now() <= cached.expiresAt) return cached
+  const rows = unwrap(
+    await supabase.from('tenants').select('status, trial_ends_at').eq('id', tenantId).limit(1)
+  )
+  const entry = { status: rows?.[0]?.status ?? null, trial_ends_at: rows?.[0]?.trial_ends_at ?? null, expiresAt: Date.now() + TENANT_CACHE_TTL_MS }
+  tenantCache.set(tenantId, entry)
+  return entry
+}
+
+export async function requireTenant(req, res, next) {
   if (!req.user?.tenantId) {
     return res.status(403).json({ error: 'Esta rota exige um cliente (tenant).' })
   }
-  next()
+  try {
+    const { status, trial_ends_at } = await getTenantStatus(req.user.tenantId)
+    if (status === 'suspended') {
+      return res.status(402).json({ error: 'Assinatura suspensa. Entre em contato com o suporte.' })
+    }
+    if (status === 'pending_payment') {
+      return res.status(402).json({ error: 'Pagamento pendente. Finalize o checkout para acessar a plataforma.' })
+    }
+    if (status === 'trial' && trial_ends_at && new Date(trial_ends_at).getTime() < Date.now()) {
+      return res.status(402).json({ error: 'Seu período de teste expirou. Entre em contato para continuar usando a plataforma.' })
+    }
+    next()
+  } catch {
+    // Falha ao checar status não deve derrubar a plataforma pro cliente — segue.
+    next()
+  }
 }

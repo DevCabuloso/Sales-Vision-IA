@@ -36,3 +36,5 @@ CREATE TABLE IF NOT EXISTS checkout_orders (
 );
 
 CREATE INDEX IF NOT EXISTS idx_checkout_orders_tenant_id ON checkout_orders(tenant_id);
+
+INSERT INTO schema_migrations (filename) VALUES ('migration_billing.sql') ON CONFLICT (filename) DO NOTHING;

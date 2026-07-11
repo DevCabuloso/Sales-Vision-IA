@@ -8,6 +8,7 @@ import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { chat } from '../services/ai/openai.js'
 import { buildSystemContent } from '../services/ai/agent.js'
 import { encrypt, decryptJSON } from '../services/crypto.js'
+import { invalidateTenantCache } from '../services/orchestrator.js'
 
 export const aiConfigRouter = Router()
 aiConfigRouter.use(requireAuth, requireTenant)
@@ -116,6 +117,7 @@ aiConfigRouter.post('/toggle', async (req, res) => {
           .update({ ai_enabled: req.body.ai_enabled })
           .eq('id', req.user.tenantId)
       )
+      invalidateTenantCache(req.user.tenantId)
       return res.json({ ai_enabled: req.body.ai_enabled })
     }
     const rows = unwrap(
@@ -127,6 +129,7 @@ aiConfigRouter.post('/toggle', async (req, res) => {
       await supabase.from('tenants').update({ ai_enabled: !current })
         .eq('id', req.user.tenantId)
     )
+    invalidateTenantCache(req.user.tenantId)
     res.json({ ai_enabled: !current })
   } catch (e) {
     res.status(500).json({ error: e.message })

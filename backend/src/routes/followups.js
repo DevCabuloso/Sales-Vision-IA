@@ -23,6 +23,8 @@ const upload = multer({
 export const followupsRouter = Router()
 followupsRouter.use(requireAuth, requireTenant)
 
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+
 const stepSchema = z.object({
   delay_days:     z.number().int().min(0).max(3650),
   text:           z.string().min(1).max(4000),
@@ -30,12 +32,15 @@ const stepSchema = z.object({
   media_type:     z.string().optional().nullable(),
   media_mimetype: z.string().optional().nullable(),
   media_filename: z.string().optional().nullable(),
+  send_time:      z.string().regex(TIME_RE).optional().nullable(),
 })
 
 const sequenceSchema = z.object({
-  name:        z.string().min(1).max(200),
-  description: z.string().max(2000).optional().nullable(),
-  steps:       z.array(stepSchema).min(1).max(50),
+  name:               z.string().min(1).max(200),
+  description:        z.string().max(2000).optional().nullable(),
+  time_mode:          z.enum(['general', 'individual']).default('general'),
+  default_send_time:  z.string().regex(TIME_RE).default('09:00'),
+  steps:              z.array(stepSchema).min(1).max(50),
 })
 
 async function insertSteps(sequenceId, tenantId, steps) {
@@ -51,6 +56,7 @@ async function insertSteps(sequenceId, tenantId, steps) {
         media_type: s.media_type || null,
         media_mimetype: s.media_mimetype || null,
         media_filename: s.media_filename || null,
+        send_time: s.send_time || null,
       }))
     ).select('*')
   )
@@ -120,6 +126,8 @@ followupsRouter.post('/', async (req, res) => {
         created_by: req.user.id,
         name: parsed.data.name,
         description: parsed.data.description || null,
+        time_mode: parsed.data.time_mode,
+        default_send_time: parsed.data.default_send_time,
       }).select('*').single()
     )
     const steps = await insertSteps(sequence.id, req.user.tenantId, parsed.data.steps)
@@ -145,6 +153,8 @@ followupsRouter.patch('/:id', async (req, res) => {
       await supabase.from('followup_sequences').update({
         ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
         ...(parsed.data.description !== undefined ? { description: parsed.data.description || null } : {}),
+        time_mode: parsed.data.time_mode,
+        default_send_time: parsed.data.default_send_time,
         updated_at: new Date().toISOString(),
       }).eq('id', req.params.id).eq('tenant_id', req.user.tenantId).select('*').single()
     )
@@ -198,6 +208,8 @@ followupsRouter.post('/:id/duplicate', async (req, res) => {
         created_by: req.user.id,
         name: `${src.name} (cópia)`,
         description: src.description,
+        time_mode: src.time_mode,
+        default_send_time: src.default_send_time,
       }).select('*').single()
     )
 
@@ -215,6 +227,7 @@ followupsRouter.post('/:id/duplicate', async (req, res) => {
             media_type: s.media_type,
             media_mimetype: s.media_mimetype,
             media_filename: s.media_filename,
+            send_time: s.send_time,
           }))
         ).select('*')
       )

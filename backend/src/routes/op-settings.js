@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { invalidateTenantCache } from '../services/orchestrator.js'
 
 export const opSettingsRouter = Router()
 opSettingsRouter.use(requireAuth, requireTenant)
@@ -70,6 +71,7 @@ opSettingsRouter.put('/', async (req, res) => {
         .update({ op_settings: patch, updated_at: new Date().toISOString() })
         .eq('id', req.user.tenantId)
     )
+    invalidateTenantCache(req.user.tenantId)
     res.json({ settings: { ...DEFAULTS, ...patch } })
   } catch (e) {
     res.status(500).json({ error: e.message })

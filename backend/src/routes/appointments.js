@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
-import { createEvent, cancelEvent, listEvents } from '../services/googleCalendar.js'
+import { createEvent, cancelEvent, listEvents, updateEvent } from '../services/googleCalendar.js'
 import { logUsage } from '../services/usage.js'
 
 export const appointmentsRouter = Router()
@@ -128,6 +128,45 @@ appointmentsRouter.post('/', async (req, res) => {
     res.status(201).json({ appointment: row, meetingLink: ev.meetingLink })
   } catch (e) {
     res.status(502).json({ error: 'Falha ao criar evento: ' + e.message })
+  }
+})
+
+// ─── PATCH /api/appointments/:id ─── reagendar (muda horário/título sem perder histórico)
+const rescheduleSchema = z.object({
+  title: z.string().min(1).optional(),
+  start: z.string().optional(),
+  end: z.string().optional(),
+}).refine((d) => d.title || d.start || d.end, { message: 'Informe ao menos um campo para atualizar.' })
+
+appointmentsRouter.patch('/:id', async (req, res) => {
+  const parsed = rescheduleSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Dados inválidos.' })
+  const d = parsed.data
+
+  const rows = unwrap(
+    await supabase.from('appointments').select('external_id, status')
+      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
+  )
+  if (!rows.length) return res.status(404).json({ error: 'Reunião não encontrada.' })
+  if (rows[0].status === 'cancelled') return res.status(400).json({ error: 'Não é possível reagendar uma reunião cancelada.' })
+
+  const patch = { updated_at: new Date().toISOString() }
+  if (d.title) patch.title = d.title
+  if (d.start) patch.start_time = d.start
+  if (d.end) patch.end_time = d.end
+
+  try {
+    if (rows[0].external_id) {
+      const ev = await updateEvent(req.user.tenantId, rows[0].external_id, { summary: d.title, start: d.start, end: d.end })
+      if (ev.meetingLink) patch.meeting_link = ev.meetingLink
+    }
+    const row = unwrap(
+      await supabase.from('appointments').update(patch)
+        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).select().single()
+    )
+    res.json({ appointment: row })
+  } catch (e) {
+    res.status(502).json({ error: 'Falha ao reagendar evento: ' + e.message })
   }
 })
 

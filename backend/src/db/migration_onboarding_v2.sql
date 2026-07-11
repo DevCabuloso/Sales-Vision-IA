@@ -10,3 +10,5 @@
 -- ════════════════════════════════════════════════════════════════
 
 ALTER TABLE ai_configs ADD COLUMN IF NOT EXISTS openai_api_key text;
+
+INSERT INTO schema_migrations (filename) VALUES ('migration_onboarding_v2.sql') ON CONFLICT (filename) DO NOTHING;

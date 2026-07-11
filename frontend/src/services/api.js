@@ -67,6 +67,7 @@ export const api = {
   createAppointment: (payload) =>
     http.post('/appointments', payload).then((r) => r.data),
   cancelAppointment: (id) => http.post(`/appointments/${id}/cancel`).then((r) => r.data),
+  rescheduleAppointment: (id, payload) => http.patch(`/appointments/${id}`, payload).then((r) => r.data),
 
   // google calendar
   googleSetupStatus: () => http.get('/integrations/google/setup').then((r) => r.data),
@@ -126,7 +127,7 @@ export const api = {
   sendCampaign: (id) => http.post(`/broadcast/campaigns/${id}/send`).then((r) => r.data),
   cancelCampaign: (id) => http.post(`/broadcast/campaigns/${id}/cancel`).then((r) => r.data),
   listBroadcastContacts: (campaignId) => http.get(`/broadcast/campaigns/${campaignId}/contacts`).then((r) => r.data),
-  importContacts: (campaignId, contacts) => http.post(`/broadcast/campaigns/${campaignId}/contacts`, { contacts }).then((r) => r.data),
+  importCampaignContacts: (campaignId, contacts) => http.post(`/broadcast/campaigns/${campaignId}/contacts`, { contacts }).then((r) => r.data),
   importLeadsToCampaign: (campaignId, filters) => http.post(`/broadcast/campaigns/${campaignId}/import-leads`, filters).then((r) => r.data),
   removeBroadcastContact: (campaignId, contactId) => http.delete(`/broadcast/campaigns/${campaignId}/contacts/${contactId}`).then((r) => r.data),
   clearBroadcastContacts: (campaignId) => http.delete(`/broadcast/campaigns/${campaignId}/contacts`).then((r) => r.data),

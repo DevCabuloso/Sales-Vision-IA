@@ -64,28 +64,6 @@ async function resolveEvolutionTenant(instanceName) {
 // GET /webhooks/ping
 webhooksRouter.get('/ping', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }))
 
-// GET /webhooks/debug-msgs?key=sdr2025 — diagnóstico sem login
-webhooksRouter.get('/debug-msgs', async (req, res) => {
-  if (req.query.key !== 'sdr2025') return res.status(403).json({ error: 'Chave inválida.' })
-  try {
-    const msgs = unwrap(
-      await supabase.from('messages')
-        .select('id, tenant_id, lead_id, role, text, media_url, media_type, media_mimetype, media_filename, created_at')
-        .order('created_at', { ascending: false })
-        .limit(20)
-    )
-    const leads = unwrap(
-      await supabase.from('leads')
-        .select('id, tenant_id, name, phone, conversation_status, updated_at')
-        .order('updated_at', { ascending: false })
-        .limit(20)
-    )
-    res.json({ messages: msgs, leads })
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
-
 // ════════════════════════════════════════════════
 // META — verificação (GET) e recebimento (POST)
 // ════════════════════════════════════════════════

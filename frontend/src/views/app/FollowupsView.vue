@@ -46,6 +46,27 @@
           <v-text-field v-model="editForm.name" label="Nome do acompanhamento" class="mb-2" />
           <v-textarea v-model="editForm.description" label="Descrição (opcional)" rows="2" auto-grow class="mb-4" />
 
+          <div class="mb-4">
+            <div class="text-caption font-weight-bold mb-2" style="color:#9FB0BC;letter-spacing:.5px">HORÁRIO DE ENVIO</div>
+            <v-btn-toggle v-model="editForm.time_mode" mandatory density="comfortable" color="primary" divided class="mb-2">
+              <v-btn value="general" size="small">Horário geral</v-btn>
+              <v-btn value="individual" size="small">Horário individual</v-btn>
+            </v-btn-toggle>
+
+            <div v-if="editForm.time_mode === 'general'">
+              <v-text-field
+                v-model="editForm.default_send_time" type="time" density="compact" style="max-width:160px"
+                label="Horário de envio" hide-details
+              />
+              <div class="text-caption mt-1" style="color:#6B7C88">
+                Todas as mensagens (exceto as marcadas como "Enviar imediatamente") saem neste horário, no dia correspondente.
+              </div>
+            </div>
+            <div v-else class="text-caption" style="color:#6B7C88">
+              Defina um horário diferente para cada mensagem abaixo.
+            </div>
+          </div>
+
           <div class="d-flex align-center justify-space-between mb-2">
             <div class="text-caption font-weight-bold" style="color:#9FB0BC;letter-spacing:.5px">MENSAGENS DA SEQUÊNCIA</div>
             <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-plus" @click="addStep">Adicionar mensagem</v-btn>
@@ -75,6 +96,11 @@
                 <v-text-field
                   v-model.number="step.delay_days" type="number" min="0" density="compact" style="max-width:320px"
                   :label="step.delay_days === 0 ? 'Enviar imediatamente' : 'Dias após o início do acompanhamento'" hide-details
+                />
+                <v-text-field
+                  v-if="editForm.time_mode === 'individual' && step.delay_days > 0"
+                  v-model="step.send_time" type="time" density="compact" style="max-width:160px"
+                  label="Horário de envio" hide-details
                 />
                 <input :ref="(el) => (fileInputs[i] = el)" type="file" class="d-none" @change="onPickFile(i, $event)" />
                 <v-btn size="small" variant="tonal" prepend-icon="mdi-paperclip" @click="fileInputs[i]?.click()">
@@ -136,14 +162,14 @@ const headers = [
 
 let stepKeySeq = 0
 function blankStep() {
-  return { _key: stepKeySeq++, text: '', delay_days: 0, _file: null, media_url: null, media_type: null, media_mimetype: null, media_filename: null }
+  return { _key: stepKeySeq++, text: '', delay_days: 0, send_time: '09:00', _file: null, media_url: null, media_type: null, media_mimetype: null, media_filename: null }
 }
 
 const editDialog = ref(false)
 const editMode = ref(false)
 const editTarget = ref(null)
 const editError = ref('')
-const editForm = reactive({ name: '', description: '', steps: [blankStep()] })
+const editForm = reactive({ name: '', description: '', time_mode: 'general', default_send_time: '09:00', steps: [blankStep()] })
 const fileInputs = {}
 
 const deleteDialog = ref(false)
@@ -157,7 +183,7 @@ async function load() {
 
 function openCreate() {
   editMode.value = false; editTarget.value = null; editError.value = ''
-  Object.assign(editForm, { name: '', description: '', steps: [blankStep()] })
+  Object.assign(editForm, { name: '', description: '', time_mode: 'general', default_send_time: '09:00', steps: [blankStep()] })
   editDialog.value = true
 }
 
@@ -168,8 +194,10 @@ async function openEdit(seq) {
     Object.assign(editForm, {
       name: sequence.name,
       description: sequence.description || '',
+      time_mode: sequence.time_mode || 'general',
+      default_send_time: sequence.default_send_time || '09:00',
       steps: steps.length
-        ? steps.map((s) => ({ _key: stepKeySeq++, text: s.text, delay_days: s.delay_days, _file: null, media_url: s.media_url, media_type: s.media_type, media_mimetype: s.media_mimetype, media_filename: s.media_filename }))
+        ? steps.map((s) => ({ _key: stepKeySeq++, text: s.text, delay_days: s.delay_days, send_time: s.send_time || sequence.default_send_time || '09:00', _file: null, media_url: s.media_url, media_type: s.media_type, media_mimetype: s.media_mimetype, media_filename: s.media_filename }))
         : [blankStep()],
     })
     editDialog.value = true
@@ -224,6 +252,8 @@ async function saveEdit() {
     const payload = {
       name: editForm.name,
       description: editForm.description || null,
+      time_mode: editForm.time_mode,
+      default_send_time: editForm.default_send_time || '09:00',
       steps: editForm.steps.map((s) => ({
         delay_days: Number(s.delay_days) || 0,
         text: s.text,
@@ -231,6 +261,7 @@ async function saveEdit() {
         media_type: s.media_type || null,
         media_mimetype: s.media_mimetype || null,
         media_filename: s.media_filename || null,
+        send_time: editForm.time_mode === 'individual' ? (s.send_time || '09:00') : null,
       })),
     }
 

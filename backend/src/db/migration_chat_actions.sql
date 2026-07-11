@@ -31,3 +31,5 @@ ALTER TABLE internal_messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 ALTER TABLE internal_messages ADD COLUMN IF NOT EXISTS forwarded_from_id uuid REFERENCES internal_messages(id);
 ALTER TABLE internal_messages ADD COLUMN IF NOT EXISTS location_lat double precision;
 ALTER TABLE internal_messages ADD COLUMN IF NOT EXISTS location_lng double precision;
+
+INSERT INTO schema_migrations (filename) VALUES ('migration_chat_actions.sql') ON CONFLICT (filename) DO NOTHING;

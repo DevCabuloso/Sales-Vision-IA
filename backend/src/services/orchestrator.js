@@ -18,8 +18,13 @@ function ttlGet(key, ttlSec, fn) {
     return val
   })
 }
-// Invalida tenant quando dados de configuração mudam (chamado externamente se necessário)
-export function invalidateTenantCache(tenantId) { _cache.delete(`tenant:${tenantId}`) }
+// Invalida o cache de config do tenant — chamado pelas rotas de ai-config/op-settings
+// ao salvar, senão a mudança demora até 5min (TTL do ttlGet) pra valer no atendimento.
+export function invalidateTenantCache(tenantId) {
+  _cache.delete(`tenant:${tenantId}`)
+  _cache.delete(`opsettings:${tenantId}`)
+  _cache.delete(`biz:${tenantId}`)
+}
 
 /**
  * Processa uma mensagem recebida de um lead via WhatsApp.

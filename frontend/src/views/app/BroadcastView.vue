@@ -392,7 +392,7 @@ async function deleteCampaign(camp) { try { await api.deleteCampaign(camp.id); c
 
 async function doImport() {
   importError.value = ''; importing.value = true
-  try { const { imported } = await api.importContacts(activeCampaign.value.id, parsedContacts.value); await openManage(activeCampaign.value); importDialog.value = false; importText.value = ''; toast.success(`${imported} contato(s) importado(s).`) }
+  try { const { imported } = await api.importCampaignContacts(activeCampaign.value.id, parsedContacts.value); await openManage(activeCampaign.value); importDialog.value = false; importText.value = ''; toast.success(`${imported} contato(s) importado(s).`) }
   catch (e) { importError.value = e.message } finally { importing.value = false }
 }
 

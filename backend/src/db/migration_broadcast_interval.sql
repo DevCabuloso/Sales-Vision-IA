@@ -3,3 +3,5 @@
 ALTER TABLE broadcast_campaigns
   ADD COLUMN IF NOT EXISTS min_interval_seconds INTEGER NOT NULL DEFAULT 2,
   ADD COLUMN IF NOT EXISTS max_interval_seconds INTEGER NOT NULL DEFAULT 5;
+
+INSERT INTO schema_migrations (filename) VALUES ('migration_broadcast_interval.sql') ON CONFLICT (filename) DO NOTHING;

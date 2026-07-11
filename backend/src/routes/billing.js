@@ -73,8 +73,14 @@ billingRouter.post('/trial-signup', async (req, res) => {
     const user = users?.[0]
     if (!user) return res.status(500).json({ error: 'Erro ao criar usuário. Tente novamente.' })
 
-    const orderNsu = `trial-${tenant.id}-${randomUUID().slice(0, 8)}`
+    const orderNsu = `trial-${tenant.id}-${randomUUID()}`
     const amountCents = config.billing.trialPlanPriceCents
+    // Token só conhecido pelo backend e pela InfinitePay (vai na webhook_url que
+    // registramos na criação do link) — nunca é devolvido ao cliente. Sem isso,
+    // qualquer um poderia chamar /webhook direto com o order_nsu (que É devolvido
+    // ao cliente logo abaixo, pra permitir o polling de status) e "confirmar"
+    // um pagamento que nunca aconteceu.
+    const webhookToken = randomUUID()
 
     unwrap(
       await supabase.from('checkout_orders').insert({
@@ -84,11 +90,12 @@ billingRouter.post('/trial-signup', async (req, res) => {
         plan: config.billing.trialPlanTier,
         amount_cents: amountCents,
         status: 'pending',
+        webhook_token: webhookToken,
       })
     )
 
     const redirectUrl = `${config.frontendUrl}/pagamento/retorno?order_nsu=${orderNsu}`
-    const webhookUrl = `${config.backendUrl}/api/billing/webhook`
+    const webhookUrl = `${config.backendUrl}/api/billing/webhook?token=${webhookToken}`
 
     const { url, invoiceSlug } = await createCheckoutLink({
       orderNsu,
@@ -176,6 +183,13 @@ billingRouter.post('/webhook', async (req, res) => {
     const order = orders?.[0]
     if (!order) {
       console.warn('[billing/webhook] pedido desconhecido:', order_nsu)
+      return res.json({ ok: true })
+    }
+    // order_nsu é devolvido ao cliente pra permitir o polling de status — não é
+    // segredo. O webhook_token só existe na webhook_url enviada à InfinitePay
+    // (nunca ao cliente), então valida que a chamada realmente veio de lá.
+    if (!order.webhook_token || req.query.token !== order.webhook_token) {
+      console.warn('[billing/webhook] token inválido ou ausente para pedido:', order_nsu)
       return res.json({ ok: true })
     }
     if (order.status === 'paid') {

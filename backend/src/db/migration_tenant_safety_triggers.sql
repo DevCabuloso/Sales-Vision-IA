@@ -159,3 +159,5 @@ CREATE TRIGGER trg_tenant_check_step_id
 -- adicionadas depois, direto no Supabase). Antes de estender este
 -- padrão pra elas, confirme os nomes exatos de coluna no Supabase.
 -- ════════════════════════════════════════════════════════════════
+
+INSERT INTO schema_migrations (filename) VALUES ('migration_tenant_safety_triggers.sql') ON CONFLICT (filename) DO NOTHING;

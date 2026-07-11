@@ -3,7 +3,7 @@ import { z } from 'zod'
 import jwt from 'jsonwebtoken'
 import { supabase, unwrap } from '../db/supabase.js'
 import { hashPassword } from '../services/auth.js'
-import { requireAuth, requireOwner } from '../middleware/auth.js'
+import { requireAuth, requireOwner, invalidateTenantStatusCache } from '../middleware/auth.js'
 import { config } from '../config/index.js'
 
 export const adminRouter = Router()
@@ -134,6 +134,7 @@ adminRouter.patch('/clients/:id/status', async (req, res) => {
       .eq('id', req.params.id).select()
   )
   if (!rows.length) return res.status(404).json({ error: 'Cliente não encontrado.' })
+  invalidateTenantStatusCache(req.params.id)
   res.json({ client: rows[0] })
 })
 

@@ -9,3 +9,5 @@ ALTER TABLE broadcast_contacts
 
 CREATE INDEX IF NOT EXISTS idx_broadcast_contacts_wa_message_id
   ON broadcast_contacts(wa_message_id) WHERE wa_message_id IS NOT NULL;
+
+INSERT INTO schema_migrations (filename) VALUES ('migration_broadcast_status.sql') ON CONFLICT (filename) DO NOTHING;

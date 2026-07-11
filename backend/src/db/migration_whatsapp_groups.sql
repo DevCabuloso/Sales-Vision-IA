@@ -35,3 +35,5 @@ DROP TRIGGER IF EXISTS trg_tenant_check_user_id ON whatsapp_group_access;
 CREATE TRIGGER trg_tenant_check_user_id
   BEFORE INSERT OR UPDATE OF user_id, tenant_id ON whatsapp_group_access
   FOR EACH ROW EXECUTE FUNCTION _assert_same_tenant('user_id', 'users', 'id');
+
+INSERT INTO schema_migrations (filename) VALUES ('migration_whatsapp_groups.sql') ON CONFLICT (filename) DO NOTHING;

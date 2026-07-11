@@ -149,6 +149,26 @@ export async function createEvent(tenantId, { summary, description, start, end, 
   };
 }
 
+/** Atualiza horário (e opcionalmente título) de um evento existente. */
+export async function updateEvent(tenantId, externalId, { summary, start, end, timeZone = 'America/Sao_Paulo' } = {}) {
+  const { calendar, calendarId } = await getCalendarClient(tenantId);
+  const requestBody = {};
+  if (summary) requestBody.summary = summary;
+  if (start) requestBody.start = { dateTime: new Date(start).toISOString(), timeZone };
+  if (end) requestBody.end = { dateTime: new Date(end).toISOString(), timeZone };
+  const { data } = await calendar.events.patch({
+    calendarId,
+    eventId: externalId,
+    sendUpdates: 'all',
+    requestBody,
+  });
+  return {
+    externalId: data.id,
+    meetingLink: data.hangoutLink || data.conferenceData?.entryPoints?.[0]?.uri || null,
+    status: data.status,
+  };
+}
+
 /** Lista eventos num intervalo. */
 export async function listEvents(tenantId, { timeMin, timeMax, maxResults = 50, showDeleted = false } = {}) {
   const { calendar, calendarId } = await getCalendarClient(tenantId);

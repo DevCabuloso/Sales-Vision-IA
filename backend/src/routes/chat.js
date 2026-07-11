@@ -5,6 +5,7 @@ import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { logUsage } from '../services/usage.js'
 import { uploadChatMedia } from '../services/mediaStorage.js'
+import { getTenantTimezone } from './business-hours.js'
 
 const ALLOWED_MIMETYPES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif',
@@ -932,30 +933,64 @@ chatRouter.post('/:leadId/resolve', async (req, res) => {
 
 // ─── ACOMPANHAMENTOS (sequências de mensagens automáticas) ──────
 
-async function materializeFollowupMessages(tenantId, leadId, enrollmentId, sequenceId, startedAt) {
+// ─── cálculo do horário de envio (respeitando o fuso horário do tenant) ───
+function ymdInTimezone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date)
+  const get = (type) => Number(parts.find((p) => p.type === type).value)
+  return { y: get('year'), m: get('month'), d: get('day') }
+}
+
+function addDaysToYmd({ y, m, d }, days) {
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + days)
+  return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() }
+}
+
+// Converte um horário de parede (ano/mês/dia/hora/min) num fuso horário específico para um instante UTC real
+function zonedTimeToUtc({ y, m, d }, hh, mm, timeZone) {
+  const utcGuess = Date.UTC(y, m - 1, d, hh, mm)
+  const asIfLocal = new Date(new Date(utcGuess).toLocaleString('en-US', { timeZone }))
+  const diff = utcGuess - asIfLocal.getTime()
+  return new Date(utcGuess + diff)
+}
+
+async function materializeFollowupMessages(tenantId, leadId, enrollmentId, sequence, startedAt) {
   const steps = unwrap(
     await supabase.from('followup_steps').select('*')
-      .eq('sequence_id', sequenceId).eq('tenant_id', tenantId)
+      .eq('sequence_id', sequence.id).eq('tenant_id', tenantId)
       .order('order_index', { ascending: true })
   )
   if (!steps.length) return []
 
-  const start = new Date(startedAt).getTime()
+  const startedDate = new Date(startedAt)
+  const timezone = await getTenantTimezone(tenantId)
+  const baseYmd = ymdInTimezone(startedDate, timezone)
+
   return unwrap(
     await supabase.from('followup_enrollment_messages').insert(
-      steps.map((s) => ({
-        tenant_id: tenantId,
-        enrollment_id: enrollmentId,
-        lead_id: leadId,
-        step_id: s.id,
-        order_index: s.order_index,
-        text: s.text,
-        media_url: s.media_url,
-        media_type: s.media_type,
-        media_mimetype: s.media_mimetype,
-        media_filename: s.media_filename,
-        send_at: new Date(start + s.delay_days * 86400000).toISOString(),
-      }))
+      steps.map((s) => {
+        // "Enviar imediatamente" (dia 0) mantém o horário exato do início do acompanhamento
+        let sendAt = startedDate
+        if (s.delay_days > 0) {
+          const dayYmd = addDaysToYmd(baseYmd, s.delay_days)
+          const timeStr = (sequence.time_mode === 'individual' ? s.send_time : null) || sequence.default_send_time || '09:00'
+          const [hh, mm] = timeStr.split(':').map(Number)
+          sendAt = zonedTimeToUtc(dayYmd, hh, mm, timezone)
+        }
+        return {
+          tenant_id: tenantId,
+          enrollment_id: enrollmentId,
+          lead_id: leadId,
+          step_id: s.id,
+          order_index: s.order_index,
+          text: s.text,
+          media_url: s.media_url,
+          media_type: s.media_type,
+          media_mimetype: s.media_mimetype,
+          media_filename: s.media_filename,
+          send_at: sendAt.toISOString(),
+        }
+      })
     ).select('*')
   )
 }
@@ -1017,7 +1052,7 @@ chatRouter.post('/:leadId/followup/start', async (req, res) => {
     if (!leadRows.length) return res.status(404).json({ error: 'Lead não encontrado.' })
 
     const seqRows = unwrap(
-      await supabase.from('followup_sequences').select('id, name')
+      await supabase.from('followup_sequences').select('id, name, time_mode, default_send_time')
         .eq('id', sequence_id).eq('tenant_id', req.user.tenantId).limit(1)
     )
     if (!seqRows.length) return res.status(404).json({ error: 'Acompanhamento não encontrado.' })
@@ -1032,7 +1067,7 @@ chatRouter.post('/:leadId/followup/start', async (req, res) => {
         started_at: startedAt,
       }).select('*').single()
     )
-    await materializeFollowupMessages(req.user.tenantId, req.params.leadId, enrollment.id, sequence_id, startedAt)
+    await materializeFollowupMessages(req.user.tenantId, req.params.leadId, enrollment.id, seqRows[0], startedAt)
 
     res.status(201).json({ followup: await loadActiveFollowup(req.user.tenantId, req.params.leadId) })
   } catch (e) {
@@ -1091,6 +1126,12 @@ chatRouter.post('/:leadId/followup/:enrollmentId/restart', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Acompanhamento não encontrado.' })
     const sequenceId = rows[0].sequence_id
 
+    const seqRows = unwrap(
+      await supabase.from('followup_sequences').select('id, name, time_mode, default_send_time')
+        .eq('id', sequenceId).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (!seqRows.length) return res.status(404).json({ error: 'Acompanhamento não encontrado.' })
+
     await stopEnrollment(req.user.tenantId, req.params.leadId, req.params.enrollmentId, 'cancelled')
 
     const startedAt = new Date().toISOString()
@@ -1103,7 +1144,7 @@ chatRouter.post('/:leadId/followup/:enrollmentId/restart', async (req, res) => {
         started_at: startedAt,
       }).select('*').single()
     )
-    await materializeFollowupMessages(req.user.tenantId, req.params.leadId, enrollment.id, sequenceId, startedAt)
+    await materializeFollowupMessages(req.user.tenantId, req.params.leadId, enrollment.id, seqRows[0], startedAt)
 
     res.status(201).json({ followup: await loadActiveFollowup(req.user.tenantId, req.params.leadId) })
   } catch (e) {
