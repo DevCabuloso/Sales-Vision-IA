@@ -143,7 +143,7 @@ import { ref } from 'vue'
 import { api } from '@/services/api'
 
 // mantido em sincronia com backend/src/config/index.js (config.billing.trialPlanPriceCents)
-const priceLabel = '497'
+const priceLabel = '397'
 
 const formOpen = ref(false)
 const name = ref('')
