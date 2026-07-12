@@ -140,6 +140,42 @@ describe('whatsapp/evolution', () => {
       await expect(evolution.sendMedia('tenant-1', '5511988887777', { buffer: Buffer.from('x'), mimetype: 'audio/ogg' }))
         .rejects.toThrow('Canal Evolution não conectado.')
     })
+
+    it('áudio usa o endpoint dedicado sendWhatsAppAudio em vez do sendMedia genérico', async () => {
+      setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
+      const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ key: { id: 'wa-audio' } }) })
+
+      const result = await evolution.sendMedia('tenant-1', '5511988887777', { buffer: Buffer.from('audiobytes'), mimetype: 'audio/webm', filename: 'audio.webm' })
+
+      expect(result.id).toBe('wa-audio')
+      expect(fetchMock.mock.calls[0][0]).toBe('https://evo.exemplo.com/message/sendWhatsAppAudio/inst-1')
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+      expect(body).toEqual({ number: '5511988887777', audio: Buffer.from('audiobytes').toString('base64') })
+    })
+
+    it('áudio inclui o objeto "quoted" quando há contexto de citação', async () => {
+      setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
+      const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ key: {} }) })
+
+      await evolution.sendMedia('tenant-1', '5511988887777', {
+        buffer: Buffer.from('audiobytes'), mimetype: 'audio/webm',
+        quotedWaId: 'wa-orig', quotedFromMe: true, quotedText: 'Original',
+      })
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+      expect(body.quoted).toEqual({
+        key: { id: 'wa-orig', remoteJid: '5511988887777@s.whatsapp.net', fromMe: true },
+        message: { conversation: 'Original' },
+      })
+    })
+
+    it('áudio propaga o erro da Evolution quando a resposta não é ok', async () => {
+      setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
+      vi.spyOn(global, 'fetch').mockResolvedValue({ ok: false, status: 400, json: async () => ({ message: 'formato de áudio inválido' }) })
+
+      await expect(evolution.sendMedia('tenant-1', '5511988887777', { buffer: Buffer.from('x'), mimetype: 'audio/webm' }))
+        .rejects.toThrow('formato de áudio inválido')
+    })
   })
 
   describe('sendLocation / editMessage / deleteMessage', () => {

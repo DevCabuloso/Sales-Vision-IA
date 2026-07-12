@@ -93,21 +93,36 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
     : 'document'
 
   const quoted = buildQuoted(to, quotedWaId, quotedFromMe, quotedText)
-  const payload = { number: to, mediatype, mimetype, media: base64, fileName: filename, caption, ...(quoted ? { quoted } : {}) }
-
   const channel = await getConnectedChannel(tenantId)
-  if (channel && config.evolution.apiUrl) {
-    const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/message/sendMedia/${channel.instance_name}`
+  if (!channel || !config.evolution.apiUrl) throw new Error('Canal Evolution não conectado.')
+
+  // Áudio precisa do endpoint dedicado /message/sendWhatsAppAudio: é ele quem
+  // converte o container recebido (ex: audio/webm gravado no navegador) para
+  // ogg/opus via ffmpeg e marca a mensagem como nota de voz (ptt). Pelo
+  // /message/sendMedia genérico o WhatsApp recebe o webm cru e a mensagem
+  // nunca chega no destinatário, mesmo aparecendo como enviada na plataforma.
+  if (mediatype === 'audio') {
+    const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/message/sendWhatsAppAudio/${channel.instance_name}`
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ number: to, audio: base64, ...(quoted ? { quoted } : {}) }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
     return { id: data.key?.id || null, remoteJid: data.key?.remoteJid || null, provider: 'evolution' }
   }
-  throw new Error('Canal Evolution não conectado.')
+
+  const payload = { number: to, mediatype, mimetype, media: base64, fileName: filename, caption, ...(quoted ? { quoted } : {}) }
+  const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/message/sendMedia/${channel.instance_name}`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
+    body: JSON.stringify(payload),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
+  return { id: data.key?.id || null, remoteJid: data.key?.remoteJid || null, provider: 'evolution' }
 }
 
 /** Envia uma localização (o próprio WhatsApp do destinatário renderiza o mapa). */

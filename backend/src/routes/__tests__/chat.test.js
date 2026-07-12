@@ -474,6 +474,54 @@ describe('routes/chat', () => {
       const res = await request(app).post('/api/chat/lead-1/media').attach('file', Buffer.from('x'), { filename: 'virus.exe', contentType: 'application/x-msdownload' })
       expect(res.status).toBe(400)
     })
+
+    it('salva a duração do áudio quando enviada pelo frontend', async () => {
+      setSupabase({
+        leads: [{ data: [{ id: 'lead-1', phone: '5511988887777', conversation_status: 'open', human_takeover: true }], error: null }],
+        messages: [{ data: { id: 21 }, error: null }],
+      })
+      const app = buildApp()
+      const res = await request(app)
+        .post('/api/chat/lead-1/media')
+        .field('duration', '10')
+        .attach('file', Buffer.from('audiobytes'), { filename: 'audio.webm', contentType: 'audio/webm' })
+
+      expect(res.status).toBe(201)
+      const insert = insertCallsFor('messages')[0]
+      expect(insert.args[0]).toMatchObject({ media_type: 'audio', media_duration_seconds: 10 })
+    })
+
+    it('ignora duração ausente, inválida ou fora do plausível', async () => {
+      setSupabase({
+        leads: [{ data: [{ id: 'lead-1', conversation_status: 'open' }], error: null }],
+        messages: [{ data: { id: 22 }, error: null }],
+      })
+      const app = buildApp()
+      const res = await request(app)
+        .post('/api/chat/lead-1/media')
+        .field('duration', '-5')
+        .attach('file', Buffer.from('audiobytes'), { filename: 'audio.webm', contentType: 'audio/webm' })
+
+      expect(res.status).toBe(201)
+      const insert = insertCallsFor('messages')[0]
+      expect(insert.args[0]).toMatchObject({ media_type: 'audio', media_duration_seconds: null })
+    })
+
+    it('ignora duração enviada para tipos de mídia que não são áudio', async () => {
+      setSupabase({
+        leads: [{ data: [{ id: 'lead-1', conversation_status: 'open' }], error: null }],
+        messages: [{ data: { id: 23 }, error: null }],
+      })
+      const app = buildApp()
+      const res = await request(app)
+        .post('/api/chat/lead-1/media')
+        .field('duration', '10')
+        .attach('file', Buffer.from('img'), { filename: 'foto.png', contentType: 'image/png' })
+
+      expect(res.status).toBe(201)
+      const insert = insertCallsFor('messages')[0]
+      expect(insert.args[0]).toMatchObject({ media_type: 'image', media_duration_seconds: null })
+    })
   })
 
   describe('POST /:leadId/location', () => {

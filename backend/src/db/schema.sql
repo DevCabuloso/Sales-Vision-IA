@@ -344,6 +344,7 @@ CREATE TABLE IF NOT EXISTS messages (
   media_type text,
   media_mimetype text,
   media_filename text,
+  media_duration_seconds integer,
   wa_message_id text,
   reply_to_id bigint,
   sender_jid text,

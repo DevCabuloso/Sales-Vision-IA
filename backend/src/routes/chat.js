@@ -467,6 +467,15 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
       console.warn('[chat/media] falha ao salvar no storage:', e.message)
     }
 
+    // Duração real do áudio, contada segundo a segundo pelo frontend durante a
+    // gravação — o navegador não lê corretamente a duração de um WebM gerado
+    // pelo MediaRecorder, então não dá pra confiar em nenhum valor derivado do
+    // próprio arquivo aqui no backend. Só aceita valor plausível (evita lixo).
+    const rawDuration = Number(req.body.duration)
+    const mediaDurationSeconds = mediaType === 'audio' && Number.isFinite(rawDuration) && rawDuration > 0 && rawDuration <= 3600
+      ? Math.round(rawDuration)
+      : null
+
     const replyToId = req.body.replyToId ? Number(req.body.replyToId) : null
     let quoted = null
     if (replyToId) {
@@ -491,6 +500,7 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
         media_type: mediaType,
         media_mimetype: req.file.mimetype,
         media_filename: filename,
+        media_duration_seconds: mediaDurationSeconds,
         reply_to_id: quoted?.id || null,
       }).select('*').single()
     )

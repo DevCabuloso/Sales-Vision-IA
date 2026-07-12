@@ -501,7 +501,7 @@
                       @click="openMediaViewer(msg.media_url)"
                     />
                     <video v-else-if="msg.media_type === 'video'" :src="msg.media_url" controls class="msg-media-video" />
-                    <audio v-else-if="msg.media_type === 'audio'" :src="msg.media_url" controls class="msg-media-audio" />
+                    <AudioPlayer v-else-if="msg.media_type === 'audio'" :src="msg.media_url" :duration="msg.media_duration_seconds" class="msg-media-audio" />
                     <a v-else :href="msg.media_url" target="_blank" rel="noopener" class="msg-media-doc">
                       <v-icon icon="mdi-file-outline" size="20" />
                       <span>{{ msg.media_filename || 'Arquivo' }}</span>
@@ -1083,6 +1083,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api, http } from '@/services/api'
 import { useMessageRealtime, useRealtime } from '@/composables/useRealtime'
 import { useAuthStore } from '@/stores/auth'
+import AudioPlayer from '@/components/chat/AudioPlayer.vue'
 
 const route  = useRoute()
 const router = useRouter()
@@ -1268,6 +1269,7 @@ function quotedSenderLabel(msg) {
 }
 let audioChunks      = []
 let recTimer         = null
+let recSeconds       = 0
 
 const signature = computed(() => {
   const u = auth.user
@@ -1388,10 +1390,10 @@ async function startRecording() {
     mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data) }
     mediaRecorder.start()
     audioRecording.value = true
-    let secs = 0
+    recSeconds = 0
     recTimer = setInterval(() => {
-      secs++
-      recordingTime.value = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
+      recSeconds++
+      recordingTime.value = `${Math.floor(recSeconds / 60)}:${String(recSeconds % 60).padStart(2, '0')}`
     }, 1000)
   } catch { toast('Microfone não disponível.', 'error') }
 }
@@ -1411,6 +1413,11 @@ async function stopAndSendAudio() {
     clearInterval(recTimer)
     audioRecording.value = false
     recordingTime.value = '0:00'
+    // duração real (contada segundo a segundo durante a gravação) — o <audio>
+    // nativo não é confiável aqui: WebM gerado pelo MediaRecorder não tem a
+    // duração no cabeçalho, e o navegador acaba estimando um valor errado
+    // (ex: 10s de gravação aparecendo como 1min+) ao tentar lê-la do arquivo.
+    const durationSecs = recSeconds
     const blob = new Blob(audioChunks, { type: 'audio/webm' })
     audioChunks = []
     if (!currentLead.value) return
@@ -1418,6 +1425,7 @@ async function stopAndSendAudio() {
     try {
       const fd = new FormData()
       fd.append('file', blob, 'audio.webm')
+      fd.append('duration', String(durationSecs))
       const { data } = await http.post(`/chat/${currentLead.value.id}/media`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
       messages.value.push(data.message)
       scrollToBottom()
@@ -2379,7 +2387,7 @@ onUnmounted(() => {
 
 /* ———— MENSAGENS ———— */
 .chat-messages {
-  flex:1; overflow-y:auto; padding:20px 16px; display:flex; flex-direction:column;
+  flex:1; overflow-y:auto; overscroll-behavior-y:contain; padding:20px 16px; display:flex; flex-direction:column;
   /* papel de parede sutil, no estilo WhatsApp */
   background-color: rgba(0,0,0,0.12);
   background-image: radial-gradient(circle at 10px 10px, rgba(255,255,255,0.16) 1.6px, transparent 1.7px);
