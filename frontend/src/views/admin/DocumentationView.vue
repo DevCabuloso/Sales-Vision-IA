@@ -540,7 +540,7 @@
         class="mb-3"
       >
         <strong>{{ a.title }}</strong><br>
-        <span v-html="a.desc"></span>
+        <span v-html="sanitizeHtml(a.desc)"></span>
       </v-alert>
     </section>
 
@@ -553,6 +553,7 @@
 
 <script setup>
 import { ref } from 'vue'
+import { sanitizeHtml } from '@/utils/sanitizeHtml.js'
 
 const sections = [
   { id: 'visao-geral', label: 'Visão geral' },

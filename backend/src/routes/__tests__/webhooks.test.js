@@ -95,6 +95,14 @@ describe('routes/webhooks', () => {
       const res = await request(app).get('/webhooks/meta').query({ 'hub.mode': 'subscribe', 'hub.verify_token': 'token-errado', 'hub.challenge': '12345' })
       expect(res.status).toBe(403)
     })
+
+    it('retorna 403 (em vez de quebrar) quando hub.challenge vem duplicado (array, não string)', async () => {
+      const app = buildApp()
+      const res = await request(app)
+        .get('/webhooks/meta')
+        .query('hub.mode=subscribe&hub.verify_token=sdr-verify&hub.challenge=a&hub.challenge=b')
+      expect(res.status).toBe(403)
+    })
   })
 
   describe('POST /meta (recebimento)', () => {
@@ -110,6 +118,49 @@ describe('routes/webhooks', () => {
       expect(res.status).toBe(403)
       await flush()
       expect(mockState.handleInboundMessage).not.toHaveBeenCalled()
+    })
+
+    it('retorna 403 (em vez de derrubar o processo) quando o header de assinatura é maior que o formato esperado', async () => {
+      // regressão: crypto.timingSafeEqual lança quando os buffers têm tamanhos
+      // diferentes; sem validar o formato antes, isso escapava do handler async
+      // como uma promise rejeitada não tratada (crashava o processo Node).
+      config.meta.appSecret = 'segredo-do-app'
+      const payload = JSON.stringify({ entry: [] })
+      const oversizedSig = 'sha256=' + 'a'.repeat(200)
+
+      const app = buildApp()
+      const res = await request(app)
+        .post('/webhooks/meta')
+        .set('Content-Type', 'application/json')
+        .set('x-hub-signature-256', oversizedSig)
+        .send(payload)
+
+      expect(res.status).toBe(403)
+      await flush()
+      expect(mockState.handleInboundMessage).not.toHaveBeenCalled()
+    })
+
+    it('retorna 403 quando o header de assinatura não tem o formato sha256=<hex>', async () => {
+      config.meta.appSecret = 'segredo-do-app'
+      const app = buildApp()
+      const res = await request(app)
+        .post('/webhooks/meta')
+        .set('Content-Type', 'application/json')
+        .set('x-hub-signature-256', 'nao-e-um-hmac-valido')
+        .send(JSON.stringify({ entry: [] }))
+
+      expect(res.status).toBe(403)
+    })
+
+    it('retorna 403 quando o header de assinatura está ausente', async () => {
+      config.meta.appSecret = 'segredo-do-app'
+      const app = buildApp()
+      const res = await request(app)
+        .post('/webhooks/meta')
+        .set('Content-Type', 'application/json')
+        .send(JSON.stringify({ entry: [] }))
+
+      expect(res.status).toBe(403)
     })
 
     it('aceita quando a assinatura HMAC é válida e processa a mensagem', async () => {

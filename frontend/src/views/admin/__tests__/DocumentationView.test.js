@@ -37,4 +37,14 @@ describe('DocumentationView', () => {
     await collapseBtn.trigger('click')
     dbSection.findAll('.doc-acc-item').forEach((it) => expect(it.classes()).not.toContain('open'))
   })
+
+  it('sanitiza o HTML dos "Pontos de atenção" (v-html) e preserva tags permitidas', () => {
+    const wrapper = mount(DocumentationView, pluginOptions())
+    const section = wrapper.find('#atencao')
+    expect(section.exists()).toBe(true)
+    expect(section.html()).not.toContain('<script')
+    expect(section.html()).not.toMatch(/on\w+=/)
+    // dados reais da seção incluem <code>...</code> nas descrições
+    expect(section.find('code').exists()).toBe(true)
+  })
 })

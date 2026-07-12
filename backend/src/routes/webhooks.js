@@ -1,12 +1,31 @@
 import { Router } from 'express'
 import express from 'express'
 import crypto from 'node:crypto'
+import { z } from 'zod'
 import { config } from '../config/index.js'
 import { supabase, unwrap } from '../db/supabase.js'
 import { meta, evolution } from '../services/whatsapp/index.js'
 import { handleInboundMessage, handleOutboundMessage } from '../services/orchestrator.js'
 
 export const webhooksRouter = Router()
+
+// Query de verificação do GET /meta — valida que cada campo veio como string
+// única (não array/objeto, o que a Meta nunca envia mas um cliente HTTP
+// arbitrário poderia via `?hub.challenge=a&hub.challenge=b`).
+const hubVerifyQuerySchema = z.object({
+  'hub.mode':          z.string().optional(),
+  'hub.verify_token':  z.string().optional(),
+  'hub.challenge':     z.string().optional(),
+})
+
+// Formato exato de um header X-Hub-Signature-256 válido (sha256=<64 hex>).
+// Validar isso ANTES de comparar com crypto.timingSafeEqual é obrigatório:
+// timingSafeEqual lança se os dois buffers não tiverem o mesmo tamanho, e um
+// header maior que o esperado (totalmente controlado pelo requisitante, já
+// que esta rota não exige autenticação) lançava dentro de um handler async —
+// em Express 4 isso vira uma promise rejeitada sem catch, que derruba o
+// processo Node inteiro. Rejeitar o formato aqui evita chegar nesse ponto.
+const metaSignatureSchema = z.string().regex(/^sha256=[0-9a-f]{64}$/)
 
 // Recalcula os contadores agregados da campanha a partir dos contatos (evita
 // race condition de incrementos concorrentes vindos de múltiplos webhooks).
@@ -68,9 +87,11 @@ webhooksRouter.get('/ping', (req, res) => res.json({ ok: true, ts: new Date().to
 // META — verificação (GET) e recebimento (POST)
 // ════════════════════════════════════════════════
 webhooksRouter.get('/meta', (req, res) => {
-  const mode = req.query['hub.mode']
-  const token = req.query['hub.verify_token']
-  const challenge = req.query['hub.challenge']
+  const parsed = hubVerifyQuerySchema.safeParse(req.query)
+  if (!parsed.success) return res.sendStatus(403)
+  const mode = parsed.data['hub.mode']
+  const token = parsed.data['hub.verify_token']
+  const challenge = parsed.data['hub.challenge']
   if (mode === 'subscribe' && token === config.meta.verifyToken) {
     return res.status(200).send(challenge)
   }
@@ -83,12 +104,18 @@ webhooksRouter.post('/meta',
   async (req, res) => {
     // Verificação HMAC — obrigatória quando META_APP_SECRET estiver configurado
     if (config.meta.appSecret) {
-      const sig = req.headers['x-hub-signature-256'] || ''
+      const sigParsed = metaSignatureSchema.safeParse(req.headers['x-hub-signature-256'])
+      if (!sigParsed.success) {
+        console.warn('[webhook meta] assinatura ausente ou malformada — rejeitando requisição')
+        return res.sendStatus(403)
+      }
       const expected = 'sha256=' + crypto
         .createHmac('sha256', config.meta.appSecret)
         .update(req.body)
         .digest('hex')
-      if (!crypto.timingSafeEqual(Buffer.from(sig.padEnd(expected.length)), Buffer.from(expected))) {
+      // sigParsed.data e expected têm sempre o mesmo formato (sha256= + 64 hex),
+      // então os buffers já nascem do mesmo tamanho — sem precisar de padEnd.
+      if (!crypto.timingSafeEqual(Buffer.from(sigParsed.data), Buffer.from(expected))) {
         console.warn('[webhook meta] assinatura inválida — rejeitando requisição')
         return res.sendStatus(403)
       }
