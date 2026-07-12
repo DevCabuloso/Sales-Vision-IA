@@ -1,7 +1,7 @@
 <template>
   <div>
     <v-navigation-drawer
-      permanent
+      v-model="drawerOpen"
       color="transparent"
       style="background:rgba(255,255,255,0.02);border-right:1px solid rgba(255,255,255,0.08)"
     >
@@ -46,6 +46,7 @@
     </v-navigation-drawer>
 
     <v-app-bar :elevation="0" style="border-bottom:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.02)">
+      <v-app-bar-nav-icon v-if="isMobile" @click="drawerOpen = !drawerOpen" />
       <v-app-bar-title class="text-subtitle-2 font-weight-bold">Administração da Plataforma</v-app-bar-title>
       <template #append>
         <v-chip color="warning" variant="tonal" size="small" prepend-icon="mdi-shield-crown" class="mr-3">Proprietário</v-chip>
@@ -65,14 +66,26 @@
 </template>
 
 <script setup>
+import { ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 
-function navigate(to) { router.push(to) }
+const { isMobile } = useIsMobile()
+// v-navigation-drawer sem "permanent" já colapsa sozinho em mobile (via
+// mobileBreakpoint global, ver plugins/vuetify.js), mas o v-model começa
+// fechado nesse caso e aberto no desktop — e reabre ao sair do mobile.
+const drawerOpen = ref(!isMobile.value)
+watch(isMobile, (mobile) => { drawerOpen.value = !mobile })
+
+function navigate(to) {
+  router.push(to)
+  if (isMobile.value) drawerOpen.value = false
+}
 function isActive(to) { return route.path === to || route.path.startsWith(to + '/') }
 
 const navMain = [

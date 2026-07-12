@@ -5,6 +5,7 @@ import { supabase, unwrap } from '../db/supabase.js'
 import { hashPassword } from '../services/auth.js'
 import { requireAuth, requireOwner, invalidateTenantStatusCache } from '../middleware/auth.js'
 import { config } from '../config/index.js'
+import { passwordSchema } from '../utils/passwordSchema.js'
 
 export const adminRouter = Router()
 adminRouter.use(requireAuth, requireOwner)
@@ -54,7 +55,7 @@ const createClientSchema = z.object({
   slug: z.string().min(2).regex(/^[a-z0-9-]+$/, 'slug: apenas minúsculas, números e hífen'),
   plan: z.enum(['trial', 'starter', 'pro', 'enterprise']).default('trial'),
   adminEmail: z.string().email(),
-  adminPassword: z.string().min(6),
+  adminPassword: passwordSchema,
   adminName: z.string().optional(),
   features: featuresSchema.optional(),
   max_leads: z.number().int().positive().optional(),
@@ -123,11 +124,16 @@ adminRouter.patch('/clients/:id/features', async (req, res) => {
   res.json({ client: rows[0] })
 })
 
+const clientStatusSchema = z.object({
+  status: z.enum(['active', 'suspended', 'trial']),
+})
+
 adminRouter.patch('/clients/:id/status', async (req, res) => {
-  const { status } = req.body || {}
-  if (!['active', 'suspended', 'trial'].includes(status)) {
+  const parsed = clientStatusSchema.safeParse(req.body)
+  if (!parsed.success) {
     return res.status(400).json({ error: 'Status inválido.' })
   }
+  const { status } = parsed.data
   const rows = unwrap(
     await supabase.from('tenants')
       .update({ status, updated_at: new Date().toISOString() })
@@ -197,7 +203,7 @@ adminRouter.get('/users', async (req, res) => {
 const createUserSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1),
-  password: z.string().min(6),
+  password: passwordSchema,
   role: z.enum(['admin', 'agent']).default('agent'),
 })
 
@@ -256,12 +262,14 @@ adminRouter.delete('/users/:id', async (req, res) => {
   res.json({ deleted: true })
 })
 
+const resetPasswordSchema = z.object({ password: passwordSchema })
+
 adminRouter.post('/users/:id/reset-password', async (req, res) => {
-  const { password } = req.body || {}
-  if (!password || password.length < 6) {
-    return res.status(400).json({ error: 'Senha inválida (mínimo 6 caracteres).' })
+  const parsed = resetPasswordSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message })
   }
-  const hash = await hashPassword(password)
+  const hash = await hashPassword(parsed.data.password)
   const rows = unwrap(
     await supabase.from('users')
       .update({ password_hash: hash })
@@ -292,7 +300,7 @@ adminRouter.get('/owners', async (req, res) => {
 const createOwnerSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1),
-  password: z.string().min(6),
+  password: passwordSchema,
 })
 
 adminRouter.post('/owners', async (req, res) => {
@@ -316,9 +324,11 @@ adminRouter.post('/owners', async (req, res) => {
 })
 
 adminRouter.post('/owners/:id/reset-password', async (req, res) => {
-  const { password } = req.body || {}
-  if (!password || password.length < 6) return res.status(400).json({ error: 'Senha mínima de 6 caracteres.' })
-  const hash = await hashPassword(password)
+  const parsed = resetPasswordSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message })
+  }
+  const hash = await hashPassword(parsed.data.password)
   const rows = unwrap(
     await supabase.from('users')
       .update({ password_hash: hash })

@@ -148,6 +148,8 @@
 import { ref, reactive, watch, onMounted } from 'vue'
 import { http } from '@/services/api'
 import { useToast } from '@/composables/useToast'
+import { labelSchema, queueSchema, businessHoursSchema } from '@/schemas/attendanceConfig'
+import { validateForm } from '@/composables/useZodValidation'
 
 const toast = useToast()
 const tab = ref('labels')
@@ -165,11 +167,12 @@ async function loadLabels() { try { labels.value = (await http.get('/labels').th
 function openLabelCreate() { labelEditTarget.value = null; Object.assign(labelForm, { name: '', color: '#6366F1' }); labelDialog.value = true }
 function openLabelEdit(label) { labelEditTarget.value = label; Object.assign(labelForm, { name: label.name, color: label.color }); labelDialog.value = true }
 async function saveLabel() {
-  if (!labelForm.name) return toast.warning('Nome obrigatório.')
+  const check = validateForm(labelSchema, labelForm)
+  if (!check.success) return toast.warning(check.error)
   savingLabel.value = true
   try {
-    if (labelEditTarget.value) { const { label } = await http.patch(`/labels/${labelEditTarget.value.id}`, labelForm).then((r) => r.data); const idx = labels.value.findIndex((l) => l.id === labelEditTarget.value.id); if (idx >= 0) labels.value[idx] = label }
-    else { const { label } = await http.post('/labels', labelForm).then((r) => r.data); labels.value.push(label) }
+    if (labelEditTarget.value) { const { label } = await http.patch(`/labels/${labelEditTarget.value.id}`, check.data).then((r) => r.data); const idx = labels.value.findIndex((l) => l.id === labelEditTarget.value.id); if (idx >= 0) labels.value[idx] = label }
+    else { const { label } = await http.post('/labels', check.data).then((r) => r.data); labels.value.push(label) }
     labelDialog.value = false; toast.success('Etiqueta salva.')
   } catch (e) { toast.error(e.message) } finally { savingLabel.value = false }
 }
@@ -191,11 +194,12 @@ async function loadOperators() { try { allOperators.value = (await http.get('/op
 function openQueueCreate() { queueEditTarget.value = null; Object.assign(queueForm, { name: '', description: '', color: '#6366F1', operator_ids: [] }); queueDialog.value = true }
 function openQueueEdit(q) { queueEditTarget.value = q; Object.assign(queueForm, { name: q.name, description: q.description || '', color: q.color, operator_ids: (q.operators || []).map((o) => o.id) }); queueDialog.value = true }
 async function saveQueue() {
-  if (!queueForm.name) return toast.warning('Nome obrigatório.')
+  const check = validateForm(queueSchema, queueForm)
+  if (!check.success) return toast.warning(check.error)
   savingQueue.value = true
   try {
-    if (queueEditTarget.value) { const { queue } = await http.patch(`/queues/${queueEditTarget.value.id}`, queueForm).then((r) => r.data); const idx = queues.value.findIndex((q) => q.id === queueEditTarget.value.id); if (idx >= 0) queues.value[idx] = queue }
-    else { const { queue } = await http.post('/queues', queueForm).then((r) => r.data); queues.value.push(queue) }
+    if (queueEditTarget.value) { const { queue } = await http.patch(`/queues/${queueEditTarget.value.id}`, check.data).then((r) => r.data); const idx = queues.value.findIndex((q) => q.id === queueEditTarget.value.id); if (idx >= 0) queues.value[idx] = queue }
+    else { const { queue } = await http.post('/queues', check.data).then((r) => r.data); queues.value.push(queue) }
     queueDialog.value = false; toast.success('Fila salva.')
   } catch (e) { toast.error(e.message) } finally { savingQueue.value = false }
 }
@@ -220,7 +224,12 @@ async function loadBH() {
     if (config) { bhForm.enabled = config.enabled; bhForm.timezone = config.timezone; bhForm.off_message = config.off_message; const sched = defaultSchedule(); Object.keys(config.schedule || {}).forEach((k) => { sched[k] = { ...sched[k], ...config.schedule[k] } }); Object.assign(bhForm.schedule, sched) }
   } catch (e) { toast.error(e.message) }
 }
-async function saveBH() { savingBH.value = true; try { await http.put('/business-hours', bhForm); toast.success('Horário de atendimento salvo.') } catch (e) { toast.error(e.message) } finally { savingBH.value = false } }
+async function saveBH() {
+  const check = validateForm(businessHoursSchema, bhForm)
+  if (!check.success) return toast.error(check.error)
+  savingBH.value = true
+  try { await http.put('/business-hours', check.data); toast.success('Horário de atendimento salvo.') } catch (e) { toast.error(e.message) } finally { savingBH.value = false }
+}
 
 watch(tab, (v) => {
   if (v === 'labels' && !labels.value.length) loadLabels()

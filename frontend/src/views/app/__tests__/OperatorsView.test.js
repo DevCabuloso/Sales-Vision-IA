@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
+import { api } from '@/services/api'
 
 const mockState = vi.hoisted(() => ({ listOperators: null, operatorsDashboard: null, user: null }))
 
@@ -40,6 +41,28 @@ describe('OperatorsView', () => {
     const wrapper = mount(OperatorsView, pluginOptions())
     await flushPromises()
     expect(wrapper.text()).not.toContain('Novo Usuário')
+  })
+
+  it('exige senha ao criar um novo usuário', async () => {
+    const wrapper = mount(OperatorsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const novoBtn = wrapper.findAll('button').find((b) => b.text().includes('Novo Usuário'))
+    await novoBtn.trigger('click')
+    await flushPromises()
+
+    const inputs = [...document.body.querySelectorAll('.v-dialog input')]
+    inputs[0].value = 'Novo Operador'; inputs[0].dispatchEvent(new Event('input'))
+    inputs[1].value = 'novo@ex.com'; inputs[1].dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const criarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Criar Usuário')
+    criarBtn?.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Senha obrigatória.')
+    expect(api.createOperator).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('carrega as métricas ao abrir a aba de dashboard', async () => {

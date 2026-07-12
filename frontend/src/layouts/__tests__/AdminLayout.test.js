@@ -41,4 +41,22 @@ describe('layouts/AdminLayout.vue (smoke)', () => {
     expect(mockState.auth.logout).toHaveBeenCalled()
     wrapper.unmount()
   })
+
+  it('em mobile, mostra o botão de menu e fecha o drawer automaticamente ao navegar', async () => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 375 })
+    const wrapper = mount(AppWrapper, pluginOptions())
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'VAppBarNavIcon' }).exists()).toBe(true)
+
+    const clientesItem = wrapper.findAll('.v-list-item').find((n) => n.text().includes('Clientes'))
+    await clientesItem.trigger('click')
+    await flushPromises()
+
+    const drawer = wrapper.findComponent({ name: 'VNavigationDrawer' })
+    expect(drawer.props('modelValue')).toBe(false)
+
+    wrapper.unmount()
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 })
+  })
 })

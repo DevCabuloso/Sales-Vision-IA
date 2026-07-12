@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { hashPassword } from '../services/auth.js'
+import { passwordSchema } from '../utils/passwordSchema.js'
 
 export const operatorsRouter = Router()
 operatorsRouter.use(requireAuth, requireTenant)
@@ -22,7 +23,7 @@ const DEFAULT_PERMISSIONS = {
 const schema = z.object({
   name:          z.string().min(1).max(100),
   email:         z.string().email(),
-  password:      z.string().min(6).optional(),
+  password:      passwordSchema.optional(),
   role:          z.enum(['admin', 'agent']).default('agent'),
   active:        z.boolean().optional().default(true),
   phone:         z.string().max(30).optional().nullable(),
@@ -144,14 +145,16 @@ operatorsRouter.patch('/:id', requireAdmin, async (req, res) => {
   }
 })
 
+const resetPasswordSchema = z.object({ password: passwordSchema })
+
 // POST /api/operators/:id/reset-password
 operatorsRouter.post('/:id/reset-password', requireAdmin, async (req, res) => {
-  const { password } = req.body
-  if (!password || password.length < 6) {
-    return res.status(400).json({ error: 'Senha deve ter pelo menos 6 caracteres.' })
+  const parsed = resetPasswordSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message })
   }
   try {
-    await supabase.from('users').update({ password_hash: await hashPassword(password) })
+    await supabase.from('users').update({ password_hash: await hashPassword(parsed.data.password) })
       .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).neq('role', 'owner')
     res.json({ reset: true })
   } catch (e) {

@@ -2,17 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
 
-const mockState = vi.hoisted(() => ({ adminClient: null, adminUpdateFeatures: null, adminImpersonate: null }))
+const mockState = vi.hoisted(() => ({
+  adminClient: null, adminUpdateFeatures: null, adminImpersonate: null,
+  adminUpdateClient: null, adminCreateUser: null, adminUpdateUser: null, adminResetPassword: null,
+}))
 
 vi.mock('@/services/api', () => ({
   api: {
     adminClient: (...a) => mockState.adminClient(...a),
     adminUpdateFeatures: (...a) => mockState.adminUpdateFeatures(...a),
     adminUpdateStatus: vi.fn(),
-    adminUpdateClient: vi.fn(),
-    adminUpdateUser: vi.fn(),
-    adminCreateUser: vi.fn(),
-    adminResetPassword: vi.fn(),
+    adminUpdateClient: (...a) => mockState.adminUpdateClient(...a),
+    adminUpdateUser: (...a) => mockState.adminUpdateUser(...a),
+    adminCreateUser: (...a) => mockState.adminCreateUser(...a),
+    adminResetPassword: (...a) => mockState.adminResetPassword(...a),
     adminDeleteUser: vi.fn(),
     adminImpersonate: (...a) => mockState.adminImpersonate(...a),
     adminImpersonateUser: vi.fn(),
@@ -22,15 +25,24 @@ vi.mock('@/services/api', () => ({
 
 const ClientDetailView = (await import('../ClientDetailView.vue')).default
 
+function findByLabel(label) {
+  return [...document.body.querySelectorAll('.v-dialog input')]
+    .find((i) => i.closest('.v-field')?.querySelector('label')?.textContent.includes(label))
+}
+
 describe('ClientDetailView', () => {
   beforeEach(() => {
     mockState.adminClient = vi.fn().mockResolvedValue({
       client: { id: 'tenant-1', name: 'Empresa Ana', slug: 'empresa-ana', status: 'active', plan: 'pro', feat_broadcast: true },
-      users: [],
+      users: [{ id: 'u1', name: 'Bia', email: 'bia@ex.com', role: 'agent', active: true }],
       integrations: [],
     })
     mockState.adminUpdateFeatures = vi.fn().mockResolvedValue({})
     mockState.adminImpersonate = vi.fn().mockResolvedValue({ token: 'tok', user: { id: 'admin-1' } })
+    mockState.adminUpdateClient = vi.fn().mockResolvedValue({ name: 'Empresa Ana 2' })
+    mockState.adminCreateUser = vi.fn().mockResolvedValue({ id: 'u2', name: 'Novo', email: 'novo@ex.com', role: 'agent' })
+    mockState.adminUpdateUser = vi.fn().mockResolvedValue({ name: 'Bia Editada' })
+    mockState.adminResetPassword = vi.fn().mockResolvedValue({ updated: true })
   })
 
   it('carrega e mostra os dados do cliente', async () => {
@@ -60,5 +72,114 @@ describe('ClientDetailView', () => {
     await flushPromises()
 
     expect(mockState.adminImpersonate).toHaveBeenCalledWith('tenant-1')
+  })
+
+  it('rejeita nome vazio ao editar o cliente e não chama a API', async () => {
+    const wrapper = mount(ClientDetailView, { attachTo: document.body, props: { id: 'tenant-1' }, ...pluginOptions() })
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text().includes('Editar'))
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    findByLabel('Nome da empresa').value = ''
+    findByLabel('Nome da empresa').dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const salvarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Salvar')
+    salvarBtn?.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Nome deve ter pelo menos 2 caracteres.')
+    expect(mockState.adminUpdateClient).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('salva a edição do cliente com dados válidos', async () => {
+    const wrapper = mount(ClientDetailView, { attachTo: document.body, props: { id: 'tenant-1' }, ...pluginOptions() })
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text().includes('Editar'))
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    findByLabel('Nome da empresa').value = 'Empresa Ana 2'
+    findByLabel('Nome da empresa').dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const salvarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Salvar')
+    salvarBtn?.click()
+    await flushPromises()
+
+    expect(mockState.adminUpdateClient).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ name: 'Empresa Ana 2' }))
+    wrapper.unmount()
+  })
+
+  it('rejeita senha curta ao criar um novo usuário e não chama a API', async () => {
+    const wrapper = mount(ClientDetailView, { attachTo: document.body, props: { id: 'tenant-1' }, ...pluginOptions() })
+    await flushPromises()
+
+    const novoBtn = wrapper.findAll('button').find((b) => b.text().includes('Novo usuário'))
+    await novoBtn.trigger('click')
+    await flushPromises()
+
+    findByLabel('Nome').value = 'Carlos'; findByLabel('Nome').dispatchEvent(new Event('input'))
+    findByLabel('E-mail').value = 'carlos@ex.com'; findByLabel('E-mail').dispatchEvent(new Event('input'))
+    findByLabel('Senha').value = '1234567'; findByLabel('Senha').dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const criarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Criar usuário')
+    criarBtn?.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Senha deve ter pelo menos 8 caracteres.')
+    expect(mockState.adminCreateUser).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('cria um novo usuário com dados válidos', async () => {
+    const wrapper = mount(ClientDetailView, { attachTo: document.body, props: { id: 'tenant-1' }, ...pluginOptions() })
+    await flushPromises()
+
+    const novoBtn = wrapper.findAll('button').find((b) => b.text().includes('Novo usuário'))
+    await novoBtn.trigger('click')
+    await flushPromises()
+
+    findByLabel('Nome').value = 'Carlos'; findByLabel('Nome').dispatchEvent(new Event('input'))
+    findByLabel('E-mail').value = 'carlos@ex.com'; findByLabel('E-mail').dispatchEvent(new Event('input'))
+    findByLabel('Senha').value = 'senha1234'; findByLabel('Senha').dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const criarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Criar usuário')
+    criarBtn?.click()
+    await flushPromises()
+
+    expect(mockState.adminCreateUser).toHaveBeenCalledWith('tenant-1', expect.objectContaining({
+      name: 'Carlos', email: 'carlos@ex.com', password: 'senha1234', role: 'agent',
+    }))
+    wrapper.unmount()
+  })
+
+  it('rejeita senha curta ao redefinir a senha de um usuário', async () => {
+    const wrapper = mount(ClientDetailView, { attachTo: document.body, props: { id: 'tenant-1' }, ...pluginOptions() })
+    await flushPromises()
+
+    const resetBtn = document.body.querySelector('[aria-label], .mdi-lock-reset')?.closest('button')
+      || [...document.body.querySelectorAll('button')].find((b) => b.querySelector('.mdi-lock-reset'))
+    await resetBtn.click()
+    await flushPromises()
+
+    const pwInput = [...document.body.querySelectorAll('.v-dialog input')].find((i) => i.type === 'password')
+    pwInput.value = '1234567'
+    pwInput.dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const redefinirBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Redefinir')
+    redefinirBtn?.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Senha deve ter pelo menos 8 caracteres.')
+    expect(mockState.adminResetPassword).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })

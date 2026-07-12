@@ -46,4 +46,19 @@ describe('FlowEditorView', () => {
 
     expect(mockState.patch).toHaveBeenCalledWith('/flows/flow-1', expect.objectContaining({ name: 'Boas-vindas' }))
   })
+
+  it('mostra o aviso de desktop em vez do editor quando a tela é estreita', async () => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 375 })
+    const wrapper = mount(FlowEditorView, {
+      ...pluginOptions({ stubs: { VueFlow: true, Handle: true } }),
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Melhor em uma tela maior')
+    expect(wrapper.text()).toContain('Boas-vindas')
+    expect(wrapper.findComponent({ name: 'VueFlow' }).exists()).toBe(false)
+
+    wrapper.unmount()
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 })
+  })
 })

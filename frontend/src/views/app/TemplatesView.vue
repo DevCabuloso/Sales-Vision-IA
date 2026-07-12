@@ -138,6 +138,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
+import { templateSchema, templateCategorySchema } from '@/schemas/templates'
+import { validateForm } from '@/composables/useZodValidation'
 
 const toast = useToast()
 const loading = ref(true)
@@ -178,10 +180,11 @@ async function loadCategories() {
 function openManageCategories() { newCategoryName.value = ''; categoryError.value = ''; categoriesDialog.value = true }
 
 async function addCategory() {
-  if (!newCategoryName.value.trim()) return
+  const check = validateForm(templateCategorySchema, { name: newCategoryName.value })
+  if (!check.success) return
   categoryError.value = ''; savingCategory.value = true
   try {
-    const category = await api.createTemplateCategory(newCategoryName.value.trim())
+    const category = await api.createTemplateCategory(check.data.name)
     categories.value.push(category)
     categories.value.sort((a, b) => a.name.localeCompare(b.name))
     newCategoryName.value = ''
@@ -209,11 +212,12 @@ function openEdit(tpl) { editMode.value = true; editTarget.value = tpl; editErro
 
 async function saveEdit() {
   editError.value = ''
-  if (!editForm.name || !editForm.content) { editError.value = 'Nome e conteúdo são obrigatórios.'; return }
+  const check = validateForm(templateSchema, editForm)
+  if (!check.success) { editError.value = check.error; return }
   saving.value = true
   try {
-    if (editMode.value) { const { template } = await api.updateTemplate(editTarget.value.id, { ...editForm }); const idx = templates.value.findIndex((t) => t.id === editTarget.value.id); if (idx >= 0) templates.value[idx] = template }
-    else { const { template } = await api.createTemplate({ ...editForm }); templates.value.unshift(template) }
+    if (editMode.value) { const { template } = await api.updateTemplate(editTarget.value.id, check.data); const idx = templates.value.findIndex((t) => t.id === editTarget.value.id); if (idx >= 0) templates.value[idx] = template }
+    else { const { template } = await api.createTemplate(check.data); templates.value.unshift(template) }
     editDialog.value = false; toast.success(editMode.value ? 'Template atualizado.' : 'Template criado.')
   } catch (e) { editError.value = e.message } finally { saving.value = false }
 }

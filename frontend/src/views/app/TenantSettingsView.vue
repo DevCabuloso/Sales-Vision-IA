@@ -18,17 +18,17 @@
             <v-list-item class="px-0">
               <template #prepend><v-icon icon="mdi-office-building-outline" size="16" class="mr-2" /></template>
               <v-list-item-title class="text-body-2">{{ t('settings.name') }}</v-list-item-title>
-              <template #append><span class="text-body-2 font-weight-medium">{{ auth.user?.tenantName || '—' }}</span></template>
+              <template #append><span class="text-body-2 font-weight-medium ellipsis-value">{{ auth.user?.tenantName || '—' }}</span></template>
             </v-list-item>
             <v-list-item class="px-0">
               <template #prepend><v-icon icon="mdi-identifier" size="16" class="mr-2" /></template>
               <v-list-item-title class="text-body-2">{{ t('settings.slug') }}</v-list-item-title>
-              <template #append><code class="text-caption" style="color:#9FB0BC">{{ auth.user?.tenantSlug || '—' }}</code></template>
+              <template #append><code class="text-caption ellipsis-value" style="color:#9FB0BC">{{ auth.user?.tenantSlug || '—' }}</code></template>
             </v-list-item>
             <v-list-item class="px-0">
               <template #prepend><v-icon icon="mdi-account-outline" size="16" class="mr-2" /></template>
               <v-list-item-title class="text-body-2">{{ t('settings.myEmail') }}</v-list-item-title>
-              <template #append><span class="text-body-2">{{ auth.user?.email }}</span></template>
+              <template #append><span class="text-body-2 ellipsis-value">{{ auth.user?.email }}</span></template>
             </v-list-item>
             <v-list-item class="px-0">
               <template #prepend><v-icon icon="mdi-shield-account-outline" size="16" class="mr-2" /></template>
@@ -233,6 +233,8 @@ import { ref, reactive } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale.js'
 import { http } from '@/services/api'
+import { changePasswordSchema } from '@/schemas/auth'
+import { validateForm } from '@/composables/useZodValidation'
 
 const auth   = useAuthStore()
 const locale = useLocaleStore()
@@ -246,9 +248,8 @@ const pwForm    = reactive({ current: '', newPw: '', confirm: '' })
 
 async function changePassword() {
   pwError.value = ''; pwSuccess.value = false
-  if (!pwForm.current)              { pwError.value = 'Informe a senha atual.'; return }
-  if (pwForm.newPw.length < 6)      { pwError.value = 'Nova senha deve ter pelo menos 6 caracteres.'; return }
-  if (pwForm.newPw !== pwForm.confirm) { pwError.value = 'Confirmação de senha não confere.'; return }
+  const check = validateForm(changePasswordSchema, pwForm)
+  if (!check.success) { pwError.value = check.error; return }
   savingPw.value = true
   try {
     await http.post('/auth/change-password', { currentPassword: pwForm.current, newPassword: pwForm.newPw })
@@ -372,6 +373,17 @@ const configLinks = [
 .cfg-icon {
   width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
+}
+
+/* evita que valores longos (e-mail, nome de empresa) estourem o card em
+   telas estreitas, empurrando o rótulo do v-list-item pra um "..." */
+.ellipsis-value {
+  max-width: 55vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
 }
 
 /* ── Language ── */

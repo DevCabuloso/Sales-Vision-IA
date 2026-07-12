@@ -75,6 +75,8 @@ import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
 import { useRealtime } from '@/composables/useRealtime'
 import { useAuthStore } from '@/stores/auth'
+import { createLeadSchema } from '@/schemas/leads'
+import { validateForm } from '@/composables/useZodValidation'
 
 const auth = useAuthStore()
 const toast = useToast()
@@ -121,10 +123,11 @@ async function load() { leads.value = (await api.listLeads().catch(() => [])) ||
 
 async function create() {
   formError.value = ''
-  if (!form.phone) { formError.value = 'Telefone é obrigatório.'; return }
+  const check = validateForm(createLeadSchema, { name: form.name, phone: form.phone, intention: form.intention })
+  if (!check.success) { formError.value = check.error; return }
   saving.value = true
   try {
-    await api.createLead({ name: form.name, phone: form.phone, intention: form.intention })
+    await api.createLead(check.data)
     dialog.value = false; toast.success('Lead adicionado.'); await load()
   } catch (e) { formError.value = e.message } finally { saving.value = false }
 }

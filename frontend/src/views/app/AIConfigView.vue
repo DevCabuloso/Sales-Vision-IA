@@ -116,6 +116,8 @@
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
+import { aiConfigSchema } from '@/schemas/aiConfig'
+import { validateForm } from '@/composables/useZodValidation'
 
 const toast = useToast()
 const loading = ref(true)
@@ -180,7 +182,12 @@ async function removeKB() {
 }
 
 async function load() { loading.value = true; try { const { config } = await api.getAIConfig(); applyConfig(config) } catch (e) { toast.error(e.message) } finally { loading.value = false } }
-async function save() { saving.value = true; try { const { config } = await api.saveAIConfig({ ...form }); applyConfig(config); toast.success('Configuração salva.') } catch (e) { toast.error(e.message) } finally { saving.value = false } }
+async function save() {
+  const check = validateForm(aiConfigSchema, form)
+  if (!check.success) { toast.error(check.error); return }
+  saving.value = true
+  try { const { config } = await api.saveAIConfig(check.data); applyConfig(config); toast.success('Configuração salva.') } catch (e) { toast.error(e.message) } finally { saving.value = false }
+}
 
 function openTest() { testResult.value = ''; testError.value = ''; testDialog.value = true }
 async function runTest() {

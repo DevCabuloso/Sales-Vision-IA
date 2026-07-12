@@ -361,13 +361,15 @@
 import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
+import { internalGroupSchema } from '@/schemas/internalGroups'
+import { validateForm } from '@/composables/useZodValidation'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 const auth    = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
 
-const isMobile    = ref(window.innerWidth < 768)
+const { isMobile } = useIsMobile()
 const mobilePanel = ref('list')
-function onResize() { isMobile.value = window.innerWidth < 768 }
 
 const AVATAR_COLORS = ['#6366F1','#8B5CF6','#EC4899','#14B8A6','#F59E0B','#10B981','#3B82F6','#EF4444']
 function avatarColor(name) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) % AVATAR_COLORS.length; return AVATAR_COLORS[Math.abs(h)] }
@@ -573,10 +575,11 @@ function openCreate() { form.name = ''; form.member_ids = []; formError.value = 
 
 async function submitCreate() {
   formError.value = ''
-  if (!form.name.trim()) { formError.value = 'Nome obrigatório.'; return }
+  const check = validateForm(internalGroupSchema, { name: form.name, member_ids: form.member_ids })
+  if (!check.success) { formError.value = check.error; return }
   saving.value = true
   try {
-    const { group } = await api.createInternalGroup({ name: form.name.trim(), member_ids: form.member_ids })
+    const { group } = await api.createInternalGroup(check.data)
     groups.value.unshift(group)
     createDialog.value = false
     toast('Grupo criado!')
@@ -601,10 +604,11 @@ function openEdit(g) {
 
 async function submitEdit() {
   editError.value = ''
-  if (!editForm.name.trim()) { editError.value = 'Nome obrigatório.'; return }
+  const check = validateForm(internalGroupSchema, { name: editForm.name, member_ids: editForm.member_ids })
+  if (!check.success) { editError.value = check.error; return }
   saving.value = true
   try {
-    await api.updateInternalGroup(editTarget.value.id, { name: editForm.name.trim(), member_ids: editForm.member_ids })
+    await api.updateInternalGroup(editTarget.value.id, check.data)
     await loadGroups()
     editDialog.value = false
     toast('Grupo atualizado.')
@@ -644,12 +648,10 @@ onMounted(async () => {
   await loadUsers()
   pollTimer   = setInterval(pollMessages, 3000)
   groupsTimer = setInterval(loadGroups,  8000)
-  window.addEventListener('resize', onResize)
 })
 onUnmounted(() => {
   if (pollTimer)   clearInterval(pollTimer)
   if (groupsTimer) clearInterval(groupsTimer)
-  window.removeEventListener('resize', onResize)
 })
 </script>
 

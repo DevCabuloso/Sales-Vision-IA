@@ -231,7 +231,7 @@
               <v-text-field v-model="userForm.email" label="E-mail" type="email" prepend-inner-icon="mdi-email-outline" />
             </v-col>
             <v-col cols="12" v-if="!editingUser">
-              <v-text-field v-model="userForm.password" label="Senha (mín. 6 caracteres)" type="password" prepend-inner-icon="mdi-lock-outline" />
+              <v-text-field v-model="userForm.password" label="Senha (mín. 8 caracteres)" type="password" prepend-inner-icon="mdi-lock-outline" />
             </v-col>
             <v-col cols="12">
               <v-select v-model="userForm.role" :items="roles" label="Permissão" />
@@ -306,6 +306,8 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/services/api'
+import { editUserSchema, createTenantUserSchema, userResetPasswordSchema, updateClientSchema } from '@/schemas/admin'
+import { validateForm } from '@/composables/useZodValidation'
 
 const props = defineProps({ id: String })
 const router = useRouter()
@@ -429,13 +431,13 @@ function openEditClient() {
 
 async function saveEditClient() {
   editError.value = ''
+  const check = validateForm(updateClientSchema, {
+    name: editForm.name, plan: editForm.plan, max_leads: editForm.max_leads,
+  })
+  if (!check.success) { editError.value = check.error; return }
   saving.value = true
   try {
-    const updated = await api.adminUpdateClient(props.id, {
-      name: editForm.name,
-      plan: editForm.plan,
-      max_leads: editForm.max_leads,
-    })
+    const updated = await api.adminUpdateClient(props.id, check.data)
     client.value = { ...client.value, ...updated }
     editClientDialog.value = false
     toast('Cliente atualizado.')
@@ -462,35 +464,37 @@ function openEditUser(u) {
 
 async function saveUser() {
   userError.value = ''
-  saving.value = true
-  try {
-    if (editingUser.value) {
-      const updated = await api.adminUpdateUser(editingUser.value.id, {
-        name: userForm.name,
-        role: userForm.role,
-      })
+  if (editingUser.value) {
+    const check = validateForm(editUserSchema, { name: userForm.name, role: userForm.role })
+    if (!check.success) { userError.value = check.error; return }
+    saving.value = true
+    try {
+      const updated = await api.adminUpdateUser(editingUser.value.id, check.data)
       const idx = users.value.findIndex((u) => u.id === editingUser.value.id)
       if (idx >= 0) users.value[idx] = { ...users.value[idx], ...updated }
       toast('Usuário atualizado.')
-    } else {
-      if (!userForm.email || !userForm.password) {
-        userError.value = 'Preencha e-mail e senha.'
-        return
-      }
-      const newUser = await api.adminCreateUser(props.id, {
-        name: userForm.name,
-        email: userForm.email,
-        password: userForm.password,
-        role: userForm.role,
-      })
+      userDialog.value = false
+    } catch (e) {
+      userError.value = e.message
+    } finally {
+      saving.value = false
+    }
+  } else {
+    const check = validateForm(createTenantUserSchema, {
+      name: userForm.name, email: userForm.email, password: userForm.password, role: userForm.role,
+    })
+    if (!check.success) { userError.value = check.error; return }
+    saving.value = true
+    try {
+      const newUser = await api.adminCreateUser(props.id, check.data)
       users.value.push(newUser)
       toast('Usuário criado com sucesso.')
+      userDialog.value = false
+    } catch (e) {
+      userError.value = e.message
+    } finally {
+      saving.value = false
     }
-    userDialog.value = false
-  } catch (e) {
-    userError.value = e.message
-  } finally {
-    saving.value = false
   }
 }
 
@@ -514,13 +518,11 @@ function openResetPassword(u) {
 
 async function doResetPassword() {
   resetError.value = ''
-  if (!newPassword.value || newPassword.value.length < 6) {
-    resetError.value = 'Senha deve ter pelo menos 6 caracteres.'
-    return
-  }
+  const check = validateForm(userResetPasswordSchema, { password: newPassword.value })
+  if (!check.success) { resetError.value = check.error; return }
   saving.value = true
   try {
-    await api.adminResetPassword(resetUser.value.id, newPassword.value)
+    await api.adminResetPassword(resetUser.value.id, check.data.password)
     resetDialog.value = false
     toast('Senha redefinida com sucesso.')
   } catch (e) {

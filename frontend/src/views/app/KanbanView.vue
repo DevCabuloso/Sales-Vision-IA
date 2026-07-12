@@ -184,4 +184,13 @@ onMounted(load)
 .kanban-empty { flex:1; display:flex; align-items:center; justify-content:center; padding:24px; }
 .lead-avatar { width:30px; height:30px; border-radius:8px; background:rgba(99,102,241,0.15); font-size:11px; font-weight:700; color:#818CF8; display:flex; align-items:center; justify-content:center; }
 .intention-tag { color:var(--text-muted); background:var(--panel-bg); border-radius:4px; padding:2px 6px; display:inline-block; font-size:11px; margin-top:4px; }
+
+/* Drag-and-drop nativo (draggable/dragstart) não funciona em touch — em
+   mobile o board vira scroll horizontal "uma coluna por vez" (padrão
+   Trello mobile) e a troca de estágio fica pelo botão "Mover para" do
+   modal de detalhe (@click="openDetail"), que já existe para todo device. */
+@media (max-width: 767px) {
+  .kanban-board { scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
+  .kanban-col { min-width: 85vw; width: 85vw; scroll-snap-align: start; }
+}
 </style>

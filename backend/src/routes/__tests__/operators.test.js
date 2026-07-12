@@ -81,6 +81,12 @@ describe('routes/operators', () => {
       expect(res.status).toBe(400)
     })
 
+    it('rejeita senha com menos de 8 caracteres', async () => {
+      const app = buildApp()
+      const res = await request(app).post('/api/operators').send({ name: 'Bia', email: 'bia@ex.com', password: 'curta12' })
+      expect(res.status).toBe(400)
+    })
+
     it('retorna 409 quando o e-mail já está cadastrado', async () => {
       setSupabase({ users: [{ data: [{ id: 'existing' }], error: null }] })
       const app = buildApp()

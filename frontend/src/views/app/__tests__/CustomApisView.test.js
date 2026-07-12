@@ -47,4 +47,27 @@ describe('CustomApisView', () => {
     await flushPromises()
     expect(mockState.deleteCustomApi).toHaveBeenCalledWith('api-1')
   })
+
+  it('rejeita URL base inválida ao criar', async () => {
+    const wrapper = mount(CustomApisView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const novaBtn = wrapper.findAll('button').find((b) => b.text().includes('Nova API'))
+    await novaBtn.trigger('click')
+    await flushPromises()
+
+    const inputs = [...document.body.querySelectorAll('.v-dialog input')]
+    inputs[0].value = 'Minha API'; inputs[0].dispatchEvent(new Event('input'))
+    const baseUrlInput = inputs.find((i) => i.closest('.v-field')?.querySelector('label')?.textContent.includes('Base URL'))
+    baseUrlInput.value = 'nao-e-url'; baseUrlInput.dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const salvarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Salvar')
+    salvarBtn?.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('URL base inválida.')
+    expect(mockState.createCustomApi).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })

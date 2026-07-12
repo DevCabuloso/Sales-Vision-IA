@@ -78,6 +78,8 @@
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
+import { customApiSchema } from '@/schemas/customApis'
+import { validateForm } from '@/composables/useZodValidation'
 
 const toast = useToast()
 const loading = ref(true)
@@ -118,9 +120,12 @@ function openCreate() { editMode.value = false; editTarget.value = null; editErr
 function openEdit(a) { editMode.value = true; editTarget.value = a; editError.value = ''; Object.assign(editForm, { name: a.name, provider: a.provider, base_url: a.base_url, api_key: '', model: a.model || '' }); editDialog.value = true }
 
 async function saveApi() {
-  editError.value = ''; saving.value = true
+  editError.value = ''
+  const check = validateForm(customApiSchema, editForm)
+  if (!check.success) { editError.value = check.error; return }
+  saving.value = true
   try {
-    const payload = { ...editForm }
+    const payload = { ...check.data }
     if (editMode.value && !payload.api_key) delete payload.api_key
     if (editMode.value) { const { api: updated } = await api.updateCustomApi(editTarget.value.id, payload); const idx = apis.value.findIndex((x) => x.id === editTarget.value.id); if (idx >= 0) apis.value[idx] = { ...apis.value[idx], ...updated } }
     else { const { api: created } = await api.createCustomApi(payload); apis.value.unshift(created) }

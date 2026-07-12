@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
+import { useToast } from '@/composables/useToast'
 
 const mockState = vi.hoisted(() => ({ listContacts: null, deleteContact: null, deduplicateContacts: null, httpGet: null }))
 
@@ -63,5 +64,63 @@ describe('ContactsView', () => {
     await flushPromises()
 
     expect(mockState.deduplicateContacts).toHaveBeenCalled()
+  })
+
+  it('exporta contatos via http (client central), não via fetch direto com token de localStorage', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:mock-url')
+    URL.revokeObjectURL = vi.fn()
+    mockState.httpGet = vi.fn().mockImplementation((url) => {
+      if (url === '/contacts/export') return Promise.resolve({ data: new Blob(['csv']) })
+      return Promise.resolve({ data: { labels: [] } })
+    })
+    const wrapper = mount(ContactsView, pluginOptions())
+    await flushPromises()
+
+    const exportBtn = wrapper.findAll('button').find((b) => b.text().includes('Exportar'))
+    await exportBtn.trigger('click')
+    await flushPromises()
+
+    expect(mockState.httpGet).toHaveBeenCalledWith('/contacts/export', { responseType: 'blob' })
+    expect(URL.createObjectURL).toHaveBeenCalled()
+  })
+
+  it('mostra erro ao falhar a exportação', async () => {
+    mockState.httpGet = vi.fn().mockImplementation((url) => {
+      if (url === '/contacts/export') return Promise.reject(new Error('Falha de rede'))
+      return Promise.resolve({ data: { labels: [] } })
+    })
+    const wrapper = mount(ContactsView, pluginOptions())
+    await flushPromises()
+
+    const exportBtn = wrapper.findAll('button').find((b) => b.text().includes('Exportar'))
+    await exportBtn.trigger('click')
+    await flushPromises()
+
+    const { state } = useToast()
+    expect(state.text).toContain('Erro ao exportar')
+  })
+
+  it('não salva quando o e-mail informado é inválido', async () => {
+    const { api } = await import('@/services/api')
+    const wrapper = mount(ContactsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const novoBtn = wrapper.findAll('button').find((b) => b.text().includes('Novo Contato') || b.text().includes('Novo contato'))
+    await (novoBtn ?? wrapper.findAll('button')[0]).trigger('click')
+    await flushPromises()
+
+    const inputs = [...document.body.querySelectorAll('.v-dialog input')]
+    const phoneInput = inputs.find((i) => i.closest('.v-field')?.querySelector('label')?.textContent.match(/telefone/i))
+    const emailInput = inputs.find((i) => i.closest('.v-field')?.querySelector('label')?.textContent.match(/e-?mail/i))
+    if (phoneInput) { phoneInput.value = '11988887777'; phoneInput.dispatchEvent(new Event('input')) }
+    if (emailInput) { emailInput.value = 'nao-e-email'; emailInput.dispatchEvent(new Event('input')) }
+    await flushPromises()
+
+    const salvarBtn = [...document.body.querySelectorAll('button')].find((b) => /salvar|criar/i.test(b.textContent))
+    salvarBtn?.click()
+    await flushPromises()
+
+    expect(api.createContact).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })

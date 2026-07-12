@@ -121,10 +121,10 @@
             </div>
           </div>
           <div class="field">
-            <label class="field-label">Slug da empresa</label>
+            <label class="field-label">Nome da empresa</label>
             <div class="field-wrap">
               <v-icon icon="mdi-domain" size="16" class="field-icon" />
-              <input v-model="regSlug" type="text" class="field-input" placeholder="minha-empresa" />
+              <input v-model="regCompanyName" type="text" class="field-input" placeholder="Minha Empresa" />
             </div>
           </div>
           <button class="submit-btn" :disabled="loading" @click="register">
@@ -142,6 +142,8 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { loginSchema, registerSchema } from '@/schemas/auth'
+import { validateForm } from '@/composables/useZodValidation'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -157,7 +159,7 @@ const loading   = ref(false)
 const regName = ref('')
 const regEmail = ref('')
 const regPassword = ref('')
-const regSlug = ref('')
+const regCompanyName = ref('')
 
 const accessTypes = [
   { value: 'user',       label: 'Usuário',     icon: 'mdi-account-outline' },
@@ -183,10 +185,11 @@ function particleStyle(i) {
 async function submit() {
   error.value = ''
   suspended.value = false
-  if (!email.value || !password.value) { error.value = 'Preencha e-mail e senha.'; return }
+  const check = validateForm(loginSchema, { email: email.value, password: password.value })
+  if (!check.success) { error.value = check.error; return }
   loading.value = true
   try {
-    const u = await auth.login(email.value, password.value)
+    const u = await auth.login(check.data.email, check.data.password)
     router.push(u.role === 'owner' ? '/admin/overview' : '/dashboard')
   } catch (e) {
     if (e.message?.toLowerCase().includes('suspens')) {
@@ -199,9 +202,13 @@ async function submit() {
 
 async function register() {
   error.value = ''
-  if (!regEmail.value || !regPassword.value || !regSlug.value) { error.value = 'Preencha e-mail, senha e slug.'; return }
+  const check = validateForm(registerSchema, { name: regName.value, companyName: regCompanyName.value, email: regEmail.value, password: regPassword.value })
+  if (!check.success) { error.value = check.error; return }
   loading.value = true
-  try { await auth.register({ name: regName.value, email: regEmail.value, password: regPassword.value, slug: regSlug.value }); router.push('/dashboard') }
+  try {
+    await auth.register(check.data.name, check.data.companyName, check.data.email, check.data.password)
+    router.push('/dashboard')
+  }
   catch (e) { error.value = e.message } finally { loading.value = false }
 }
 </script>

@@ -141,6 +141,8 @@
 <script setup>
 import { ref } from 'vue'
 import { api } from '@/services/api'
+import { trialSignupSchema } from '@/schemas/billing'
+import { validateForm } from '@/composables/useZodValidation'
 
 // mantido em sincronia com backend/src/config/index.js (config.billing.trialPlanPriceCents)
 const priceLabel = '397'
@@ -189,23 +191,17 @@ const faq = [
 
 async function submit() {
   error.value = ''
-  if (!name.value || !companyName.value || !email.value || !password.value) {
-    error.value = 'Preencha nome, empresa, e-mail e senha.'
-    return
-  }
-  if (password.value.length < 8) {
-    error.value = 'A senha deve ter pelo menos 8 caracteres.'
-    return
-  }
+  const check = validateForm(trialSignupSchema, {
+    name: name.value,
+    companyName: companyName.value,
+    email: email.value,
+    phone: phone.value,
+    password: password.value,
+  })
+  if (!check.success) { error.value = check.error; return }
   loading.value = true
   try {
-    const { checkoutUrl } = await api.trialSignup({
-      name: name.value,
-      companyName: companyName.value,
-      email: email.value,
-      phone: phone.value || undefined,
-      password: password.value,
-    })
+    const { checkoutUrl } = await api.trialSignup(check.data)
     window.location.href = checkoutUrl
   } catch (e) {
     error.value = e.message

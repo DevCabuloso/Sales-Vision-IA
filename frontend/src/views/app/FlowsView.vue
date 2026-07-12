@@ -102,6 +102,11 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { http } from '@/services/api'
+import { createFlowSchema } from '@/schemas/flows'
+import { validateForm } from '@/composables/useZodValidation'
+import { useToast } from '@/composables/useToast'
+
+const toast = useToast()
 
 const router  = useRouter()
 const flows   = ref([])
@@ -145,18 +150,19 @@ function openCreate() {
 }
 
 async function createFlow() {
-  if (!form.value.name.trim()) return
+  const check = validateForm(createFlowSchema, {
+    name: form.value.name,
+    channel_id: form.value.channel_id || null,
+    trigger_keywords: form.value.trigger_keywords || [],
+  })
+  if (!check.success) { toast.error(check.error); return }
   saving.value = true
   try {
-    const { data } = await http.post('/flows', {
-      name:             form.value.name.trim(),
-      channel_id:       form.value.channel_id || null,
-      trigger_keywords: form.value.trigger_keywords || [],
-    })
+    const { data } = await http.post('/flows', check.data)
     createDialog.value = false
     router.push(`/flows/${data.flow.id}`)
   } catch (e) {
-    console.error(e)
+    toast.error(e.message)
   } finally {
     saving.value = false
   }

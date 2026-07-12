@@ -252,6 +252,8 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, http } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
+import { teamMemberSchema, queueNameSchema, aiSetupSchema } from '@/schemas/onboarding'
+import { validateForm } from '@/composables/useZodValidation'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -307,16 +309,28 @@ function buildSchedule() {
 }
 
 async function saveTeamStep() {
-  const validQueues = queues.filter((q) => q.name.trim())
+  const validQueues = []
+  for (const q of queues) {
+    if (!q.name.trim()) continue
+    const check = validateForm(queueNameSchema, { name: q.name })
+    if (!check.success) throw new Error(check.error)
+    validQueues.push({ ...q, name: check.data.name })
+  }
   for (const q of validQueues) {
-    const { queue } = await api.createQueue({ name: q.name.trim(), color: q.color })
+    const { queue } = await api.createQueue({ name: q.name, color: q.color })
     createdQueues.value.push({ localId: q.localId, id: queue.id, name: queue.name, color: queue.color })
   }
 
-  const validMembers = team.filter((m) => m.name.trim() && m.email.trim())
+  const validMembers = []
+  for (const m of team) {
+    if (!m.name.trim() && !m.email.trim()) continue // linha em branco, ignora
+    const check = validateForm(teamMemberSchema, { name: m.name, email: m.email, role: m.role })
+    if (!check.success) throw new Error(check.error)
+    validMembers.push({ ...m, name: check.data.name, email: check.data.email })
+  }
   for (const m of validMembers) {
     const password = gerarSenha()
-    const { operator } = await api.createOperator({ name: m.name.trim(), email: m.email.trim(), password, role: m.role })
+    const { operator } = await api.createOperator({ name: m.name, email: m.email, password, role: m.role })
     createdTeam.value.push({ id: operator.id, name: operator.name, email: operator.email, password, queueIds: m.queueIds })
   }
 
@@ -353,9 +367,9 @@ async function saveAttendanceStep() {
     await api.updateFlow(flow.id, { nodes, edges: [], status: 'active' })
     await api.toggleAI(false)
   } else if (attendanceMode.value === 'ia') {
-    if (!ai.name.trim()) throw new Error('Dê um nome para a IA.')
-    if (!ai.openaiKey.trim()) throw new Error('Cole sua chave da API OpenAI para continuar.')
-    await api.saveAIConfig({ name: ai.name, system_prompt: ai.system_prompt, main_prompt: ai.main_prompt, openai_api_key: ai.openaiKey })
+    const check = validateForm(aiSetupSchema, { name: ai.name, openaiKey: ai.openaiKey })
+    if (!check.success) throw new Error(check.error)
+    await api.saveAIConfig({ name: check.data.name, system_prompt: ai.system_prompt, main_prompt: ai.main_prompt, openai_api_key: check.data.openaiKey })
     await api.toggleAI(true)
   } else {
     throw new Error('Escolha Chatbot simples ou Inteligência Artificial.')
@@ -532,4 +546,13 @@ async function finish() {
 
 .ob-skip { display: block; margin: 18px auto 0; background: none; border: none; cursor: pointer; font-size: 12px; color: #3A4A55; }
 .ob-skip:hover { color: #6B7C88; }
+
+/* .ob-wrap já vira 100% da largura em mobile (max-width:100%), mas as
+   linhas com 2-3 campos lado a lado (nome+e-mail+cargo, texto+ação) ficam
+   estreitas demais pra digitar — empilha nesses casos abaixo de 767px. */
+@media (max-width: 767px) {
+  .ob-member-top, .ob-option-row { flex-wrap: wrap; }
+  .ob-member-top .ob-input-flex, .ob-option-row .ob-input-flex { flex: 1 1 100%; }
+  .ob-mode-select { grid-template-columns: 1fr; }
+}
 </style>

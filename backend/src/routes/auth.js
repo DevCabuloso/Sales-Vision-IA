@@ -5,6 +5,7 @@ import { supabase, unwrap } from '../db/supabase.js'
 import { verifyPassword, hashPassword, signToken } from '../services/auth.js'
 import { logUsage } from '../services/usage.js'
 import { requireAuth } from '../middleware/auth.js'
+import { passwordSchema } from '../utils/passwordSchema.js'
 
 const COOKIE_OPTS = {
   httpOnly: true,
@@ -25,7 +26,12 @@ const registerSchema = z.object({
   name: z.string().min(2),
   companyName: z.string().min(2),
   email: z.string().email(),
-  password: z.string().min(8, 'A senha deve ter pelo menos 8 caracteres.'),
+  password: passwordSchema,
+})
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Informe a senha atual.'),
+  newPassword: passwordSchema,
 })
 
 authRouter.post('/login', async (req, res) => {
@@ -205,10 +211,11 @@ authRouter.post('/logout', (req, res) => {
 
 // POST /api/auth/change-password
 authRouter.post('/change-password', requireAuth, async (req, res) => {
-  const { currentPassword, newPassword } = req.body
-  if (!currentPassword || !newPassword || newPassword.length < 8) {
-    return res.status(400).json({ error: 'Dados inválidos.' })
+  const parsed = changePasswordSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message })
   }
+  const { currentPassword, newPassword } = parsed.data
   try {
     const users = unwrap(
       await supabase.from('users').select('password_hash').eq('id', req.user.id).limit(1)

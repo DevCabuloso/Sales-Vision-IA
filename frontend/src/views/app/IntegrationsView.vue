@@ -7,7 +7,7 @@
       <!-- Google Calendar -->
       <v-col cols="12" md="6">
         <v-card class="glass pa-6" border>
-          <div class="d-flex align-center ga-3 mb-4">
+          <div class="d-flex align-center ga-3 mb-4 flex-wrap">
             <v-avatar color="info" variant="tonal" size="48" rounded="xl"><v-icon icon="mdi-google" color="info" /></v-avatar>
             <div class="flex-1">
               <div class="text-subtitle-2 font-weight-bold">Google Calendar</div>
@@ -20,7 +20,7 @@
 
           <!-- Passo 1 -->
           <div class="mb-4">
-            <div class="d-flex align-center ga-2 mb-2">
+            <div class="d-flex align-center ga-2 mb-2 flex-wrap">
               <v-chip color="info" size="x-small" variant="tonal">Passo 1</v-chip>
               <span class="text-body-2 font-weight-medium">Credenciais OAuth do Google</span>
               <v-chip v-if="google.setupConfigured" color="success" size="x-small" variant="tonal" prepend-icon="mdi-check">Configurado</v-chip>
@@ -51,7 +51,7 @@
       <!-- Meta WhatsApp -->
       <v-col cols="12" md="6">
         <v-card class="glass pa-6" border>
-          <div class="d-flex align-center ga-3 mb-4">
+          <div class="d-flex align-center ga-3 mb-4 flex-wrap">
             <v-avatar color="success" variant="tonal" size="48" rounded="xl"><v-icon icon="mdi-whatsapp" color="success" /></v-avatar>
             <div class="flex-1">
               <div class="text-subtitle-2 font-weight-bold">WhatsApp (Meta API)</div>
@@ -75,7 +75,7 @@
       <!-- Evolution -->
       <v-col cols="12" md="6">
         <v-card class="glass pa-6" border>
-          <div class="d-flex align-center ga-3 mb-4">
+          <div class="d-flex align-center ga-3 mb-4 flex-wrap">
             <v-avatar color="secondary" variant="tonal" size="48" rounded="xl"><v-icon icon="mdi-api" color="secondary" /></v-avatar>
             <div class="flex-1">
               <div class="text-subtitle-2 font-weight-bold">WhatsApp (Evolution)</div>
@@ -102,6 +102,8 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { api, http } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
+import { googleSetupSchema, metaConnectSchema, evolutionConnectSchema } from '@/schemas/integrations'
+import { validateForm } from '@/composables/useZodValidation'
 
 const auth = useAuthStore()
 const toast = useToast()
@@ -134,9 +136,10 @@ async function loadStatus() {
 }
 
 async function saveGoogleSetup() {
-  if (!googleSetupForm.clientId || !googleSetupForm.clientSecret) { toast.warning('Preencha o Client ID e o Client Secret.'); return }
+  const check = validateForm(googleSetupSchema, googleSetupForm)
+  if (!check.success) { toast.warning(check.error); return }
   savingGoogleSetup.value = true
-  try { await api.googleSaveSetup({ clientId: googleSetupForm.clientId, clientSecret: googleSetupForm.clientSecret }); google.setupConfigured = true; googleSetupForm.clientId = ''; googleSetupForm.clientSecret = ''; toast.success('Credenciais Google salvas.') }
+  try { await api.googleSaveSetup(check.data); google.setupConfigured = true; googleSetupForm.clientId = ''; googleSetupForm.clientSecret = ''; toast.success('Credenciais Google salvas.') }
   catch (e) { toast.error(e.message) } finally { savingGoogleSetup.value = false }
 }
 
@@ -144,8 +147,18 @@ async function connectGoogle() { connecting.value = true; try { const { authUrl 
 async function disconnectGoogle() { try { await http.post('/integrations/google/disconnect'); google.connected = false; google.email = null; toast.success('Google Calendar desconectado.') } catch (e) { toast.error(e.message) } }
 
 async function testMeta() { testingMeta.value = true; metaTestResult.value = null; try { metaTestResult.value = { ok: true, ...await api.testMetaConnection() } } catch (e) { metaTestResult.value = { ok: false, error: e.message } } finally { testingMeta.value = false } }
-async function saveMeta() { savingMeta.value = true; try { await http.post('/integrations/meta/connect', { ...metaForm }); status.meta_whatsapp = true; toast.success('Credenciais Meta salvas.') } catch (e) { toast.error(e.message) } finally { savingMeta.value = false } }
-async function saveEvo() { savingEvo.value = true; try { await http.post('/integrations/evolution/connect', { ...evoForm }); status.evolution = true; toast.success('Credenciais Evolution salvas.') } catch (e) { toast.error(e.message) } finally { savingEvo.value = false } }
+async function saveMeta() {
+  const check = validateForm(metaConnectSchema, metaForm)
+  if (!check.success) { toast.error(check.error); return }
+  savingMeta.value = true
+  try { await http.post('/integrations/meta/connect', check.data); status.meta_whatsapp = true; toast.success('Credenciais Meta salvas.') } catch (e) { toast.error(e.message) } finally { savingMeta.value = false }
+}
+async function saveEvo() {
+  const check = validateForm(evolutionConnectSchema, evoForm)
+  if (!check.success) { toast.error(check.error); return }
+  savingEvo.value = true
+  try { await http.post('/integrations/evolution/connect', check.data); status.evolution = true; toast.success('Credenciais Evolution salvas.') } catch (e) { toast.error(e.message) } finally { savingEvo.value = false }
+}
 
 function handleReturn() {
   const params = new URLSearchParams(window.location.search)

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
+import { useToast } from '@/composables/useToast'
 
 const mockState = vi.hoisted(() => ({ get: null, post: null, patch: null, delete: null, push: null }))
 
@@ -69,6 +70,48 @@ describe('FlowsView', () => {
 
     expect(mockState.post).toHaveBeenCalledWith('/flows', expect.objectContaining({ name: 'Fluxo de teste' }))
     expect(mockState.push).toHaveBeenCalledWith('/flows/novo-flow')
+    wrapper.unmount()
+  })
+
+  it('mostra um toast de erro quando o nome do fluxo é inválido, sem chamar a API', async () => {
+    const wrapper = mount(FlowsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    await wrapper.find('button').trigger('click') // "Novo Fluxo"
+    await flushPromises()
+
+    const criarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.includes('Criar e Editar'))
+    criarBtn.click()
+    await flushPromises()
+
+    expect(mockState.post).not.toHaveBeenCalled()
+    const { state } = useToast()
+    expect(state.show).toBe(true)
+    expect(state.color).toBe('error')
+    wrapper.unmount()
+  })
+
+  it('mostra um toast de erro quando a criação do fluxo falha na API', async () => {
+    mockState.post.mockRejectedValue(new Error('Falha ao criar fluxo'))
+    const wrapper = mount(FlowsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    await wrapper.find('button').trigger('click') // "Novo Fluxo"
+    await flushPromises()
+
+    const nameInput = document.body.querySelector('.v-dialog input')
+    nameInput.value = 'Fluxo de teste'
+    nameInput.dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const criarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.includes('Criar e Editar'))
+    criarBtn.click()
+    await flushPromises()
+
+    const { state } = useToast()
+    expect(state.text).toBe('Falha ao criar fluxo')
+    expect(state.color).toBe('error')
+    expect(mockState.push).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

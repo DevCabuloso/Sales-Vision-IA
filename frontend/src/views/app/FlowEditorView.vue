@@ -1,6 +1,21 @@
 <template>
   <div class="fe-shell">
 
+    <!-- Editor de nós/conexões: arrastar, conectar e dar zoom não funciona
+         bem em touch (mesmo apps grandes tipo n8n recomendam desktop) —
+         em telas pequenas mostra um aviso em vez de um canvas quebrado. -->
+    <div v-if="isMobile" class="fe-mobile-notice">
+      <v-icon icon="mdi-monitor-dashboard" size="48" style="opacity:.35" class="mb-4" />
+      <h2 class="text-h6 font-weight-bold mb-2">Melhor em uma tela maior</h2>
+      <p class="text-body-2 mb-6" style="color:#9FB0BC">
+        O editor de fluxos usa arrastar e soltar para conectar nós — funciona melhor num computador ou tablet.
+        Acesse por lá pra editar "{{ flow?.name || 'este fluxo' }}".
+      </p>
+      <v-btn color="primary" prepend-icon="mdi-arrow-left" @click="$router.push('/flows')">Voltar para Fluxos</v-btn>
+    </div>
+
+    <template v-else>
+
     <!-- Toolbar -->
     <div class="fe-toolbar">
       <v-btn icon="mdi-arrow-left" variant="text" size="small" @click="$router.push('/flows')" />
@@ -245,6 +260,8 @@
       </v-card>
     </v-dialog>
 
+    </template>
+
   </div>
 </template>
 
@@ -254,8 +271,10 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { VueFlow, Handle, Position, MarkerType, useVueFlow } from '@vue-flow/core'
 import { http } from '@/services/api'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 const route = useRoute()
+const { isMobile } = useIsMobile()
 const { fitView } = useVueFlow({ id: 'chatflow' })
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -549,6 +568,12 @@ async function save() {
   display: flex; flex-direction: column;
   height: 100%; overflow: hidden;
   background: #080e1a; color: #e2e8f0;
+}
+
+.fe-mobile-notice {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 32px 24px;
 }
 
 /* Toolbar */

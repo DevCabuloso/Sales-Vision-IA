@@ -145,6 +145,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api, http } from '@/services/api'
 import { useToast } from '@/composables/useToast'
+import { contactSchema } from '@/schemas/contacts'
+import { validateForm } from '@/composables/useZodValidation'
 
 const toast = useToast()
 const contacts = ref([])
@@ -207,10 +209,11 @@ function openCreate() { editing.value = null; Object.assign(form, { name: '', ph
 function openEdit(c) { editing.value = c; Object.assign(form, { name: c.name || '', phone: c.phone || '', email: c.email || '', tags: [...(c.tags || [])], stage: c.stage || 'Novo Lead' }); formDialog.value = true }
 
 async function save() {
-  if (!form.phone) return toast.error('Telefone é obrigatório.')
+  const check = validateForm(contactSchema, { name: form.name, phone: form.phone, email: form.email, tags: form.tags, stage: form.stage })
+  if (!check.success) return toast.error(check.error)
   saving.value = true
   try {
-    const payload = { name: form.name || null, phone: form.phone, email: form.email || null, tags: form.tags, stage: form.stage }
+    const payload = { ...check.data, name: check.data.name || null, email: check.data.email || null }
     if (editing.value) {
       const updated = await api.updateContact(editing.value.id, payload)
       const idx = contacts.value.findIndex((c) => c.id === editing.value.id)
@@ -231,10 +234,13 @@ async function deleteContact() {
 
 async function exportContacts() {
   try {
-    const token = localStorage.getItem('sdr_token')
-    const r = await fetch(`${http.defaults.baseURL}/contacts/export`, { headers: { Authorization: `Bearer ${token}` } })
-    if (!r.ok) throw new Error('Erro ao exportar')
-    const blob = await r.blob(); const burl = URL.createObjectURL(blob)
+    // usa o client axios central (http) em vez de fetch direto: assim o
+    // interceptor de auth cobre tanto sessão normal (cookie httpOnly via
+    // withCredentials) quanto impersonação (Bearer via sessionStorage) —
+    // ler 'sdr_token' do localStorage aqui nunca funcionava, pois o token
+    // de login normal nunca é gravado lá (fica só no cookie).
+    const r = await http.get('/contacts/export', { responseType: 'blob' })
+    const burl = URL.createObjectURL(r.data)
     const a = document.createElement('a'); a.href = burl; a.download = 'contatos.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(burl), 3000)
   } catch (e) { toast.error('Erro ao exportar: ' + e.message) }

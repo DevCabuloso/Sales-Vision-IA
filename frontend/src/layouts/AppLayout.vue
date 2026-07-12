@@ -177,18 +177,16 @@ import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
 import NotificationBell from '@/components/NotificationBell.vue'
 import { useNotificationsStore } from '@/stores/notifications'
 import { supabase } from '@/services/supabase'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 const router = useRouter()
 const route  = useRoute()
 const auth   = useAuthStore()
 
-const isMobile   = ref(window.innerWidth < 768)
+const { isMobile } = useIsMobile()
 const drawerOpen = ref(false)
 
-function onResize() {
-  isMobile.value = window.innerWidth < 768
-  if (!isMobile.value) drawerOpen.value = false
-}
+watch(isMobile, (mobile) => { if (!mobile) drawerOpen.value = false })
 
 function navigate(to) {
   router.push(to)
@@ -237,7 +235,6 @@ function showPushNotification(msg) {
 onMounted(() => {
   loadAIStatus()
   notifStore.startPolling()
-  window.addEventListener('resize', onResize)
 
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission()
@@ -260,7 +257,6 @@ onMounted(() => {
 })
 onUnmounted(() => {
   notifStore.stopPolling()
-  window.removeEventListener('resize', onResize)
   if (pushChannel && supabase) supabase.removeChannel(pushChannel)
 })
 

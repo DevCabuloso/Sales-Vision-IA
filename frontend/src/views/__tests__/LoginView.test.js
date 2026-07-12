@@ -63,11 +63,27 @@ describe('LoginView', () => {
     expect(wrapper.text()).toContain('Conta suspensa')
   })
 
-  it('alterna para a aba de registro e exige e-mail, senha e slug', async () => {
+  it('alterna para a aba de registro e exige nome, empresa, e-mail e senha', async () => {
     const wrapper = mount(LoginView, pluginOptions())
     await wrapper.find('.toggle-btn:nth-child(2)').trigger('click') // "Registrar"
     await wrapper.find('.submit-btn').trigger('click')
-    expect(wrapper.text()).toContain('Preencha e-mail, senha e slug.')
+    expect(wrapper.text()).toContain('Preencha nome, empresa, e-mail e senha.')
     expect(mockState.register).not.toHaveBeenCalled()
+  })
+
+  it('registra com sucesso passando os 4 campos posicionais para a store e redireciona', async () => {
+    mockState.register.mockResolvedValue({ role: 'admin' })
+    const wrapper = mount(LoginView, pluginOptions())
+    await wrapper.find('.toggle-btn:nth-child(2)').trigger('click') // "Registrar"
+    const inputs = wrapper.findAll('.field-input')
+    await inputs[0].setValue('Ana Silva')
+    await inputs[1].setValue('ana@ex.com')
+    await inputs[2].setValue('senha1234')
+    await inputs[3].setValue('Empresa da Ana')
+    await wrapper.find('.submit-btn').trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(mockState.register).toHaveBeenCalledWith('Ana Silva', 'Empresa da Ana', 'ana@ex.com', 'senha1234')
+    expect(mockState.push).toHaveBeenCalledWith('/dashboard')
   })
 })

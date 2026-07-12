@@ -58,4 +58,54 @@ describe('ClientsView', () => {
     expect(mockState.adminCreateClient).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+
+  it('rejeita senha do admin com menos de 8 caracteres', async () => {
+    const wrapper = mount(ClientsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const novoBtn = wrapper.findAll('button').find((b) => b.text().includes('Novo Cliente'))
+    await novoBtn.trigger('click')
+    await flushPromises()
+
+    const inputs = [...document.body.querySelectorAll('.v-dialog input')]
+    const byLabel = (label) => inputs.find((i) => i.closest('.v-field')?.querySelector('label')?.textContent.includes(label))
+    byLabel('Nome da empresa').value = 'Empresa Ana'; byLabel('Nome da empresa').dispatchEvent(new Event('input'))
+    byLabel('Slug').value = 'empresa-ana'; byLabel('Slug').dispatchEvent(new Event('input'))
+    byLabel('E-mail do admin').value = 'admin@ex.com'; byLabel('E-mail do admin').dispatchEvent(new Event('input'))
+    byLabel('Senha').value = '1234567'; byLabel('Senha').dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const criarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Criar Cliente')
+    criarBtn?.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('A senha do admin deve ter pelo menos 8 caracteres.')
+    expect(mockState.adminCreateClient).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('rejeita slug com caracteres inválidos', async () => {
+    const wrapper = mount(ClientsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const novoBtn = wrapper.findAll('button').find((b) => b.text().includes('Novo Cliente'))
+    await novoBtn.trigger('click')
+    await flushPromises()
+
+    const inputs = [...document.body.querySelectorAll('.v-dialog input')]
+    const byLabel = (label) => inputs.find((i) => i.closest('.v-field')?.querySelector('label')?.textContent.includes(label))
+    byLabel('Nome da empresa').value = 'Empresa Ana'; byLabel('Nome da empresa').dispatchEvent(new Event('input'))
+    byLabel('Slug').value = 'Empresa Ana!'; byLabel('Slug').dispatchEvent(new Event('input'))
+    byLabel('E-mail do admin').value = 'admin@ex.com'; byLabel('E-mail do admin').dispatchEvent(new Event('input'))
+    byLabel('Senha').value = 'senha1234'; byLabel('Senha').dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const criarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Criar Cliente')
+    criarBtn?.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Slug: apenas minúsculas, números e hífen.')
+    expect(mockState.adminCreateClient).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })

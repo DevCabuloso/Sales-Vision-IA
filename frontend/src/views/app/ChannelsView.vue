@@ -353,6 +353,8 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { api, http } from '@/services/api'
+import { channelNameSchema, channelSettingsSchema } from '@/schemas/channels'
+import { validateForm } from '@/composables/useZodValidation'
 
 const QR_TTL = 45
 
@@ -392,10 +394,11 @@ const newDialog = ref(false)
 const newName   = ref('')
 function openNew() { newName.value = ''; newDialog.value = true }
 async function createChannel() {
-  if (!newName.value.trim()) return
+  const check = validateForm(channelNameSchema, { name: newName.value })
+  if (!check.success) return
   creating.value = true
   try {
-    const ch = await api.createChannel(newName.value.trim())
+    const ch = await api.createChannel(check.data.name)
     channels.value.unshift(ch)
     newDialog.value = false
     toast('Canal criado! Agora conecte o WhatsApp.')
@@ -411,10 +414,11 @@ const renameError   = ref('')
 function openRename(ch) { renameTarget.value = ch; renameName.value = ch.name; renameError.value = ''; renameDialog.value = true }
 async function doRename() {
   renameError.value = ''
-  if (!renameName.value.trim()) { renameError.value = 'Nome obrigatório.'; return }
+  const check = validateForm(channelNameSchema, { name: renameName.value })
+  if (!check.success) { renameError.value = check.error; return }
   saving.value = true
   try {
-    const updated = await api.renameChannel(renameTarget.value.id, renameName.value.trim())
+    const updated = await api.renameChannel(renameTarget.value.id, check.data.name)
     const idx = channels.value.findIndex((c) => c.id === renameTarget.value.id)
     if (idx !== -1) channels.value[idx] = { ...channels.value[idx], ...updated }
     renameDialog.value = false
@@ -574,18 +578,19 @@ async function openSettings(ch) {
 
 async function saveSettings() {
   settingsError.value = ''
-  if (!cfg.name.trim()) { settingsError.value = 'Nome obrigatório.'; return }
+  const check = validateForm(channelSettingsSchema, {
+    name: cfg.name,
+    goodbye_message: cfg.goodbye_message,
+    assigned_user_id: cfg.assignType === 'user' ? cfg.assigned_user_id : null,
+    assigned_queue_id: cfg.assignType === 'queue' ? cfg.assigned_queue_id : null,
+  })
+  if (!check.success) { settingsError.value = check.error; return }
   savingSettings.value = true
   try {
     const channelId = settingsTarget.value.id
 
     // Salva configurações do canal
-    const payload = {
-      name:              cfg.name.trim(),
-      goodbye_message:   cfg.goodbye_message || null,
-      assigned_user_id:  cfg.assignType === 'user'  ? cfg.assigned_user_id  : null,
-      assigned_queue_id: cfg.assignType === 'queue' ? cfg.assigned_queue_id : null,
-    }
+    const payload = check.data
     const { channel } = await api.updateChannelSettings(channelId, payload)
     const idx = channels.value.findIndex((c) => c.id === channelId)
     if (idx !== -1) channels.value[idx] = { ...channels.value[idx], ...channel }

@@ -235,6 +235,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
+import { campaignSchema, intervalSchema, importContactsSchema } from '@/schemas/broadcast'
+import { validateForm } from '@/composables/useZodValidation'
 
 const toast = useToast()
 const loading = ref(true)
@@ -326,20 +328,18 @@ async function loadTemplates() {
 }
 
 async function saveCampaign() {
-  if (!createForm.name || !createForm.content) { createError.value = 'Nome e mensagem são obrigatórios.'; return }
-  const minInt = createForm.min_interval_seconds || 2
-  const maxInt = createForm.max_interval_seconds || 5
-  if (maxInt < minInt) { createError.value = 'O intervalo máximo deve ser maior ou igual ao mínimo.'; return }
+  const check = validateForm(campaignSchema, {
+    name: createForm.name,
+    content: createForm.content,
+    template_id: createForm.template_id || null,
+    scheduled_at: createForm.scheduled_at ? new Date(createForm.scheduled_at).toISOString() : null,
+    min_interval_seconds: createForm.min_interval_seconds || 2,
+    max_interval_seconds: createForm.max_interval_seconds || 5,
+  })
+  if (!check.success) { createError.value = check.error; return }
   saving.value = true
   try {
-    const { campaign } = await api.createCampaign({
-      name: createForm.name,
-      content: createForm.content,
-      template_id: createForm.template_id || null,
-      scheduled_at: createForm.scheduled_at ? new Date(createForm.scheduled_at).toISOString() : null,
-      min_interval_seconds: minInt,
-      max_interval_seconds: maxInt,
-    })
+    const { campaign } = await api.createCampaign(check.data)
     campaigns.value.unshift(campaign); createDialog.value = false; toast.success('Campanha criada.')
   }
   catch (e) { createError.value = e.message } finally { saving.value = false }
@@ -353,12 +353,14 @@ async function openManage(camp) {
 }
 
 async function doSaveInterval() {
-  const minInt = intervalForm.min_interval_seconds || 2
-  const maxInt = intervalForm.max_interval_seconds || 5
-  if (maxInt < minInt) { intervalError.value = 'O intervalo máximo deve ser maior ou igual ao mínimo.'; return }
+  const check = validateForm(intervalSchema, {
+    min_interval_seconds: intervalForm.min_interval_seconds || 2,
+    max_interval_seconds: intervalForm.max_interval_seconds || 5,
+  })
+  if (!check.success) { intervalError.value = check.error; return }
   intervalError.value = ''; savingInterval.value = true
   try {
-    const { campaign } = await api.updateCampaign(activeCampaign.value.id, { min_interval_seconds: minInt, max_interval_seconds: maxInt })
+    const { campaign } = await api.updateCampaign(activeCampaign.value.id, check.data)
     activeCampaign.value = { ...activeCampaign.value, ...campaign }
     const idx = campaigns.value.findIndex((c) => c.id === campaign.id)
     if (idx !== -1) campaigns.value[idx] = { ...campaigns.value[idx], ...campaign }
@@ -391,8 +393,10 @@ async function cancelCampaign(camp) { try { await api.cancelCampaign(camp.id); c
 async function deleteCampaign(camp) { try { await api.deleteCampaign(camp.id); campaigns.value = campaigns.value.filter((c) => c.id !== camp.id); toast.success('Campanha excluída.') } catch (e) { toast.error(e.message) } }
 
 async function doImport() {
+  const check = validateForm(importContactsSchema, { contacts: parsedContacts.value })
+  if (!check.success) { importError.value = check.error; return }
   importError.value = ''; importing.value = true
-  try { const { imported } = await api.importCampaignContacts(activeCampaign.value.id, parsedContacts.value); await openManage(activeCampaign.value); importDialog.value = false; importText.value = ''; toast.success(`${imported} contato(s) importado(s).`) }
+  try { const { imported } = await api.importCampaignContacts(activeCampaign.value.id, check.data.contacts); await openManage(activeCampaign.value); importDialog.value = false; importText.value = ''; toast.success(`${imported} contato(s) importado(s).`) }
   catch (e) { importError.value = e.message } finally { importing.value = false }
 }
 

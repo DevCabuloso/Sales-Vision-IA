@@ -147,6 +147,8 @@
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
+import { followupSequenceSchema } from '@/schemas/followups'
+import { validateForm } from '@/composables/useZodValidation'
 
 const toast = useToast()
 const loading = ref(true)
@@ -244,26 +246,26 @@ function clearAttachment(i) {
 
 async function saveEdit() {
   editError.value = ''
-  if (!editForm.name.trim()) { editError.value = 'Informe um nome para o acompanhamento.'; return }
-  if (editForm.steps.some((s) => !s.text.trim())) { editError.value = 'Todas as mensagens precisam de conteúdo.'; return }
+  const check = validateForm(followupSequenceSchema, {
+    name: editForm.name,
+    description: editForm.description || null,
+    time_mode: editForm.time_mode,
+    default_send_time: editForm.default_send_time || '09:00',
+    steps: editForm.steps.map((s) => ({
+      delay_days: Number(s.delay_days) || 0,
+      text: s.text,
+      media_url: s.media_url || null,
+      media_type: s.media_type || null,
+      media_mimetype: s.media_mimetype || null,
+      media_filename: s.media_filename || null,
+      send_time: editForm.time_mode === 'individual' ? (s.send_time || '09:00') : null,
+    })),
+  })
+  if (!check.success) { editError.value = check.error; return }
 
   saving.value = true
   try {
-    const payload = {
-      name: editForm.name,
-      description: editForm.description || null,
-      time_mode: editForm.time_mode,
-      default_send_time: editForm.default_send_time || '09:00',
-      steps: editForm.steps.map((s) => ({
-        delay_days: Number(s.delay_days) || 0,
-        text: s.text,
-        media_url: s.media_url || null,
-        media_type: s.media_type || null,
-        media_mimetype: s.media_mimetype || null,
-        media_filename: s.media_filename || null,
-        send_time: editForm.time_mode === 'individual' ? (s.send_time || '09:00') : null,
-      })),
-    }
+    const payload = check.data
 
     const { sequence, steps } = editMode.value
       ? await api.updateFollowupSequence(editTarget.value.id, payload)

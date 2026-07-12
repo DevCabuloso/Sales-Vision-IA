@@ -104,6 +104,14 @@ describe('routes/admin', () => {
       expect(res.status).toBe(400)
     })
 
+    it('POST /clients rejeita senha de admin com menos de 8 caracteres', async () => {
+      const app = buildApp()
+      const res = await request(app).post('/api/admin/clients').send({
+        name: 'Empresa', slug: 'empresa', adminEmail: 'admin@ex.com', adminPassword: 'curta12',
+      })
+      expect(res.status).toBe(400)
+    })
+
     it('POST /clients retorna 409 em slug duplicado', async () => {
       setSupabase({ tenants: [{ data: null, error: { message: 'duplicate', code: '23505' } }] })
       const app = buildApp()
@@ -203,6 +211,12 @@ describe('routes/admin', () => {
       expect(limitCall.args[0]).toBe(5000)
     })
 
+    it('POST /clients/:id/users rejeita senha com menos de 8 caracteres', async () => {
+      const app = buildApp()
+      const res = await request(app).post('/api/admin/clients/tenant-1/users').send({ email: 'a@a.com', name: 'A', password: 'curta12' })
+      expect(res.status).toBe(400)
+    })
+
     it('POST /clients/:id/users retorna 404 quando o cliente não existe', async () => {
       setSupabase({ tenants: [{ data: [], error: null }] })
       const app = buildApp()
@@ -268,6 +282,12 @@ describe('routes/admin', () => {
       const app = buildApp()
       const res = await request(app).get('/api/admin/owners')
       expect(res.body.owners).toHaveLength(1)
+    })
+
+    it('POST /owners rejeita senha com menos de 8 caracteres', async () => {
+      const app = buildApp()
+      const res = await request(app).post('/api/admin/owners').send({ email: 'dono@ex.com', name: 'Dono', password: 'curta12' })
+      expect(res.status).toBe(400)
     })
 
     it('POST /owners retorna 409 em e-mail duplicado', async () => {

@@ -1082,6 +1082,7 @@ import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from
 import { useRoute, useRouter } from 'vue-router'
 import { api, http } from '@/services/api'
 import { useMessageRealtime, useRealtime } from '@/composables/useRealtime'
+import { useIsMobile } from '@/composables/useIsMobile'
 import { useAuthStore } from '@/stores/auth'
 import AudioPlayer from '@/components/chat/AudioPlayer.vue'
 
@@ -1130,11 +1131,8 @@ const bulkTransferUserId = ref(null)
 const bulkLoading        = ref(false)
 
 // ——— mobile ———
-const isMobile    = ref(window.innerWidth < 768)
+const { isMobile } = useIsMobile()
 const mobilePanel = ref('list') // 'list' | 'chat'
-function onResize() { isMobile.value = window.innerWidth < 768 }
-onMounted(() => window.addEventListener('resize', onResize))
-onUnmounted(() => window.removeEventListener('resize', onResize))
 
 // ——— estado do chat ———
 const messages       = ref([])

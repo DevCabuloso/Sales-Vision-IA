@@ -270,7 +270,7 @@
               <v-text-field v-model="ownerForm.email" label="E-mail" type="email" variant="outlined" density="compact" />
             </v-col>
             <v-col cols="12">
-              <v-text-field v-model="ownerForm.password" label="Senha" type="password" hint="Mínimo 6 caracteres" variant="outlined" density="compact" />
+              <v-text-field v-model="ownerForm.password" label="Senha" type="password" hint="Mínimo 8 caracteres" variant="outlined" density="compact" />
             </v-col>
           </v-row>
           <v-alert v-if="ownerError" type="error" variant="tonal" density="compact" :text="ownerError" class="mt-2" />
@@ -324,6 +324,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
+import { createOwnerSchema, ownerResetPasswordSchema, editUserSchema, userResetPasswordSchema } from '@/schemas/admin'
+import { validateForm } from '@/composables/useZodValidation'
 
 const auth = useAuthStore()
 const loading = ref(true)
@@ -363,12 +365,11 @@ function openCreateOwner() {
 
 async function doCreateOwner() {
   ownerError.value = ''
-  if (!ownerForm.name || !ownerForm.email || !ownerForm.password) {
-    ownerError.value = 'Preencha todos os campos.'; return
-  }
+  const check = validateForm(createOwnerSchema, { name: ownerForm.name, email: ownerForm.email, password: ownerForm.password })
+  if (!check.success) { ownerError.value = check.error; return }
   saving.value = true
   try {
-    const o = await api.adminCreateOwner({ name: ownerForm.name, email: ownerForm.email, password: ownerForm.password })
+    const o = await api.adminCreateOwner(check.data)
     owners.value.push(o)
     createOwnerDialog.value = false
     toast('Superadmin criado com sucesso.')
@@ -386,12 +387,11 @@ function openOwnerReset(o) {
 
 async function doOwnerReset() {
   ownerResetError.value = ''
-  if (!ownerNewPassword.value || ownerNewPassword.value.length < 6) {
-    ownerResetError.value = 'Mínimo 6 caracteres.'; return
-  }
+  const check = validateForm(ownerResetPasswordSchema, { password: ownerNewPassword.value })
+  if (!check.success) { ownerResetError.value = check.error; return }
   saving.value = true
   try {
-    await api.adminResetOwnerPassword(ownerResetTarget.value.id, ownerNewPassword.value)
+    await api.adminResetOwnerPassword(ownerResetTarget.value.id, check.data.password)
     ownerResetDialog.value = false
     toast('Senha redefinida.')
   } catch (e) {
@@ -517,9 +517,11 @@ function openEdit(u) {
 
 async function saveEdit() {
   editError.value = ''
+  const check = validateForm(editUserSchema, { name: editForm.name, role: editForm.role })
+  if (!check.success) { editError.value = check.error; return }
   saving.value = true
   try {
-    const updated = await api.adminUpdateUser(editTarget.value.id, { name: editForm.name, role: editForm.role })
+    const updated = await api.adminUpdateUser(editTarget.value.id, check.data)
     const idx = users.value.findIndex((u) => u.id === editTarget.value.id)
     if (idx >= 0) users.value[idx] = { ...users.value[idx], ...updated }
     editDialog.value = false
@@ -551,13 +553,11 @@ function openReset(u) {
 
 async function doReset() {
   resetError.value = ''
-  if (!newPassword.value || newPassword.value.length < 6) {
-    resetError.value = 'Senha deve ter pelo menos 6 caracteres.'
-    return
-  }
+  const check = validateForm(userResetPasswordSchema, { password: newPassword.value })
+  if (!check.success) { resetError.value = check.error; return }
   saving.value = true
   try {
-    await api.adminResetPassword(resetTarget.value.id, newPassword.value)
+    await api.adminResetPassword(resetTarget.value.id, check.data.password)
     resetDialog.value = false
     toast('Senha redefinida com sucesso.')
   } catch (e) {
@@ -608,7 +608,7 @@ onMounted(load)
 
 .ztable-wrap {
   border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 12px; overflow: hidden;
+  border-radius: 12px; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
   background: var(--glass-bg, #1C2333);
   position: relative;
 }

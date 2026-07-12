@@ -299,7 +299,7 @@ useRealtime('leads', null, refresh)
 /* Table shared styles */
 .ztable-wrap {
   border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 12px; overflow: hidden;
+  border-radius: 12px; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
   background: var(--glass-bg, #1C2333);
 }
 .ztable-section-header {

@@ -184,6 +184,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/services/api'
+import { createClientSchema } from '@/schemas/admin'
+import { validateForm } from '@/composables/useZodValidation'
 
 const router = useRouter()
 const loading = ref(true)
@@ -275,13 +277,13 @@ async function load() {
 
 async function create() {
   formError.value = ''
-  if (!form.name || !form.slug || !form.adminEmail || !form.adminPassword) {
-    formError.value = 'Preencha nome, slug, e-mail e senha do admin.'
-    return
-  }
+  const check = validateForm(createClientSchema, {
+    name: form.name, slug: form.slug, adminEmail: form.adminEmail, adminPassword: form.adminPassword,
+  })
+  if (!check.success) { formError.value = check.error; return }
   saving.value = true
   try {
-    await api.adminCreateClient({ ...form })
+    await api.adminCreateClient({ ...form, ...check.data })
     dialog.value = false
     toast('Cliente criado com sucesso.')
     await load()
@@ -347,7 +349,9 @@ onMounted(load)
 .ztable-wrap {
   border: 1px solid rgba(255,255,255,0.07);
   border-radius: 12px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
   background: var(--glass-bg, #1C2333);
   position: relative;
 }

@@ -381,45 +381,13 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { http } from '@/services/api'
+import { DEFAULTS, opSettingsSchema } from '@/schemas/opSettings'
+import { validateForm } from '@/composables/useZodValidation'
 
 const loading   = ref(true)
 const saving    = ref(false)
 const loadError = ref('')
 const snack     = reactive({ show: false, text: '', color: 'success' })
-
-const DEFAULTS = {
-  auto_close_enabled:           false,
-  auto_close_minutes:           30,
-  auto_close_message:           'Encerramos seu atendimento por inatividade. Estamos à disposição caso precise.',
-  post_close_grace_minutes:     5,
-  force_close_reason:           false,
-  reopen_takes_ownership:       true,
-  transfer_offline_tickets:     false,
-  allow_pause:                  true,
-  unpause_on_client_reply:      false,
-  offline_on_tab_close:         false,
-  sound_notifications:          true,
-  limit_push_to_owner:          false,
-  hide_other_tickets:           false,
-  hide_chatbot_tickets:         false,
-  show_unassigned_tickets:      true,
-  supervisor_as_agent:          false,
-  kanban_private:               false,
-  show_message_history:         true,
-  preserve_contact_name:        false,
-  list_by_last_message:         true,
-  reverse_ticket_order:         false,
-  show_tab_counters:            true,
-  filter_old_tickets_days:      0,
-  ignore_group_messages:        true,
-  show_groups_to_all:           true,
-  show_closed_to_all:           false,
-  force_agent_on_status_change: false,
-  call_message_enabled:         false,
-  call_message_text:            'No momento não estamos aceitando ligações. Por favor, envie uma mensagem de texto.',
-  waba_validate_contact:        false,
-  waba_out_of_window:           false,
-}
 
 const s = reactive({ ...DEFAULTS })
 
@@ -440,9 +408,11 @@ async function load() {
 }
 
 async function save() {
+  const check = validateForm(opSettingsSchema, s)
+  if (!check.success) { toast(check.error, 'error'); return }
   saving.value = true
   try {
-    await http.put('/op-settings', { ...s })
+    await http.put('/op-settings', check.data)
     toast('Configurações operacionais salvas com sucesso!')
   } catch (e) {
     toast(e.message || 'Erro ao salvar configurações.', 'error')

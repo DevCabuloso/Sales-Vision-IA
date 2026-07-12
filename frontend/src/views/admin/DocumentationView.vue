@@ -1025,7 +1025,7 @@ code {
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 @media (max-width: 760px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
 
-.ztable-wrap { border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; overflow: hidden; background: var(--glass-bg, #1C2333); }
+.ztable-wrap { border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; background: var(--glass-bg, #1C2333); }
 .ztable-section-header { padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02); }
 .section-label { font-size: 0.8rem; font-weight: 600; color: var(--text-primary, #E2E8F0); }
 .ztable { width: 100%; border-collapse: collapse; font-size: 0.82rem; }

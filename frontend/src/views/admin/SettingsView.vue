@@ -19,7 +19,7 @@
         <!-- OpenAI -->
         <v-col cols="12" md="6">
           <v-card class="glass pa-6" border>
-            <div class="d-flex align-center ga-3 mb-4">
+            <div class="d-flex align-center ga-3 mb-4 flex-wrap">
               <div class="settings-icon openai d-flex align-center justify-center">
                 <v-icon icon="mdi-robot-outline" size="22" color="white" />
               </div>
@@ -64,7 +64,7 @@
         <!-- Google Calendar -->
         <v-col cols="12" md="6">
           <v-card class="glass pa-6" border>
-            <div class="d-flex align-center ga-3 mb-4">
+            <div class="d-flex align-center ga-3 mb-4 flex-wrap">
               <div class="settings-icon google d-flex align-center justify-center">
                 <v-icon icon="mdi-calendar" size="22" color="white" />
               </div>
@@ -109,7 +109,7 @@
         <!-- Meta WhatsApp -->
         <v-col cols="12" md="6">
           <v-card class="glass pa-6" border>
-            <div class="d-flex align-center ga-3 mb-4">
+            <div class="d-flex align-center ga-3 mb-4 flex-wrap">
               <div class="settings-icon meta d-flex align-center justify-center">
                 <v-icon icon="mdi-whatsapp" size="22" color="white" />
               </div>
@@ -149,7 +149,7 @@
         <!-- Banco de dados / Supabase -->
         <v-col cols="12" md="6">
           <v-card class="glass pa-6" border>
-            <div class="d-flex align-center ga-3 mb-4">
+            <div class="d-flex align-center ga-3 mb-4 flex-wrap">
               <div class="settings-icon supabase d-flex align-center justify-center">
                 <v-icon icon="mdi-database-outline" size="22" color="white" />
               </div>
@@ -179,7 +179,7 @@
         <!-- JWT / Autenticação -->
         <v-col cols="12" md="6">
           <v-card class="glass pa-6" border>
-            <div class="d-flex align-center ga-3 mb-4">
+            <div class="d-flex align-center ga-3 mb-4 flex-wrap">
               <div class="settings-icon jwt d-flex align-center justify-center">
                 <v-icon icon="mdi-shield-lock-outline" size="22" color="white" />
               </div>
@@ -203,7 +203,7 @@
         <!-- Ambiente -->
         <v-col cols="12" md="6">
           <v-card class="glass pa-6" border>
-            <div class="d-flex align-center ga-3 mb-4">
+            <div class="d-flex align-center ga-3 mb-4 flex-wrap">
               <div class="settings-icon env d-flex align-center justify-center">
                 <v-icon icon="mdi-server-outline" size="22" color="white" />
               </div>

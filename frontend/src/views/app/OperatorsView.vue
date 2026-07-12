@@ -148,7 +148,7 @@
         <v-card-title class="text-h6 font-weight-bold">Redefinir Senha</v-card-title>
         <v-card-text>
           <p class="text-body-2 mb-3" style="color:#9FB0BC">{{ resetTarget?.name || resetTarget?.email }}</p>
-          <v-text-field v-model="newPassword" label="Nova senha (mín. 6)" :type="showPass ? 'text' : 'password'" :append-inner-icon="showPass ? 'mdi-eye-off' : 'mdi-eye'" @click:append-inner="showPass = !showPass" />
+          <v-text-field v-model="newPassword" label="Nova senha (mín. 8)" :type="showPass ? 'text' : 'password'" :append-inner-icon="showPass ? 'mdi-eye-off' : 'mdi-eye'" @click:append-inner="showPass = !showPass" />
         </v-card-text>
         <v-card-actions class="px-4 pb-4">
           <v-spacer />
@@ -178,6 +178,8 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
+import { operatorSchema, operatorResetPasswordSchema } from '@/schemas/operators'
+import { validateForm } from '@/composables/useZodValidation'
 
 const auth = useAuthStore()
 const toast = useToast()
@@ -225,10 +227,14 @@ function openCreate() { editMode.value = false; editTarget.value = null; editErr
 function openEdit(op) { editMode.value = true; editTarget.value = op; editError.value = ''; Object.assign(editForm, { name: op.name || '', email: op.email, phone: op.phone || '', role: op.role, is_restricted: op.is_restricted ?? false, permissions: { ...DEFAULT_PERMISSIONS, ...(op.permissions || {}) } }); editDialog.value = true }
 
 async function saveOp() {
-  editError.value = ''; saving.value = true
+  editError.value = ''
+  const check = validateForm(operatorSchema, { name: editForm.name, email: editForm.email, password: editMode.value ? undefined : (editForm.password || undefined) })
+  if (!check.success) { editError.value = check.error; return }
+  if (!editMode.value && !check.data.password) { editError.value = 'Senha obrigatória.'; return }
+  saving.value = true
   try {
-    const payload = { name: editForm.name, email: editForm.email, phone: editForm.phone || null, role: editForm.role, is_restricted: editForm.is_restricted, permissions: editForm.role === 'admin' ? DEFAULT_PERMISSIONS : { ...editForm.permissions } }
-    if (!editMode.value) payload.password = editForm.password
+    const payload = { name: check.data.name, email: check.data.email, phone: editForm.phone || null, role: editForm.role, is_restricted: editForm.is_restricted, permissions: editForm.role === 'admin' ? DEFAULT_PERMISSIONS : { ...editForm.permissions } }
+    if (!editMode.value) payload.password = check.data.password
     if (editMode.value) { const { operator } = await api.updateOperator(editTarget.value.id, payload); const idx = operators.value.findIndex((o) => o.id === editTarget.value.id); if (idx >= 0) operators.value[idx] = { ...operators.value[idx], ...operator } }
     else { const { operator } = await api.createOperator(payload); operators.value.unshift(operator) }
     editDialog.value = false; toast.success(editMode.value ? 'Usuário atualizado.' : 'Usuário criado!')
@@ -237,7 +243,7 @@ async function saveOp() {
 
 async function toggleActive(op) { try { const { operator } = await api.updateOperator(op.id, { active: !op.active }); const idx = operators.value.findIndex((o) => o.id === op.id); if (idx >= 0) operators.value[idx] = { ...operators.value[idx], ...operator }; toast.success(op.active ? 'Usuário desativado.' : 'Usuário ativado.') } catch (e) { toast.error(e.message) } }
 function openReset(op) { resetTarget.value = op; newPassword.value = ''; showPass.value = false; resetDialog.value = true }
-async function doReset() { if (!newPassword.value || newPassword.value.length < 6) { toast.warning('Mínimo 6 caracteres.'); return }; saving.value = true; try { await api.resetOperatorPassword(resetTarget.value.id, newPassword.value); resetDialog.value = false; toast.success('Senha redefinida.') } catch (e) { toast.error(e.message) } finally { saving.value = false } }
+async function doReset() { const check = validateForm(operatorResetPasswordSchema, { password: newPassword.value }); if (!check.success) { toast.warning(check.error); return }; saving.value = true; try { await api.resetOperatorPassword(resetTarget.value.id, check.data.password); resetDialog.value = false; toast.success('Senha redefinida.') } catch (e) { toast.error(e.message) } finally { saving.value = false } }
 function openDelete(op) { deleteTarget.value = op; deleteDialog.value = true }
 async function doDelete() { saving.value = true; try { await api.deleteOperator(deleteTarget.value.id); operators.value = operators.value.filter((o) => o.id !== deleteTarget.value.id); deleteDialog.value = false; toast.success('Usuário excluído.') } catch (e) { toast.error(e.message) } finally { saving.value = false } }
 

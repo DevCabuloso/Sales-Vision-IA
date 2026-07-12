@@ -1,4 +1,9 @@
 import express from 'express'
+// Patcheia Router/Route do Express 4 para que handlers async que rejeitam
+// (ex.: unwrap() lançando erro do Supabase) caiam no handler de erro global
+// abaixo via next(err), em vez de virarem unhandledRejection e derrubar o
+// processo inteiro (Express 4 não faz isso sozinho, só o 5).
+import 'express-async-errors'
 import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'

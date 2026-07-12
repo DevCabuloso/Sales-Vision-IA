@@ -58,4 +58,44 @@ describe('UsersView', () => {
     expect(wrapper.text()).toContain('Ana Souza')
     expect(wrapper.text()).not.toContain('Bia Lima')
   })
+
+  it('exige todos os campos ao criar um superadmin', async () => {
+    const wrapper = mount(UsersView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const novoBtn = wrapper.findAll('button').find((b) => b.text().includes('Novo Superadmin'))
+    await novoBtn.trigger('click')
+    await flushPromises()
+
+    const criarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Criar')
+    criarBtn?.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Preencha todos os campos.')
+    expect(mockState.adminCreateOwner).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('rejeita senha curta ao criar um superadmin', async () => {
+    const wrapper = mount(UsersView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const novoBtn = wrapper.findAll('button').find((b) => b.text().includes('Novo Superadmin'))
+    await novoBtn.trigger('click')
+    await flushPromises()
+
+    const inputs = [...document.body.querySelectorAll('.v-dialog input')]
+    inputs[0].value = 'Novo Dono'; inputs[0].dispatchEvent(new Event('input'))
+    inputs[1].value = 'dono@ex.com'; inputs[1].dispatchEvent(new Event('input'))
+    inputs[2].value = '123'; inputs[2].dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    const criarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Criar')
+    criarBtn?.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Senha deve ter pelo menos 8 caracteres.')
+    expect(mockState.adminCreateOwner).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })
