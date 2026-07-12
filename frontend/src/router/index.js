@@ -15,7 +15,7 @@ const routes = [
     meta: { public: true },
   },
   {
-    path: '/teste-gratis',
+    path: '/apresentacao',
     name: 'trial-landing',
     component: () => import('@/views/public/TrialLandingView.vue'),
     meta: { public: true },

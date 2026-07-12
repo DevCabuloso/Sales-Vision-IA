@@ -1,9 +1,33 @@
 import { Router } from 'express'
+import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 
 export const internalGroupsRouter = Router()
 internalGroupsRouter.use(requireAuth, requireTenant)
+
+const createGroupSchema = z.object({
+  name:       z.string().trim().min(1, 'Nome obrigatório.'),
+  member_ids: z.array(z.string()).optional(),
+})
+
+const updateGroupSchema = z.object({
+  name:       z.string().trim().min(1).optional(),
+  member_ids: z.array(z.string()).optional(),
+})
+
+const textSchema = z.object({
+  text: z.string().trim().min(1, 'Mensagem vazia.'),
+})
+
+const forwardSchema = z.object({
+  toGroupId: z.string().min(1, 'Selecione um grupo de destino.'),
+})
+
+const locationSchema = z.object({
+  latitude:  z.number(),
+  longitude: z.number(),
+})
 
 // GET / — grupos do usuário atual
 internalGroupsRouter.get('/', async (req, res) => {
@@ -26,8 +50,9 @@ internalGroupsRouter.get('/', async (req, res) => {
 
 // POST / — criar grupo
 internalGroupsRouter.post('/', async (req, res) => {
-  const { name, member_ids = [] } = req.body || {}
-  if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório.' })
+  const parsed = createGroupSchema.safeParse(req.body || {})
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { name, member_ids = [] } = parsed.data
   try {
     const group = unwrap(
       await supabase.from('internal_groups')
@@ -65,8 +90,9 @@ internalGroupsRouter.get('/:id/messages', async (req, res) => {
 
 // POST /:id/messages — enviar mensagem
 internalGroupsRouter.post('/:id/messages', async (req, res) => {
-  const { text } = req.body || {}
-  if (!text?.trim()) return res.status(400).json({ error: 'Mensagem vazia.' })
+  const parsed = textSchema.safeParse(req.body || {})
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { text } = parsed.data
   try {
     const { data: mem } = await supabase.from('internal_group_members')
       .select('group_id').eq('group_id', req.params.id).eq('user_id', req.user.id).limit(1)
@@ -85,8 +111,9 @@ internalGroupsRouter.post('/:id/messages', async (req, res) => {
 
 // PATCH /:id/messages/:messageId — edita mensagem (só o autor)
 internalGroupsRouter.patch('/:id/messages/:messageId', async (req, res) => {
-  const { text } = req.body || {}
-  if (!text?.trim()) return res.status(400).json({ error: 'Mensagem vazia.' })
+  const parsed = textSchema.safeParse(req.body || {})
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { text } = parsed.data
   try {
     const rows = unwrap(
       await supabase.from('internal_messages').select('id, sender_id, deleted_at')
@@ -132,8 +159,9 @@ internalGroupsRouter.delete('/:id/messages/:messageId', async (req, res) => {
 
 // POST /:id/messages/:messageId/forward — encaminha mensagem pra outro grupo interno
 internalGroupsRouter.post('/:id/messages/:messageId/forward', async (req, res) => {
-  const { toGroupId } = req.body || {}
-  if (!toGroupId) return res.status(400).json({ error: 'Selecione um grupo de destino.' })
+  const parsed = forwardSchema.safeParse(req.body || {})
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { toGroupId } = parsed.data
   try {
     const msgRows = unwrap(
       await supabase.from('internal_messages').select('*')
@@ -164,10 +192,9 @@ internalGroupsRouter.post('/:id/messages/:messageId/forward', async (req, res) =
 
 // POST /:id/location — envia localização no chat interno (sem WhatsApp envolvido)
 internalGroupsRouter.post('/:id/location', async (req, res) => {
-  const { latitude, longitude } = req.body || {}
-  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
-    return res.status(400).json({ error: 'Localização inválida.' })
-  }
+  const parsed = locationSchema.safeParse(req.body || {})
+  if (!parsed.success) return res.status(400).json({ error: 'Localização inválida.' })
+  const { latitude, longitude } = parsed.data
   try {
     const { data: mem } = await supabase.from('internal_group_members')
       .select('group_id').eq('group_id', req.params.id).eq('user_id', req.user.id).limit(1)
@@ -190,7 +217,9 @@ internalGroupsRouter.post('/:id/location', async (req, res) => {
 
 // PATCH /:id — editar nome / membros
 internalGroupsRouter.patch('/:id', async (req, res) => {
-  const { name, member_ids } = req.body || {}
+  const parsed = updateGroupSchema.safeParse(req.body || {})
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { name, member_ids } = parsed.data
   try {
     const rows = unwrap(
       await supabase.from('internal_groups')

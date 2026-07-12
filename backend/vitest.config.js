@@ -7,7 +7,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
-      include: ['src/services/**', 'src/middleware/**'],
+      include: ['src/services/**', 'src/middleware/**', 'src/routes/**'],
     },
   },
 })

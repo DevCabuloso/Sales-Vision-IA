@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 
@@ -9,6 +10,20 @@ const DEFAULT_NODES = () => [
   { id: 'n1', tipo: 'mensagem',  conteudo: 'Olá! 👋 Como posso te ajudar?' },
   { id: 'n2', tipo: 'encerrar' },
 ]
+
+const createSchema = z.object({
+  name:             z.string().min(1, 'Nome obrigatório.'),
+  channel_id:       z.string().min(1).nullable().optional(),
+  trigger_keywords: z.array(z.string()).optional(),
+  timeout_minutes:  z.number().int().positive().optional(),
+  fallback_text:    z.string().nullable().optional(),
+})
+
+const updateSchema = createSchema.partial().extend({
+  status: z.enum(['active', 'inactive']).optional(),
+  nodes:  z.array(z.any()).optional(),
+  edges:  z.array(z.any()).optional(),
+})
 
 // GET /api/flows
 flowsRouter.get('/', async (req, res) => {
@@ -41,8 +56,9 @@ flowsRouter.get('/:id', async (req, res) => {
 
 // POST /api/flows
 flowsRouter.post('/', async (req, res) => {
-  const { name, channel_id, trigger_keywords, timeout_minutes, fallback_text } = req.body
-  if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório.' })
+  const parsed = createSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { name, channel_id, trigger_keywords, timeout_minutes, fallback_text } = parsed.data
   try {
     const rows = unwrap(
       await supabase.from('flows').insert({
@@ -65,7 +81,9 @@ flowsRouter.post('/', async (req, res) => {
 
 // PATCH /api/flows/:id
 flowsRouter.patch('/:id', async (req, res) => {
-  const { name, status, channel_id, trigger_keywords, timeout_minutes, fallback_text, nodes, edges } = req.body
+  const parsed = updateSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { name, status, channel_id, trigger_keywords, timeout_minutes, fallback_text, nodes, edges } = parsed.data
   try {
     const update = { updated_at: new Date().toISOString() }
     if (name             !== undefined) update.name             = name

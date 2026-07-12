@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { invalidateTenantCache } from '../services/orchestrator.js'
@@ -46,6 +47,19 @@ const DEFAULTS = {
   waba_out_of_window:         false,
 }
 
+// Schema derivado dinamicamente de DEFAULTS: cada chave é validada com o tipo
+// primitivo do seu próprio default (boolean/number/string). Chaves fora de
+// DEFAULTS são descartadas automaticamente pelo zod (comportamento padrão,
+// não-strict), preservando o "salva só as chaves reconhecidas" de antes.
+const settingsSchema = z.object(
+  Object.fromEntries(
+    Object.entries(DEFAULTS).map(([key, def]) => {
+      const type = typeof def === 'boolean' ? z.boolean() : typeof def === 'number' ? z.number() : z.string()
+      return [key, type.optional()]
+    })
+  )
+)
+
 opSettingsRouter.get('/', async (req, res) => {
   try {
     const rows = unwrap(
@@ -60,11 +74,10 @@ opSettingsRouter.get('/', async (req, res) => {
 })
 
 opSettingsRouter.put('/', async (req, res) => {
+  const parsed = settingsSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   try {
-    const patch = {}
-    for (const key of Object.keys(DEFAULTS)) {
-      if (key in req.body) patch[key] = req.body[key]
-    }
+    const patch = parsed.data
     unwrap(
       await supabase
         .from('tenants')

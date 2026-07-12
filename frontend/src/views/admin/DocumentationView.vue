@@ -342,6 +342,129 @@
       </p>
     </section>
 
+    <!-- ── Código ───────────────────────────────────────────────── -->
+    <section id="codigo" class="doc-section">
+      <h2>Código — backend ⇄ Evolution API</h2>
+      <p class="lede">
+        Como o servidor está montado, onde cada variável do <code>.env</code> é efetivamente lida no código e o
+        caminho exato de uma mensagem entre a plataforma e o WhatsApp via Evolution API — reconstruído lendo
+        <code>backend/src/</code> diretamente, com arquivo e linha.
+      </p>
+
+      <h3>Arquitetura do servidor</h3>
+      <p class="p-muted">
+        Um único processo Express (<code>server.js</code>), sem cluster nem Socket.IO próprio — o tempo real do
+        frontend vem do <strong>Supabase Realtime</strong> (pacote <code>ws</code> é só o transporte desse client).
+        Nenhuma rota ou serviço lê <code>process.env</code> diretamente: tudo passa por um único objeto de
+        configuração central.
+      </p>
+      <div class="ztable-wrap mb-4">
+        <table class="ztable">
+          <thead><tr><th>Arquivo</th><th>Papel</th></tr></thead>
+          <tbody>
+            <tr v-for="f in serverArch" :key="f.f">
+              <td class="mono" style="white-space:nowrap">{{ f.f }}</td>
+              <td class="ztable-sub">{{ f.d }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Variáveis de ambiente → onde são lidas no código</h3>
+      <p class="p-muted">
+        <code>backend/src/config/index.js</code> é o único ponto que chama <code>process.env</code> (fora de uma
+        checagem de <code>NODE_ENV</code> em <code>app.js:76</code>). Ele exporta o objeto <code>config</code>,
+        importado por todo o resto do backend — inclusive por <code>services/whatsapp/evolution.js</code> e
+        <code>routes/channels.js</code>, que nunca tocam <code>process.env</code> diretamente.
+      </p>
+      <div class="ztable-wrap mb-4">
+        <table class="ztable">
+          <thead><tr><th>Variável</th><th>Lida em</th><th>Consumida em / propósito</th></tr></thead>
+          <tbody>
+            <tr v-for="e in envCodeVars" :key="e.k">
+              <td class="mono" style="white-space:nowrap">{{ e.k }}</td>
+              <td class="mono ztable-sub" style="white-space:nowrap">{{ e.f }}</td>
+              <td class="ztable-sub">{{ e.d }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <v-alert type="warning" variant="tonal" density="comfortable" class="mb-4">
+        <strong>Verificação de assinatura desativada no servidor atual.</strong> <code>EVOLUTION_WEBHOOK_SECRET</code>
+        e <code>META_APP_SECRET</code> não estão definidos no <code>backend/.env</code> de produção. Em
+        <code>routes/webhooks.js</code> ambas as checagens são condicionais
+        (<code>if (config.evolution.webhookSecret) {'{'} ... {'}'}</code>) — como as variáveis chegam vazias, o
+        bloco inteiro é pulado e <code>/webhooks/evolution</code> e <code>/webhooks/meta</code> aceitam qualquer
+        requisição sem validar origem. Definir as duas variáveis ativa a proteção sem mudar nenhum código.
+      </v-alert>
+
+      <h3>Envio (plataforma → WhatsApp)</h3>
+      <ol class="p-muted">
+        <li>Frontend chama <code>POST /api/chat/:leadId/messages</code> (ou <code>/media</code>,
+          <code>/schedule</code>) — <code>routes/chat.js</code>.</li>
+        <li><code>chat.js</code> importa <code>sendText()</code> de
+          <code>services/whatsapp/index.js</code>.</li>
+        <li><code>whatsapp/index.js</code> lê <code>tenants.feat_hybrid / feat_meta_api / feat_evolution_api</code>
+          e decide o provedor — ou autodetecta pelo primeiro canal <code>connected</code> se nenhuma flag estiver
+          ligada.</li>
+        <li><code>evolution.js → sendText()</code> busca o canal conectado do tenant e faz
+          <code>POST {'{EVOLUTION_API_URL}'}/message/sendText/{'{instance_name}'}</code> com header
+          <code>apikey: EVOLUTION_API_KEY</code>.</li>
+        <li>A Evolution (Baileys) entrega a mensagem no WhatsApp real e responde com <code>key.id</code>.</li>
+        <li>O backend grava a mensagem em <code>messages</code> com <code>provider='evolution'</code> e
+          <code>wa_message_id = key.id</code> — é essa coluna que casa o ACK recebido depois.</li>
+      </ol>
+
+      <h3>Recebimento (WhatsApp → plataforma)</h3>
+      <ol class="p-muted">
+        <li>Baileys recebe uma mensagem → a Evolution dispara o webhook registrado (evento
+          <code>messages.upsert</code>) para <code>{'{BACKEND_URL}'}/webhooks/evolution/{'{tenantId}'}</code>
+          (ou a rota universal <code>/webhooks/evolution</code>, sem tenant na URL).</li>
+        <li><code>routes/webhooks.js</code> confere o header <code>apikey</code>/<code>Authorization</code>
+          contra <code>EVOLUTION_WEBHOOK_SECRET</code> (ver alerta acima).</li>
+        <li><code>evolution.js → parseWebhook(body)</code> normaliza o payload (formato v2 com <code>data</code>
+          em array, ou legado) em <code>{'{ from, text, mediaType, waMessageId, isGroup, senderJid, ... }'}</code>.</li>
+        <li><code>resolveEvolutionTenant(instanceName)</code> casa a instância com o tenant via tabela
+          <code>channels</code> (fallback: <code>integrations</code> legado por-tenant).</li>
+        <li><code>services/orchestrator.js → handleInboundMessage()</code> faz upsert do lead, salva a mensagem,
+          roda o motor de fluxos e/ou o agente de IA, e responde chamando <code>whatsapp.sendText()</code> de
+          volta quando aplicável — fechando o ciclo com o passo de "Envio" acima.</li>
+        <li>Se <code>fromMe === true</code> (mensagem enviada por outro app logado na mesma sessão do WhatsApp),
+          vai para <code>handleOutboundMessage()</code> em vez de tratada como recebida — evita duplicar como
+          mensagem do lead.</li>
+      </ol>
+
+      <h3>Confirmação de entrega (ACK)</h3>
+      <ol class="p-muted">
+        <li>Evento <code>messages.update</code> chega no mesmo endpoint de webhook.</li>
+        <li><code>evolution.js → parseWebhookStatus()</code> mapeia o ACK numérico do Baileys (0–5) ou o nome do
+          status (Evolution v2) para <code>sent · delivered · read · failed</code> via
+          <code>ACK_STATUS_MAP</code>.</li>
+        <li><code>webhooks.js → applyBroadcastStatus(tenantId, messageId, status)</code> casa pelo
+          <code>wa_message_id</code> salvo em <code>broadcast_contacts</code> e recalcula os contadores
+          agregados da campanha a partir dos contatos (evita race condition de múltiplos webhooks concorrentes).</li>
+      </ol>
+
+      <h3>Criação de instância &amp; pareamento por QR Code</h3>
+      <ol class="p-muted">
+        <li><code>POST /api/channels</code> cria a linha em <code>channels</code> e monta
+          <code>instanceName(tenantId, channelId)</code> → <code>sdr_{'{tenant·8}'}_{'{channel·8}'}</code>.</li>
+        <li><code>evoFetch</code> chama <code>POST /instance/create {'{ instanceName, integration: "WHATSAPP-BAILEYS" }'}</code>
+          na Evolution.</li>
+        <li><code>GET /api/channels/:id/qr</code> chama <code>/instance/connect/{'{instance}'}</code> e devolve o
+          QR em base64 (ou pairing code) para o frontend renderizar.</li>
+        <li><code>GET /api/channels/:id/status</code> faz polling em
+          <code>/instance/connectionState/{'{instance}'}</code> e sincroniza <code>channels.status/phone</code>
+          quando o estado da Evolution vira <code>open</code>.</li>
+      </ol>
+      <v-alert type="info" variant="tonal" density="comfortable">
+        O webhook <strong>não</strong> é registrado automaticamente na criação da instância — é preciso chamar
+        <code>POST /api/channels/:id/revalidate-webhook</code> (que faz <code>POST /webhook/set/:instance</code> na
+        Evolution) para a instância passar a notificar o backend de mensagens novas.
+      </v-alert>
+    </section>
+
     <!-- ── Fluxos ───────────────────────────────────────────────── -->
     <section id="fluxos" class="doc-section">
       <h2>Motor de fluxos (chatbot visual)</h2>
@@ -427,6 +550,7 @@ const sections = [
   { id: 'env', label: 'Variáveis de ambiente' },
   { id: 'ia-agente', label: 'Agente de IA' },
   { id: 'integracoes', label: 'Integrações' },
+  { id: 'codigo', label: 'Código' },
   { id: 'fluxos', label: 'Fluxos' },
   { id: 'jobs', label: 'Jobs' },
   { id: 'frontend', label: 'Funcionalidades' },
@@ -723,6 +847,35 @@ const envVars = [
   { k: 'EVOLUTION_API_URL / API_KEY / WEBHOOK_SECRET', d: 'Instância global da Evolution API' },
   { k: 'VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY', d: 'Frontend — só para o Realtime' },
   { k: 'VITE_API_BASE / VITE_BACKEND_URL', d: 'Prefixo/URL da API usados pelo frontend em dev' },
+]
+
+const serverArch = [
+  { f: 'backend/src/server.js', d: 'Entry point — cria a app, app.listen(config.port), inicia o scheduler de jobs, trata SIGTERM/SIGINT. É o arquivo que o PM2 roda diretamente em produção.' },
+  { f: 'backend/src/app.js', d: 'createApp() — monta helmet, CORS (FRONTEND_URL), cookie-parser, os 23 routers de /api/*, o router público /webhooks, os rate limits e o handler de erro global.' },
+  { f: 'backend/src/config/index.js', d: 'Único ponto do backend que lê process.env diretamente. Exporta o objeto config consumido por todo o resto do código.' },
+  { f: 'backend/src/db/supabase.js', d: 'Client Supabase (service_role, ignora RLS) usado em todas as queries do backend; exporta o helper unwrap({data,error}).' },
+  { f: 'backend/src/middleware/auth.js', d: 'requireAuth / requireTenant — valida o JWT da sessão (cookie sdr_token ou Bearer) e injeta req.user.' },
+  { f: 'backend/src/services/whatsapp/index.js', d: 'Roteador de provedor — decide Meta ou Evolution por tenant (feature flags) antes de qualquer envio.' },
+  { f: 'backend/src/services/whatsapp/evolution.js', d: 'Toda chamada HTTP para a Evolution API: enviar texto/mídia/localização, editar, apagar, baixar mídia, parsear webhook.' },
+  { f: 'backend/src/services/orchestrator.js', d: 'Cérebro do processamento de mensagem — chamado pelo webhook, decide lead, IA, fluxo, agendamento.' },
+  { f: 'backend/src/routes/webhooks.js', d: 'Única rota pública (sem JWT) — recebe eventos da Evolution e da Meta.' },
+  { f: 'backend/src/routes/channels.js', d: 'Ciclo de vida da instância Evolution: criar, QR, status, revalidar webhook, desconectar, excluir.' },
+]
+
+const envCodeVars = [
+  { k: 'NODE_ENV', f: 'config/index.js:6,16 · app.js:76', d: 'Em produção, required() derruba o boot se JWT_SECRET/ENCRYPTION_KEY faltarem; também troca mensagens de erro internas por texto genérico.' },
+  { k: 'PORT', f: 'config/index.js:17,20 · server.js:7', d: 'Porta do Express (produção: 5000) e base do fallback de BACKEND_URL.' },
+  { k: 'FRONTEND_URL', f: 'config/index.js:19 · app.js:65', d: 'Origem única liberada no CORS.' },
+  { k: 'BACKEND_URL', f: 'config/index.js:20 · routes/channels.js:228', d: 'Monta a URL registrada como webhook na Evolution. Sem a variável, cai no fallback http://localhost:{PORT}.' },
+  { k: 'SUPABASE_URL / SUPABASE_SERVICE_KEY', f: 'config/index.js:30-31 · db/supabase.js', d: 'Client Supabase com service_role — acesso total, ignora RLS.' },
+  { k: 'SUPABASE_MEDIA_BUCKET', f: 'config/index.js:32 · services/mediaStorage.js', d: 'Bucket de Storage onde mídia recebida/enviada no chat é salva (default chat-media).' },
+  { k: 'JWT_SECRET / JWT_EXPIRES_IN', f: 'config/index.js:36-37 · middleware/auth.js', d: 'Assina e valida o cookie de sessão sdr_token.' },
+  { k: 'ENCRYPTION_KEY', f: 'config/index.js:40 · services/crypto.js', d: 'Chave AES-256-GCM que criptografa credenciais (tokens Google, Meta, Evolution por-tenant, LLMs custom).' },
+  { k: 'OPENAI_API_KEY / OPENAI_MODEL', f: 'config/index.js:55-56 · services/ai/*.js', d: 'Credencial e modelo padrão do agente de IA e do Whisper.' },
+  { k: 'GOOGLE_CLIENT_ID / SECRET / REDIRECT_URI', f: 'config/index.js:43-47 · services/googleCalendar.js', d: 'OAuth2 global de fallback para o Calendar.' },
+  { k: 'META_GRAPH_VERSION / VERIFY_TOKEN / APP_SECRET', f: 'config/index.js:60-62 · services/whatsapp/meta.js · routes/webhooks.js:74,85', d: 'Versão da Graph API, handshake de verificação e assinatura HMAC do webhook Meta.' },
+  { k: 'EVOLUTION_API_URL / API_KEY', f: 'config/index.js:66-67 · services/whatsapp/evolution.js · routes/channels.js (evoFetch)', d: 'URL base da instância global da Evolution e a apikey enviada em todo header das chamadas.' },
+  { k: 'EVOLUTION_WEBHOOK_SECRET', f: 'config/index.js:68 · routes/webhooks.js:156,226', d: 'Comparado contra o header apikey/Authorization recebido no webhook — rejeita com 403 se não bater.' },
 ]
 
 const flowNodes = [

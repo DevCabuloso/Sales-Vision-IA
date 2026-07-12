@@ -1,9 +1,23 @@
 import { Router } from 'express'
+import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 
 export const businessHoursRouter = Router()
 businessHoursRouter.use(requireAuth, requireTenant)
+
+const dayScheduleSchema = z.object({
+  open:  z.boolean(),
+  start: z.string().regex(/^\d{2}:\d{2}$/, 'Horário inválido (use HH:mm).'),
+  end:   z.string().regex(/^\d{2}:\d{2}$/, 'Horário inválido (use HH:mm).'),
+})
+
+const putSchema = z.object({
+  enabled:     z.boolean().optional(),
+  timezone:    z.string().min(1).optional(),
+  schedule:    z.record(z.string(), dayScheduleSchema).optional(),
+  off_message: z.string().optional(),
+})
 
 const DEFAULT_SCHEDULE = {
   0: { open: false, start: '08:00', end: '18:00' },
@@ -23,7 +37,9 @@ businessHoursRouter.get('/', async (req, res) => {
 })
 
 businessHoursRouter.put('/', async (req, res) => {
-  const { enabled, timezone, schedule, off_message } = req.body
+  const parsed = putSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { enabled, timezone, schedule, off_message } = parsed.data
   try {
     const row = unwrap(
       await supabase.from('business_hours').upsert(
