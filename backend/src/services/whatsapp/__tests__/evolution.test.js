@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createSupabaseMock } from '../../../test-utils/supabaseMock.js'
+import { ttlClearAll } from '../../../utils/ttlCache.js'
 
-const mockState = vi.hoisted(() => ({ box: {}, getCredentials: null }))
+const mockState = vi.hoisted(() => ({ box: {}, getCredentials: null, dnsLookup: null }))
 
 vi.mock('../../../config/index.js', () => ({
   config: { evolution: { apiUrl: 'https://evo.exemplo.com', apiKey: 'evo-key', webhookSecret: '' } },
+}))
+
+vi.mock('node:dns/promises', () => ({
+  default: { lookup: (...args) => mockState.dnsLookup(...args) },
 }))
 
 vi.mock('../../../db/supabase.js', () => ({
@@ -32,7 +37,9 @@ function setSupabase(responses) {
 describe('whatsapp/evolution', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    ttlClearAll()
     mockState.getCredentials = vi.fn()
+    mockState.dnsLookup = vi.fn().mockResolvedValue({ address: '93.184.216.34' })
     config.evolution.apiUrl = 'https://evo.exemplo.com'
     config.evolution.apiKey = 'evo-key'
   })
@@ -49,6 +56,16 @@ describe('whatsapp/evolution', () => {
       expect(result).toEqual({ id: 'wa-1', remoteJid: '5511@s.whatsapp.net', provider: 'evolution' })
       expect(fetchMock.mock.calls[0][0]).toBe('https://evo.exemplo.com/message/sendText/inst-1')
       expect(mockState.getCredentials).not.toHaveBeenCalled()
+    })
+
+    it('cacheia getConnectedChannel — só uma query em channels pra 2 envios seguidos', async () => {
+      setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
+      vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ key: {} }) })
+
+      await evolution.sendText('tenant-cache-1', '5511988887777', 'Oi 1')
+      await evolution.sendText('tenant-cache-1', '5511988887777', 'Oi 2')
+
+      expect(supabaseMock.calls.filter((c) => c.table === 'channels' && c.method === 'select').length).toBe(1)
     })
 
     it('cai para credenciais por-tenant (integrations) quando não há canal global conectado', async () => {
@@ -72,6 +89,15 @@ describe('whatsapp/evolution', () => {
       setSupabase({ channels: [{ data: [], error: null }] })
       mockState.getCredentials.mockResolvedValue({ credentials: {}, meta: { baseUrl: 'https://x.com' } })
       await expect(evolution.sendText('tenant-4', '5511988887777', 'Oi!')).rejects.toThrow('Credenciais Evolution incompletas')
+    })
+
+    it('bloqueia SSRF quando o baseUrl por-tenant aponta pra rede interna', async () => {
+      setSupabase({ channels: [{ data: [], error: null }] })
+      mockState.getCredentials.mockResolvedValue({ credentials: { apiKey: 'tenant-key' }, meta: { baseUrl: 'http://localhost:5000', instance: 'inst-tenant' } })
+      const fetchMock = vi.spyOn(global, 'fetch')
+
+      await expect(evolution.sendText('tenant-2', '5511988887777', 'Oi!')).rejects.toThrow(/não permitido/)
+      expect(fetchMock).not.toHaveBeenCalled()
     })
 
     it('inclui o objeto "quoted" no payload quando há contexto de citação', async () => {
@@ -122,6 +148,26 @@ describe('whatsapp/evolution', () => {
       await expect(evolution.sendLocation('tenant-1', '5511988887777', { latitude: 1, longitude: 2 })).rejects.toThrow('Canal Evolution não conectado.')
     })
 
+    it('sendLocation envia a localização com sucesso via canal conectado', async () => {
+      setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
+      const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true, json: async () => ({ key: { id: 'wa-loc-1', remoteJid: '5511@s.whatsapp.net' } }),
+      })
+
+      const result = await evolution.sendLocation('tenant-1', '5511988887777', { latitude: -25.4, longitude: -49.2, name: 'Escritório', address: 'Rua X' })
+
+      expect(result).toEqual({ id: 'wa-loc-1', remoteJid: '5511@s.whatsapp.net', provider: 'evolution' })
+      expect(fetchMock.mock.calls[0][0]).toBe('https://evo.exemplo.com/message/sendLocation/inst-1')
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+      expect(body).toMatchObject({ number: '5511988887777', latitude: -25.4, longitude: -49.2, name: 'Escritório', address: 'Rua X' })
+    })
+
+    it('sendLocation lança erro da Evolution quando a resposta não é ok', async () => {
+      setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
+      vi.spyOn(global, 'fetch').mockResolvedValue({ ok: false, status: 400, json: async () => ({ message: 'coordenadas inválidas' }) })
+      await expect(evolution.sendLocation('tenant-1', '5511988887777', { latitude: 999, longitude: 999 })).rejects.toThrow('coordenadas inválidas')
+    })
+
     it('editMessage extrai o número do remoteJid e chama o endpoint correto', async () => {
       setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
       const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({}) })
@@ -134,6 +180,17 @@ describe('whatsapp/evolution', () => {
       expect(body.text).toBe('texto editado')
     })
 
+    it('editMessage lança erro sem canal conectado', async () => {
+      setSupabase({ channels: [{ data: [], error: null }] })
+      await expect(evolution.editMessage('tenant-1', { waMessageId: 'wa-1', remoteJid: '5511@s.whatsapp.net', newText: 'x' })).rejects.toThrow('Canal Evolution não conectado.')
+    })
+
+    it('editMessage propaga o erro da Evolution quando a resposta não é ok', async () => {
+      setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
+      vi.spyOn(global, 'fetch').mockResolvedValue({ ok: false, status: 400, json: async () => ({ message: 'Invalid remoteJid' }) })
+      await expect(evolution.editMessage('tenant-1', { waMessageId: 'wa-1', remoteJid: '5511@lid', newText: 'x' })).rejects.toThrow('Invalid remoteJid')
+    })
+
     it('deleteMessage chama o endpoint DELETE correto', async () => {
       setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
       const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({}) })
@@ -141,6 +198,17 @@ describe('whatsapp/evolution', () => {
       await evolution.deleteMessage('tenant-1', { waMessageId: 'wa-1', remoteJid: '5511988887777@s.whatsapp.net' })
 
       expect(fetchMock.mock.calls[0][1].method).toBe('DELETE')
+    })
+
+    it('deleteMessage lança erro sem canal conectado', async () => {
+      setSupabase({ channels: [{ data: [], error: null }] })
+      await expect(evolution.deleteMessage('tenant-1', { waMessageId: 'wa-1', remoteJid: '5511@s.whatsapp.net' })).rejects.toThrow('Canal Evolution não conectado.')
+    })
+
+    it('deleteMessage propaga o erro da Evolution quando a resposta não é ok', async () => {
+      setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
+      vi.spyOn(global, 'fetch').mockResolvedValue({ ok: false, status: 400, json: async () => ({ message: 'Invalid remoteJid' }) })
+      await expect(evolution.deleteMessage('tenant-1', { waMessageId: 'wa-1', remoteJid: '5511@lid' })).rejects.toThrow('Invalid remoteJid')
     })
   })
 
@@ -245,6 +313,45 @@ describe('whatsapp/evolution', () => {
         data: [{ key: { id: 'wa-2' }, update: { status: 'READ' } }],
       })
       expect(result).toEqual([{ messageId: 'wa-2', status: 'read', instanceName: null }])
+    })
+
+    it('lê o status em item.status quando não vem aninhado em item.update', () => {
+      const result = evolution.parseWebhookStatus({
+        event: 'messages.update',
+        data: [{ key: { id: 'wa-status' }, status: 'DELIVERY_ACK' }],
+      })
+      expect(result).toEqual([{ messageId: 'wa-status', status: 'delivered', instanceName: null }])
+    })
+
+    it('lê o ack em item.update.ack quando não vem em item.update.status', () => {
+      const result = evolution.parseWebhookStatus({
+        event: 'messages.update',
+        data: [{ key: { id: 'wa-ack' }, update: { ack: 4 } }],
+      })
+      expect(result).toEqual([{ messageId: 'wa-ack', status: 'read', instanceName: null }])
+    })
+
+    it('lê o ack em item.ack como último fallback', () => {
+      const result = evolution.parseWebhookStatus({
+        event: 'messages.update',
+        data: [{ key: { id: 'wa-ack2' }, ack: 5 }],
+      })
+      expect(result).toEqual([{ messageId: 'wa-ack2', status: 'read', instanceName: null }])
+    })
+
+    it.each([
+      [0, 'failed'], ['ERROR', 'failed'],
+      [1, 'sent'], ['PENDING', 'sent'],
+      [2, 'sent'], ['SERVER_ACK', 'sent'],
+      [3, 'delivered'], ['DELIVERY_ACK', 'delivered'],
+      [4, 'read'], ['READ', 'read'],
+      [5, 'read'], ['PLAYED', 'read'],
+    ])('mapeia ack %j para status %j (enum WAMessageStatus da Baileys)', (ack, expected) => {
+      const result = evolution.parseWebhookStatus({
+        event: 'messages.update',
+        data: [{ key: { id: 'wa-enum' }, update: { status: ack } }],
+      })
+      expect(result).toEqual([{ messageId: 'wa-enum', status: expected, instanceName: null }])
     })
 
     it('ignora itens com ack não reconhecido', () => {

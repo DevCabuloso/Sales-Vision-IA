@@ -141,16 +141,21 @@ leadsRouter.get('/:id/history', async (req, res) => {
   }
 })
 
+// Teto de mensagens retornadas/analisadas por lead — sem isso, uma conversa
+// muito longa vira uma query e um payload/prompt sem limite.
+const MESSAGES_HARD_LIMIT = 500
+
 // ─── GET /api/leads/:id/messages ───
 leadsRouter.get('/:id/messages', async (req, res) => {
   try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || MESSAGES_HARD_LIMIT, MESSAGES_HARD_LIMIT)
     const rows = unwrap(
       await supabase.from('messages')
         .select('role, text, provider, created_at')
         .eq('lead_id', req.params.id).eq('tenant_id', req.user.tenantId)
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false }).limit(limit)
     )
-    res.json({ messages: rows })
+    res.json({ messages: rows.reverse() })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -161,8 +166,8 @@ leadsRouter.post('/:id/analyze', async (req, res) => {
   const msgs = unwrap(
     await supabase.from('messages').select('role, text')
       .eq('lead_id', req.params.id).eq('tenant_id', req.user.tenantId)
-      .order('created_at', { ascending: true })
-  )
+      .order('created_at', { ascending: false }).limit(MESSAGES_HARD_LIMIT)
+  ).reverse()
   try {
     const analysis = await analyzeLead(msgs)
     const rows = unwrap(

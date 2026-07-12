@@ -6,6 +6,7 @@ import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { logUsage } from '../services/usage.js'
 import { uploadChatMedia } from '../services/mediaStorage.js'
 import { getTenantTimezone } from './business-hours.js'
+import { safeFetch } from '../utils/ssrfGuard.js'
 
 const ALLOWED_MIMETYPES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif',
@@ -667,7 +668,7 @@ chatRouter.post('/:leadId/messages/:messageId/forward', async (req, res) => {
       insertPayload.media_filename = original.media_filename
       if (dest.phone) {
         try {
-          const buf = await fetch(original.media_url).then((r) => r.arrayBuffer())
+          const buf = await safeFetch(original.media_url).then((r) => r.arrayBuffer())
           sent = await sendMedia(req.user.tenantId, dest.phone, {
             buffer: Buffer.from(buf), mimetype: original.media_mimetype, filename: original.media_filename, caption: '',
           })

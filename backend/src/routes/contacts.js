@@ -22,6 +22,16 @@ const updateSchema = schema.partial().omit({ phone: true }).extend({
   phone: z.string().min(6).max(30).optional(),
 })
 
+// Escapa valores usados dentro de um filtro .or() do PostgREST: envolver em
+// aspas duplas neutraliza vírgulas e parênteses (delimitadores estruturais da
+// sintaxe de filtro), então só falta escapar as aspas/barras internas. Sem
+// isso, um `search` como `x,tags.cs.{admin}` injetaria uma condição extra
+// arbitrária dentro do OR (ainda dentro do AND com tenant_id, mas um vetor de
+// injeção real e desnecessário).
+function escapeOrValue(v) {
+  return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
 // GET /api/contacts
 contactsRouter.get('/', async (req, res) => {
   try {
@@ -33,7 +43,8 @@ contactsRouter.get('/', async (req, res) => {
       .limit(500)
 
     if (search) {
-      q = q.or(`name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`)
+      const s = escapeOrValue(search)
+      q = q.or(`name.ilike."%${s}%",phone.ilike."%${s}%",email.ilike."%${s}%"`)
     }
     if (tags) {
       const tagList = tags.split(',').filter(Boolean)
@@ -204,6 +215,7 @@ contactsRouter.post('/deduplicate', async (req, res) => {
       await supabase.from('leads').select('id, phone, created_at')
         .eq('tenant_id', req.user.tenantId)
         .order('created_at', { ascending: true })
+        .limit(20000)
     )
     const seen = new Map()
     const toDelete = []

@@ -26,10 +26,11 @@ function buildApp() {
   return app
 }
 
+let supabaseMock
 function setSupabase(responses) {
-  const mock = createSupabaseMock(responses)
-  mockState.box.supabase = mock.supabase
-  return mock
+  supabaseMock = createSupabaseMock(responses)
+  mockState.box.supabase = supabaseMock.supabase
+  return supabaseMock
 }
 
 describe('routes/reports', () => {
@@ -78,6 +79,10 @@ describe('routes/reports', () => {
 
     expect(res.body.funnel).toEqual([{ stage: 'Novo Lead', count: 2 }, { stage: 'Qualificado', count: 1 }])
     expect(res.body.date).toBe('2026-01-01')
+
+    // a query do funil (stage de todo lead do tenant) não pode ficar sem limite
+    const limitCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'limit')
+    expect(limitCall.args[0]).toBe(20000)
   })
 
   it('ignora datas em formato inválido e usa a data de hoje', async () => {

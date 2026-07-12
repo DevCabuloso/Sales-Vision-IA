@@ -296,8 +296,6 @@
 import { ref, computed, onMounted } from 'vue'
 import { api } from '@/services/api'
 import { useRealtime } from '@/composables/useRealtime'
-import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
 import { useAuthStore } from '@/stores/auth'
 
 const auth    = useAuthStore()
@@ -510,10 +508,16 @@ async function openReport() {
 
 const generatingPdf = ref(false)
 
-function downloadReportPdf() {
+async function downloadReportPdf() {
   if (!report.value) return
   generatingPdf.value = true
   try {
+    // dynamic import: jspdf+jspdf-autotable só carregam quando alguém realmente
+    // exporta um PDF, em vez de pesar no bundle da dashboard pra todo mundo
+    const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+    ])
     const s = report.value
     const marginX = 40
     const pageWidth = 595 // A4 em pt

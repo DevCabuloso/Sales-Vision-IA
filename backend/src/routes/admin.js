@@ -170,6 +170,7 @@ adminRouter.get('/users', async (req, res) => {
     .select('id, email, name, role, active, tenant_id, last_login_at, created_at')
     .neq('role', 'owner')
     .order('created_at', { ascending: false })
+    .limit(5000)
 
   if (tenant) q = q.eq('tenant_id', tenant)
 

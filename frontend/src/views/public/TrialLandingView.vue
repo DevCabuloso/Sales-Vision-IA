@@ -181,7 +181,7 @@ const steps = [
 ]
 
 const faq = [
-  { q: 'A cobrança de R$ 497 é o teste grátis mesmo?', a: 'É o valor da mensalidade cheia, cobrado no ato — os primeiros 7 dias de uso ficam por nossa conta enquanto você testa a plataforma sem restrição de recursos.' },
+  { q: 'A cobrança de R$ 397 é o teste grátis mesmo?', a: 'É o valor da mensalidade cheia, cobrado no ato — os primeiros 7 dias de uso ficam por nossa conta enquanto você testa a plataforma sem restrição de recursos.' },
   { q: 'Como funciona o pagamento?', a: 'Pelo checkout da InfinitePay, com Pix ou cartão de crédito (parcelamento disponível). É o mesmo valor da próxima cobrança mensal.' },
   { q: 'Posso cancelar depois?', a: 'Sim, a qualquer momento entrando em contato com o suporte.' },
   { q: 'Preciso saber programar para configurar?', a: 'Não. Depois do pagamento você passa por um onboarding guiado, passo a passo, para conectar o WhatsApp e configurar a IA.' },

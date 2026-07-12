@@ -7,6 +7,7 @@ import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { getAuthUrl, handleCallback, disconnect } from '../services/googleCalendar.js'
 import { saveCredentials, getCredentials, disconnectProvider } from '../services/integrations.js'
 import { encrypt } from '../services/crypto.js'
+import { assertPublicUrl } from '../utils/ssrfGuard.js'
 
 export const integrationsRouter = Router()
 
@@ -167,6 +168,11 @@ integrationsRouter.post('/evolution/connect', requireAuth, requireTenant, async 
   const parsed = evoSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Credenciais Evolution inválidas.' })
   const { baseUrl, apiKey, instance } = parsed.data
+  try {
+    await assertPublicUrl(baseUrl)
+  } catch (e) {
+    return res.status(400).json({ error: e.message })
+  }
   await saveCredentials(
     req.user.tenantId, 'evolution',
     { apiKey },

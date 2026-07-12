@@ -1,6 +1,9 @@
 import { createApp } from './app.js'
 import { config } from './config/index.js'
 import { startScheduler } from './services/scheduler.js'
+import { assertSingleInstance } from './utils/assertSingleInstance.js'
+
+assertSingleInstance()
 
 const app = createApp()
 

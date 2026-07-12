@@ -51,42 +51,6 @@ describe('app.js — createApp()', () => {
     })
   })
 
-  describe('GET /api/diag', () => {
-    it('retorna 403 com a chave errada', async () => {
-      setSupabase({})
-      const app = createApp()
-      const res = await request(app).get('/api/diag').query({ key: 'errada' })
-      expect(res.status).toBe(403)
-    })
-
-    it('retorna 403 sem chave nenhuma', async () => {
-      setSupabase({})
-      const app = createApp()
-      const res = await request(app).get('/api/diag')
-      expect(res.status).toBe(403)
-    })
-
-    it('retorna 200 com mensagens/leads quando a chave é correta', async () => {
-      setSupabase({
-        messages: [{ data: [{ id: 'm1', text: 'oi' }], error: null }],
-        leads: [{ data: [{ id: 'l1', name: 'Ana' }], error: null }],
-      })
-      const app = createApp()
-      const res = await request(app).get('/api/diag').query({ key: 'sdr2025' })
-      expect(res.status).toBe(200)
-      expect(res.body.messages).toHaveLength(1)
-      expect(res.body.leads).toHaveLength(1)
-    })
-
-    it('retorna 500 quando o supabase falha', async () => {
-      setSupabase({ messages: [{ data: null, error: { message: 'falhou' } }] })
-      const app = createApp()
-      const res = await request(app).get('/api/diag').query({ key: 'sdr2025' })
-      expect(res.status).toBe(500)
-      expect(res.body.error).toContain('falhou')
-    })
-  })
-
   describe('rota inexistente', () => {
     it('retorna 404 com mensagem padrão', async () => {
       setSupabase({})
@@ -107,6 +71,32 @@ describe('app.js — createApp()', () => {
     })
   })
 
+  // Roda antes de "rate limiting do login" de propósito: o authLimiter é criado uma
+  // única vez no módulo de app.js (fora de createApp()), então seu contador é
+  // compartilhado por todas as chamadas de createApp() deste arquivo — se o teste de
+  // rate limiting (21 tentativas) rodasse antes, estes dois testes tomariam 429 em
+  // vez do 500 esperado.
+  describe('sanitização de erro em produção', () => {
+    it('em produção, mensagens de erro internas (>=500) viram texto genérico', async () => {
+      process.env.NODE_ENV = 'production'
+      setSupabase({ users: [{ data: null, error: { message: 'detalhe interno sensível' } }] })
+      const app = createApp()
+      const res = await request(app).post('/api/auth/login').send({ email: 'a@a.com', password: 'x' })
+      expect(res.status).toBe(500)
+      expect(res.body.error).toBe('Erro interno do servidor.')
+      expect(res.body.error).not.toContain('detalhe interno sensível')
+    })
+
+    it('fora de produção, a mensagem de erro original é mantida', async () => {
+      process.env.NODE_ENV = 'test'
+      setSupabase({ users: [{ data: null, error: { message: 'detalhe interno sensível' } }] })
+      const app = createApp()
+      const res = await request(app).post('/api/auth/login').send({ email: 'a@a.com', password: 'x' })
+      expect(res.status).toBe(500)
+      expect(res.body.error).toContain('detalhe interno sensível')
+    })
+  })
+
   describe('rate limiting do login', () => {
     it('bloqueia com 429 após exceder o limite de 20 tentativas em 15 min', async () => {
       setSupabase({ users: [{ data: null, error: { message: 'not found' } }] })
@@ -119,26 +109,5 @@ describe('app.js — createApp()', () => {
       }
       expect(lastStatus).toBe(429)
     }, 15000)
-  })
-
-  describe('sanitização de erro em produção', () => {
-    it('em produção, mensagens de erro internas (>=500) viram texto genérico', async () => {
-      process.env.NODE_ENV = 'production'
-      setSupabase({ messages: [{ data: null, error: { message: 'detalhe interno sensível' } }] })
-      const app = createApp()
-      const res = await request(app).get('/api/diag').query({ key: 'sdr2025' })
-      expect(res.status).toBe(500)
-      expect(res.body.error).toBe('Erro interno do servidor.')
-      expect(res.body.error).not.toContain('detalhe interno sensível')
-    })
-
-    it('fora de produção, a mensagem de erro original é mantida', async () => {
-      process.env.NODE_ENV = 'test'
-      setSupabase({ messages: [{ data: null, error: { message: 'detalhe interno sensível' } }] })
-      const app = createApp()
-      const res = await request(app).get('/api/diag').query({ key: 'sdr2025' })
-      expect(res.status).toBe(500)
-      expect(res.body.error).toContain('detalhe interno sensível')
-    })
   })
 })

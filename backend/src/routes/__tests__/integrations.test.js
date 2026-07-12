@@ -7,6 +7,11 @@ import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 const mockState = vi.hoisted(() => ({
   box: {}, getAuthUrl: null, handleCallback: null, disconnect: null,
   saveCredentials: null, getCredentials: null, disconnectProvider: null, encrypt: null, decryptJSON: null,
+  dnsLookup: null,
+}))
+
+vi.mock('node:dns/promises', () => ({
+  default: { lookup: (...args) => mockState.dnsLookup(...args) },
 }))
 
 vi.mock('../../middleware/auth.js', () => ({
@@ -71,6 +76,7 @@ describe('routes/integrations', () => {
     mockState.disconnectProvider = vi.fn().mockResolvedValue({ disconnected: true })
     mockState.encrypt = vi.fn((v) => `enc(${v})`)
     mockState.decryptJSON = vi.fn((v) => ({ accessToken: v.replace(/^enc\(|\)$/g, '') }))
+    mockState.dnsLookup = vi.fn().mockResolvedValue({ address: '93.184.216.34' })
   })
 
   describe('GET /google/setup', () => {
@@ -234,6 +240,21 @@ describe('routes/integrations', () => {
       const res = await request(app).post('/api/integrations/evolution/connect').send({ baseUrl: 'https://evo.exemplo.com', apiKey: 'chave', instance: 'inst-1' })
       expect(res.status).toBe(200)
       expect(mockState.saveCredentials).toHaveBeenCalledWith('tenant-1', 'evolution', { apiKey: 'chave' }, { baseUrl: 'https://evo.exemplo.com', instance: 'inst-1' })
+    })
+
+    it('rejeita baseUrl que aponta pra rede interna (proteção contra SSRF)', async () => {
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/evolution/connect').send({ baseUrl: 'http://localhost:5000/api', apiKey: 'chave', instance: 'inst-1' })
+      expect(res.status).toBe(400)
+      expect(mockState.saveCredentials).not.toHaveBeenCalled()
+    })
+
+    it('rejeita baseUrl cujo DNS resolve pra IP privado', async () => {
+      mockState.dnsLookup.mockResolvedValue({ address: '10.0.0.5' })
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/evolution/connect').send({ baseUrl: 'https://evo-interno.exemplo.com', apiKey: 'chave', instance: 'inst-1' })
+      expect(res.status).toBe(400)
+      expect(mockState.saveCredentials).not.toHaveBeenCalled()
     })
   })
 

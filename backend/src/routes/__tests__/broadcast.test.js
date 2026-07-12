@@ -206,6 +206,8 @@ describe('routes/broadcast', () => {
       expect(res.body).toEqual({ matched: 2, imported: 1, skipped: 1 })
       const insert = insertCallsFor('broadcast_contacts')[0]
       expect(insert.args[0]).toEqual([{ campaign_id: 'camp-1', tenant_id: 'tenant-1', name: 'Ana', phone: '11988887777' }])
+      const limitCall = supabaseMock.calls.find((c) => c.table === 'broadcast_contacts' && c.method === 'limit')
+      expect(limitCall.args[0]).toBe(20000)
     })
 
     it('retorna zero quando nenhum lead corresponde aos filtros', async () => {

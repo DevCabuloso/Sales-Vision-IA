@@ -233,7 +233,7 @@ broadcastRouter.post('/campaigns/:id/import-leads', async (req, res) => {
 
     // não duplica contatos já importados nesta campanha
     const existing = unwrap(
-      await supabase.from('broadcast_contacts').select('phone').eq('campaign_id', req.params.id)
+      await supabase.from('broadcast_contacts').select('phone').eq('campaign_id', req.params.id).limit(20000)
     )
     const existingPhones = new Set(existing.map((c) => c.phone))
 

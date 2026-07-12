@@ -6,24 +6,18 @@ import { logUsage } from './usage.js'
 import { isWithinBusinessHours, getOffMessage } from '../routes/business-hours.js'
 import { uploadChatMedia } from './mediaStorage.js'
 import { decryptJSON } from './crypto.js'
+import { ttlGet, ttlInvalidate } from '../utils/ttlCache.js'
 
-// Cache TTL simples para reduzir queries repetidas por mensagem recebida
-const _cache = new Map()
-function ttlGet(key, ttlSec, fn) {
-  const now = Date.now()
-  const hit = _cache.get(key)
-  if (hit && hit.exp > now) return Promise.resolve(hit.val)
-  return Promise.resolve(fn()).then((val) => {
-    _cache.set(key, { val, exp: now + ttlSec * 1000 })
-    return val
-  })
-}
+// Quantas mensagens recentes entram no contexto da IA — sem isso, a query e o
+// prompt cresceriam sem limite conforme a conversa envelhece.
+const HISTORY_LIMIT = 40
+
 // Invalida o cache de config do tenant — chamado pelas rotas de ai-config/op-settings
 // ao salvar, senão a mudança demora até 5min (TTL do ttlGet) pra valer no atendimento.
 export function invalidateTenantCache(tenantId) {
-  _cache.delete(`tenant:${tenantId}`)
-  _cache.delete(`opsettings:${tenantId}`)
-  _cache.delete(`biz:${tenantId}`)
+  ttlInvalidate(`tenant:${tenantId}`)
+  ttlInvalidate(`opsettings:${tenantId}`)
+  ttlInvalidate(`biz:${tenantId}`)
 }
 
 /**
@@ -150,16 +144,11 @@ export async function handleInboundMessage({
     await supabase.from('leads').upsert(
       upsertPayload,
       { onConflict: 'tenant_id,phone', ignoreDuplicates: false }
-    ).select('id, name, stage, assigned_to, conversation_status, human_takeover, is_group, group_subject').single()
+    ).select('id, name, stage, assigned_to, queue_id, conversation_status, human_takeover, is_group, group_subject').single()
   )
-
-  // atualiza o nome se ainda é o número e agora temos o pushName — só pra
-  // conversa privada; em grupo o pushName é de quem MANDOU a mensagem, não
-  // do grupo, então nunca deve virar o nome da conversa
-  if (!isGroup && pushName && lead.name === from) {
-    await supabase.from('leads').update({ name: pushName }).eq('id', lead.id)
-    lead.name = pushName
-  }
+  // channel_id já foi gravado pelo upsert acima quando channelId existe (ver
+  // upsertPayload) — não precisa de um update separado só pra reafirmar o
+  // mesmo valor que acabou de ser gravado na mesma linha.
 
   // nome do grupo: busca uma vez na Evolution (webhook não traz o "subject"),
   // fica cacheado em leads.group_subject pras próximas mensagens do mesmo grupo
@@ -168,9 +157,16 @@ export async function handleInboundMessage({
     await resolveGroupSubject(lead, instanceName, groupJid)
   }
 
-  // garante channel_id atualizado se lead já existia
-  if (channelId) {
-    await supabase.from('leads').update({ channel_id: channelId }).eq('id', lead.id).neq('channel_id', channelId)
+  // Acumula todos os campos que precisam mudar no lead e grava num update só
+  // em vez de um round-trip por campo (nome, atribuição/fila automática,
+  // status da conversa) — isso roda a CADA mensagem recebida.
+  const leadPatch = {}
+
+  // atualiza o nome se ainda é o número e agora temos o pushName — só pra
+  // conversa privada; em grupo o pushName é de quem MANDOU a mensagem, não
+  // do grupo, então nunca deve virar o nome da conversa
+  if (!isGroup && pushName && lead.name === from) {
+    leadPatch.name = pushName
   }
 
   // auto-atribuição: se o canal tem usuário ou fila definidos, aplica ao lead
@@ -182,29 +178,31 @@ export async function handleInboundMessage({
       )
       const ch = chRows?.[0]
       if (ch?.assigned_user_id && !lead.assigned_to) {
-        await supabase.from('leads').update({ assigned_to: ch.assigned_user_id }).eq('id', lead.id)
+        leadPatch.assigned_to = ch.assigned_user_id
       }
       if (ch?.assigned_queue_id && !lead.queue_id) {
-        await supabase.from('leads').update({ queue_id: ch.assigned_queue_id }).eq('id', lead.id)
+        leadPatch.queue_id = ch.assigned_queue_id
       }
     } catch { /* ignora */ }
   }
 
   // se estava resolvido, reabre como pendente e marca o início da nova conversa
-  if (lead.conversation_status === 'resolved') {
-    await supabase.from('leads')
-      .update({ conversation_status: 'pending', updated_at: new Date().toISOString() })
-      .eq('id', lead.id)
-    lead.conversation_status = 'pending'
+  const wasResolved = lead.conversation_status === 'resolved'
+  if (wasResolved || !lead.conversation_status) {
+    leadPatch.conversation_status = 'pending'
+    if (wasResolved) leadPatch.updated_at = new Date().toISOString()
+  }
+
+  if (Object.keys(leadPatch).length) {
+    await supabase.from('leads').update(leadPatch).eq('id', lead.id)
+    Object.assign(lead, leadPatch)
+  }
+  if (wasResolved) {
     // separador visual no histórico
     await supabase.from('messages').insert({
       tenant_id: tenantId, lead_id: lead.id, role: 'system',
       text: '— Nova conversa iniciada —', provider,
     })
-  } else if (!lead.conversation_status) {
-    await supabase.from('leads')
-      .update({ conversation_status: 'pending' })
-      .eq('id', lead.id)
   }
 
   console.log(`[orchestrator] lead upserted: id=${lead.id} phone=${from} status=${lead.conversation_status}`)
@@ -256,15 +254,18 @@ export async function handleInboundMessage({
   // 3) histórico + tenant + horário comercial em paralelo
   // tenant e horário são cacheados por 5 min (mudam raramente)
   const [histResult, tenantInfo, withinHours] = await Promise.all([
+    // últimas HISTORY_LIMIT mensagens (desc + reverse) em vez do histórico
+    // inteiro — isso roda a CADA mensagem recebida, então numa conversa longa
+    // seria uma query sem limite mais um custo de tokens de IA sem limite.
     supabase.from('messages').select('role, text')
-      .eq('lead_id', lead.id).order('created_at', { ascending: true }),
+      .eq('lead_id', lead.id).order('created_at', { ascending: false }).limit(HISTORY_LIMIT),
     ttlGet(`tenant:${tenantId}`, 300, async () => {
       const rows = unwrap(await supabase.from('tenants').select('name, ai_enabled').eq('id', tenantId).limit(1))
       return rows?.[0] || { name: null, ai_enabled: true }
     }),
     ttlGet(`biz:${tenantId}`, 60, () => isWithinBusinessHours(tenantId)),
   ])
-  const hist = unwrap(histResult)
+  const hist = unwrap(histResult).reverse()
   const tenantName = tenantInfo.name
   const aiEnabled = (tenantInfo.ai_enabled ?? true) && !lead.human_takeover
   if (!withinHours) {

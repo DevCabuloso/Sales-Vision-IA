@@ -170,6 +170,27 @@ describe('routes/leads', () => {
     expect(res.body.messages).toHaveLength(1)
   })
 
+  it('GET /:id/messages busca desc+limit e devolve em ordem cronológica (proteção contra query sem limite)', async () => {
+    setSupabase({
+      messages: [{ data: [{ role: 'ai', text: 'segunda' }, { role: 'lead', text: 'primeira' }], error: null }],
+    })
+    const app = buildApp()
+    const res = await request(app).get('/api/leads/l1/messages')
+    expect(res.body.messages).toEqual([{ role: 'lead', text: 'primeira' }, { role: 'ai', text: 'segunda' }])
+    const orderCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'order')
+    expect(orderCall.args[1]).toEqual({ ascending: false })
+    const limitCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'limit')
+    expect(limitCall.args[0]).toBe(500)
+  })
+
+  it('GET /:id/messages respeita ?limit= dentro do teto de 500', async () => {
+    setSupabase({ messages: [{ data: [], error: null }] })
+    const app = buildApp()
+    await request(app).get('/api/leads/l1/messages').query({ limit: 10000 })
+    const limitCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'limit')
+    expect(limitCall.args[0]).toBe(500)
+  })
+
   describe('POST /:id/analyze', () => {
     it('retorna 404 quando o lead não existe', async () => {
       setSupabase({ messages: [{ data: [], error: null }], leads: [{ data: [], error: null }] })
@@ -197,6 +218,22 @@ describe('routes/leads', () => {
       const app = buildApp()
       const res = await request(app).post('/api/leads/l1/analyze')
       expect(res.status).toBe(502)
+    })
+
+    it('busca desc+limit e analisa em ordem cronológica (proteção contra query sem limite)', async () => {
+      setSupabase({
+        messages: [{ data: [{ role: 'ai', text: 'segunda' }, { role: 'lead', text: 'primeira' }], error: null }],
+        leads: [{ data: [{ id: 'l1', score: 50 }], error: null }],
+      })
+      mockState.analyzeLead.mockResolvedValue({ score: 50, intention: 'x', stage: 'y', interests: [] })
+      const app = buildApp()
+      await request(app).post('/api/leads/l1/analyze')
+
+      expect(mockState.analyzeLead).toHaveBeenCalledWith([{ role: 'lead', text: 'primeira' }, { role: 'ai', text: 'segunda' }])
+      const orderCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'order')
+      expect(orderCall.args[1]).toEqual({ ascending: false })
+      const limitCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'limit')
+      expect(limitCall.args[0]).toBe(500)
     })
   })
 })

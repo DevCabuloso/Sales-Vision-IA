@@ -40,7 +40,7 @@ reportsRouter.get('/daily', async (req, res) => {
         .eq('tenant_id', tenantId).gte('created_at', start).lt('created_at', end),
       supabase.from('usage_events').select('user_id, event_type, meta, created_at')
         .eq('tenant_id', tenantId).gte('created_at', start).lt('created_at', end),
-      supabase.from('leads').select('stage').eq('tenant_id', tenantId),
+      supabase.from('leads').select('stage').eq('tenant_id', tenantId).limit(20000),
     ]).then((rs) => rs.map(unwrap))
 
     // leads tocados hoje via ticket_logs podem ter sido criados em dias anteriores

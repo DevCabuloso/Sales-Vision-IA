@@ -1,9 +1,9 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import dns from 'node:dns/promises'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { encrypt, decryptJSON } from '../services/crypto.js'
+import { assertPublicUrl, safeFetch } from '../utils/ssrfGuard.js'
 
 export const customApisRouter = Router()
 customApisRouter.use(requireAuth, requireTenant)
@@ -19,38 +19,6 @@ const schema = z.object({
   provider: z.enum(['openai', 'claude', 'gemini', 'deepseek', 'custom']).default('custom'),
   active:   z.boolean().optional().default(true),
 })
-
-// Bloqueia requisições para IPs privados/loopback (proteção contra SSRF)
-const PRIVATE_RANGES = [
-  /^127\./,
-  /^10\./,
-  /^192\.168\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^::1$/,
-  /^fd/,
-  /^169\.254\./,
-]
-
-async function assertPublicUrl(rawUrl) {
-  const url = new URL(rawUrl)
-  const hostname = url.hostname
-
-  // Bloqueia hostnames literais que são privados
-  if (PRIVATE_RANGES.some((re) => re.test(hostname))) {
-    throw new Error('URL aponta para rede privada ou loopback — não permitido.')
-  }
-
-  // Resolve DNS e valida o IP resultante
-  try {
-    const { address } = await dns.lookup(hostname)
-    if (PRIVATE_RANGES.some((re) => re.test(address))) {
-      throw new Error('URL resolve para endereço de rede privada — não permitido.')
-    }
-  } catch (e) {
-    if (e.message.includes('não permitido')) throw e
-    // Falha de DNS: deixa o fetch falhar naturalmente
-  }
-}
 
 // GET /api/custom-apis
 customApisRouter.get('/', async (req, res) => {
@@ -168,7 +136,7 @@ customApisRouter.post('/:id/test', async (req, res) => {
       }
     }
 
-    const r = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) })
+    const r = await safeFetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) })
     const data = await r.json().catch(() => ({}))
     if (!r.ok) throw new Error(data.error?.message || `HTTP ${r.status}`)
 

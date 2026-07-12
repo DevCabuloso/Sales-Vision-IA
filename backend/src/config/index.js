@@ -75,7 +75,7 @@ export const config = {
 
   billing: {
     trialPlanTier: process.env.TRIAL_PLAN_TIER || 'pro',
-    trialPlanPriceCents: parseInt(process.env.TRIAL_PLAN_PRICE_CENTS || '49700', 10),
+    trialPlanPriceCents: parseInt(process.env.TRIAL_PLAN_PRICE_CENTS || '39700', 10),
     trialDays: parseInt(process.env.TRIAL_DAYS || '7', 10),
   },
 }

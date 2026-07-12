@@ -1,15 +1,22 @@
 import { getCredentials } from '../integrations.js'
 import { config } from '../../config/index.js'
 import { supabase, unwrap } from '../../db/supabase.js'
+import { assertPublicUrl } from '../../utils/ssrfGuard.js'
+import { ttlGet } from '../../utils/ttlCache.js'
 
-/** Busca o primeiro canal conectado do tenant na tabela channels. */
+/** Busca o primeiro canal conectado do tenant na tabela channels. TTL curto (15s):
+ *  status de canal pode mudar em tempo real (conectar/desconectar), mas sem
+ *  nenhum cache isso reconsulta o Supabase a cada mensagem enviada — pesado
+ *  num disparo em massa de até 5000 contatos por campanha. */
 async function getConnectedChannel(tenantId) {
   try {
-    const rows = unwrap(
-      await supabase.from('channels').select('instance_name')
-        .eq('tenant_id', tenantId).eq('status', 'connected').limit(1)
-    )
-    return rows?.[0] || null
+    return await ttlGet(`evolution-channel:${tenantId}`, 15, async () => {
+      const rows = unwrap(
+        await supabase.from('channels').select('instance_name')
+          .eq('tenant_id', tenantId).eq('status', 'connected').limit(1)
+      )
+      return rows?.[0] || null
+    })
   } catch {
     return null
   }
@@ -62,6 +69,10 @@ export async function sendText(tenantId, to, body, { quotedWaId, quotedFromMe, q
   if (!apiKey || !baseUrl || !instance) {
     throw new Error('Credenciais Evolution incompletas (apiKey/baseUrl/instance).')
   }
+  // baseUrl é digitado pelo tenant em POST /api/integrations/evolution/connect —
+  // sem essa checagem, um tenant malicioso apontaria pra rede interna do próprio
+  // servidor (backend e evolution-api rodam na mesma máquina em produção).
+  await assertPublicUrl(baseUrl)
   const url = `${baseUrl.replace(/\/$/, '')}/message/sendText/${instance}`
   const res = await fetch(url, {
     method: 'POST',
@@ -296,7 +307,14 @@ export function parseWebhook(body) {
   }
 }
 
-// ACK da Baileys (numérico) ou nome do status (Evolution v2) → nosso status interno
+// ACK da Baileys (numérico) ou nome do status (Evolution v2) → nosso status interno.
+// Os valores numéricos batem com o enum WAMessageStatus do protobuf da Baileys
+// (ERROR=0, PENDING=1, SERVER_ACK=2, DELIVERY_ACK=3, READ=4, PLAYED=5) — biblioteca
+// que a Evolution API usa por baixo pra falar com o WhatsApp — e os nomes batem com
+// o que a Evolution v2 manda no campo `update.status` do webhook messages.update.
+// Ainda não visto um payload real de produção pra confirmar 100%; qualquer ack fora
+// desse mapa cai no console.log de "ack não reconhecido" logo abaixo (não quebra o
+// fluxo) — vale grep nos logs do PM2 depois do próximo disparo em massa.
 const ACK_STATUS_MAP = {
   0: 'failed', ERROR: 'failed',
   1: 'sent', PENDING: 'sent',

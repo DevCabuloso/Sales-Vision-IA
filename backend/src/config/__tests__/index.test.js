@@ -87,7 +87,7 @@ describe('config/index.js', () => {
 
     it('usa os defaults de billing quando não configurados', async () => {
       const config = await loadConfig({ NODE_ENV: 'test', JWT_SECRET: 'x', ENCRYPTION_KEY: 'a'.repeat(64), TRIAL_PLAN_PRICE_CENTS: '', TRIAL_DAYS: '', TRIAL_PLAN_TIER: '' })
-      expect(config.billing.trialPlanPriceCents).toBe(49700)
+      expect(config.billing.trialPlanPriceCents).toBe(39700)
       expect(config.billing.trialDays).toBe(7)
       expect(config.billing.trialPlanTier).toBe('pro')
     })

@@ -199,6 +199,8 @@ describe('routes/admin', () => {
       const app = buildApp()
       const res = await request(app).get('/api/admin/users')
       expect(res.body.users[0].tenant).toEqual({ id: 'tenant-1', name: 'Empresa', slug: 'empresa' })
+      const limitCall = supabaseMock.calls.find((c) => c.table === 'users' && c.method === 'limit')
+      expect(limitCall.args[0]).toBe(5000)
     })
 
     it('POST /clients/:id/users retorna 404 quando o cliente não existe', async () => {

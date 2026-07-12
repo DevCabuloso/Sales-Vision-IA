@@ -3,7 +3,11 @@ import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 
 const POLL_MS = 20_000
 
-const mockState = vi.hoisted(() => ({ box: {}, sendText: null, sendMedia: null, markSentByPlatform: null, logUsage: null, processBroadcast: null }))
+const mockState = vi.hoisted(() => ({ box: {}, sendText: null, sendMedia: null, markSentByPlatform: null, logUsage: null, processBroadcast: null, dnsLookup: null }))
+
+vi.mock('node:dns/promises', () => ({
+  default: { lookup: (...args) => mockState.dnsLookup(...args) },
+}))
 
 vi.mock('../../db/supabase.js', () => ({
   get supabase() { return mockState.box.supabase },
@@ -60,6 +64,7 @@ describe('scheduler', () => {
     mockState.markSentByPlatform = vi.fn()
     mockState.logUsage = vi.fn().mockResolvedValue(undefined)
     mockState.processBroadcast = vi.fn().mockResolvedValue(undefined)
+    mockState.dnsLookup = vi.fn().mockResolvedValue({ address: '93.184.216.34' })
   })
 
   afterEach(() => {

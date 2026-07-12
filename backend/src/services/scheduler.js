@@ -3,6 +3,7 @@ import { sendText, sendMedia } from './whatsapp/index.js'
 import { markSentByPlatform } from './orchestrator.js'
 import { logUsage } from './usage.js'
 import { processBroadcast } from '../routes/broadcast.js'
+import { safeFetch } from '../utils/ssrfGuard.js'
 
 const POLL_MS = 20_000
 
@@ -108,7 +109,10 @@ async function runDueFollowupMessages() {
 
       if (item.media_url) {
         markSentByPlatform(item.tenant_id, lead.phone, `[${mediaType}]`)
-        const resp = await fetch(item.media_url)
+        // safeFetch: media_url é uma URL livre digitada pelo usuário ao criar o
+        // passo de follow-up (z.string().url() em followups.js) — sem essa
+        // proteção seria SSRF trivial contra rede interna a cada disparo.
+        const resp = await safeFetch(item.media_url)
         const buffer = Buffer.from(await resp.arrayBuffer())
         await sendMedia(item.tenant_id, lead.phone, {
           buffer, mimetype: item.media_mimetype, filename: item.media_filename, caption: item.text,

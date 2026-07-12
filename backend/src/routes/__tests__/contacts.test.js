@@ -57,6 +57,15 @@ describe('routes/contacts', () => {
       const res = await request(app).get('/api/contacts').query({ search: 'ana', tags: 'vip,cliente' })
       expect(res.status).toBe(200)
     })
+
+    it('escapa vírgulas/aspas no termo de busca antes de montar o filtro .or() (proteção contra injeção de filtro)', async () => {
+      setSupabase({ leads: [{ data: [], error: null }] })
+      const app = buildApp()
+      const res = await request(app).get('/api/contacts').query({ search: 'x",tags.cs.{admin}' })
+      expect(res.status).toBe(200)
+      const orCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'or')
+      expect(orCall.args[0]).toBe('name.ilike."%x\\",tags.cs.{admin}%",phone.ilike."%x\\",tags.cs.{admin}%",email.ilike."%x\\",tags.cs.{admin}%"')
+    })
   })
 
   describe('POST /', () => {
@@ -164,6 +173,8 @@ describe('routes/contacts', () => {
     expect(res.body).toEqual({ removed: 1 })
     const del = deleteCallsFor('leads')[0]
     expect(del.args).toBeDefined()
+    const limitCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'limit')
+    expect(limitCall.args[0]).toBe(20000)
   })
 
   it('GET /tags retorna as tags únicas e ordenadas', async () => {

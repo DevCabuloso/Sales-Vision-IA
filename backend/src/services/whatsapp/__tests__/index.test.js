@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createSupabaseMock } from '../../../test-utils/supabaseMock.js'
+import { ttlClearAll } from '../../../utils/ttlCache.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, metaSendText: null, metaSendMedia: null, metaSendLocation: null, evoSendText: null, evoSendMedia: null, evoSendLocation: null, evoEditMessage: null, evoDeleteMessage: null }))
 
@@ -37,6 +38,7 @@ function setSupabase(responses) {
 describe('whatsapp/index (dispatcher)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    ttlClearAll()
     mockState.metaSendText = vi.fn().mockResolvedValue({ id: 'meta-1' })
     mockState.metaSendMedia = vi.fn().mockResolvedValue({ id: 'meta-2' })
     mockState.metaSendLocation = vi.fn().mockResolvedValue({ id: 'meta-3' })
@@ -88,6 +90,22 @@ describe('whatsapp/index (dispatcher)', () => {
     it('lança erro quando nenhum provider está habilitado nem há canal conectado', async () => {
       setSupabase({ tenants: [{ data: [{}], error: null }], channels: [{ data: [], error: null }] })
       await expect(whatsapp.sendText('tenant-1', '5511988887777', 'Oi')).rejects.toThrow('Nenhum provider de WhatsApp habilitado para este cliente.')
+    })
+
+    it('cacheia os feature flags do tenant — só uma query em tenants pra 2 envios seguidos', async () => {
+      setSupabase({ tenants: [{ data: [{ feat_meta_api: true }], error: null }] })
+      await whatsapp.sendText('tenant-cache-1', '5511988887777', 'Oi 1')
+      await whatsapp.sendText('tenant-cache-1', '5511988887777', 'Oi 2')
+      expect(supabaseMock.calls.filter((c) => c.table === 'tenants' && c.method === 'select').length).toBe(1)
+      expect(mockState.metaSendText).toHaveBeenCalledTimes(2)
+    })
+
+    it('cacheia hasConnectedChannel — só uma query em channels pra 2 envios seguidos', async () => {
+      setSupabase({ tenants: [{ data: [{}], error: null }], channels: [{ data: [{ id: 'ch-1' }], error: null }] })
+      await whatsapp.sendText('tenant-cache-2', '5511988887777', 'Oi 1')
+      await whatsapp.sendText('tenant-cache-2', '5511988887777', 'Oi 2')
+      expect(supabaseMock.calls.filter((c) => c.table === 'channels' && c.method === 'select').length).toBe(1)
+      expect(mockState.evoSendText).toHaveBeenCalledTimes(2)
     })
   })
 

@@ -1,23 +1,32 @@
 import { supabase, unwrap } from '../../db/supabase.js'
 import * as meta from './meta.js'
 import * as evolution from './evolution.js'
+import { ttlGet } from '../../utils/ttlCache.js'
 
+// feat_meta_api/feat_evolution_api/feat_hybrid mudam raramente (só quando um
+// admin mexe nas configurações do tenant) — sem cache, isso reconsulta o
+// Supabase a CADA envio de mensagem, o que soma milhares de queries evitáveis
+// num disparo em massa (até 5000 contatos por campanha).
 async function getTenantFlags(tenantId) {
-  const rows = unwrap(
-    await supabase.from('tenants')
-      .select('feat_meta_api, feat_evolution_api, feat_hybrid')
-      .eq('id', tenantId).limit(1)
-  )
-  return rows?.[0] || {}
+  return ttlGet(`whatsapp-flags:${tenantId}`, 60, async () => {
+    const rows = unwrap(
+      await supabase.from('tenants')
+        .select('feat_meta_api, feat_evolution_api, feat_hybrid')
+        .eq('id', tenantId).limit(1)
+    )
+    return rows?.[0] || {}
+  })
 }
 
 async function hasConnectedChannel(tenantId) {
   try {
-    const rows = unwrap(
-      await supabase.from('channels').select('id')
-        .eq('tenant_id', tenantId).eq('status', 'connected').limit(1)
-    )
-    return rows?.length > 0
+    return await ttlGet(`whatsapp-hasChannel:${tenantId}`, 15, async () => {
+      const rows = unwrap(
+        await supabase.from('channels').select('id')
+          .eq('tenant_id', tenantId).eq('status', 'connected').limit(1)
+      )
+      return rows?.length > 0
+    })
   } catch {
     return false
   }

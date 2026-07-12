@@ -9,6 +9,10 @@ const mockState = vi.hoisted(() => ({
   isWithinBusinessHours: null,
   getOffMessage: null,
   processFlowMessage: null,
+  uploadChatMedia: null,
+  metaDownloadMedia: null,
+  evolutionDownloadMediaBase64: null,
+  transcribeAudio: null,
 }))
 
 vi.mock('../../db/supabase.js', () => ({
@@ -21,6 +25,8 @@ vi.mock('../../db/supabase.js', () => ({
 
 vi.mock('../whatsapp/index.js', () => ({
   sendText: (...args) => mockState.sendText(...args),
+  meta: { downloadMedia: (...args) => mockState.metaDownloadMedia(...args) },
+  evolution: { downloadMediaBase64: (...args) => mockState.evolutionDownloadMediaBase64(...args) },
 }))
 
 vi.mock('../ai/agent.js', () => ({
@@ -31,6 +37,14 @@ vi.mock('../ai/analyze.js', () => ({
   analyzeLead: (...args) => mockState.analyzeLead(...args),
 }))
 
+vi.mock('../ai/openai.js', () => ({
+  transcribeAudio: (...args) => mockState.transcribeAudio(...args),
+}))
+
+vi.mock('../mediaStorage.js', () => ({
+  uploadChatMedia: (...args) => mockState.uploadChatMedia(...args),
+}))
+
 vi.mock('../../routes/business-hours.js', () => ({
   isWithinBusinessHours: (...args) => mockState.isWithinBusinessHours(...args),
   getOffMessage: (...args) => mockState.getOffMessage(...args),
@@ -39,6 +53,10 @@ vi.mock('../../routes/business-hours.js', () => ({
 vi.mock('../flowEngine.js', () => ({
   processFlowMessage: (...args) => mockState.processFlowMessage(...args),
 }))
+
+function flushMicrotasks() {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 const { handleInboundMessage, handleOutboundMessage, markSentByPlatform } = await import('../orchestrator.js')
 
@@ -75,6 +93,10 @@ describe('orchestrator', () => {
     mockState.isWithinBusinessHours = vi.fn().mockResolvedValue(true)
     mockState.getOffMessage = vi.fn().mockResolvedValue('Estamos fora do horário de atendimento.')
     mockState.processFlowMessage = vi.fn().mockResolvedValue(false)
+    mockState.uploadChatMedia = vi.fn().mockResolvedValue('https://cdn.exemplo.com/midia.bin')
+    mockState.metaDownloadMedia = vi.fn()
+    mockState.evolutionDownloadMediaBase64 = vi.fn()
+    mockState.transcribeAudio = vi.fn()
   })
 
   describe('handleInboundMessage — mensagens de grupo', () => {
@@ -160,6 +182,41 @@ describe('orchestrator', () => {
       expect(aiMsgInsert).toBeTruthy()
     })
 
+    it('busca só as últimas 40 mensagens (desc+limit) e entrega ao agente em ordem cronológica', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          // simula o que o banco devolve com .order({ascending:false}): mais nova primeiro
+          { data: [
+            { role: 'ai', text: 'terceira' },
+            { role: 'lead', text: 'segunda' },
+            { role: 'lead', text: 'primeira' },
+          ], error: null },
+          { data: [{ id: 'msg-ai-1' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.runAgent.mockResolvedValue({ reply: 'ok', scheduled: null })
+
+      await handleInboundMessage({ tenantId: 'tenant-hist-1', from: '5511988887777', text: 'oi', provider: 'evolution' })
+
+      const historySelect = callsFor('messages', 'select').find((c) => c.args[0] === 'role, text')
+      expect(historySelect).toBeTruthy()
+      const orderCall = callsFor('messages', 'order').find((c) => c.args[0] === 'created_at' && c.args[1]?.ascending === false)
+      expect(orderCall).toBeTruthy()
+      const limitCall = callsFor('messages', 'limit').find((c) => c.args[0] === 40)
+      expect(limitCall).toBeTruthy()
+
+      expect(mockState.runAgent).toHaveBeenCalledWith(expect.objectContaining({
+        history: [
+          { role: 'lead', text: 'primeira' },
+          { role: 'lead', text: 'segunda' },
+          { role: 'ai', text: 'terceira' },
+        ],
+      }))
+    })
+
     it('não roda o agente de IA quando um humano assumiu a conversa', async () => {
       setSupabase({
         leads: [{ data: { ...baseLead, human_takeover: true }, error: null }],
@@ -209,6 +266,248 @@ describe('orchestrator', () => {
       expect(stageUpdate).toBeTruthy()
       const historyInsert = callsFor('lead_stage_history', 'insert')[0]
       expect(historyInsert.args[0]).toMatchObject({ from_stage: 'Novo', to_stage: 'Reunião Agendada' })
+    })
+  })
+
+  describe('handleInboundMessage — patch consolidado do lead (nome/atribuição/status num update só)', () => {
+    it('aplica assigned_to e queue_id do canal num único update quando o lead ainda não tem nenhum dos dois', async () => {
+      setSupabase({
+        channels: [
+          { data: [{ id: 'ch-1' }], error: null }, // resolve channelId por instance_name
+          { data: [{ assigned_user_id: 'user-9', assigned_queue_id: 'queue-9' }], error: null }, // auto-atribuição
+        ],
+        leads: [{ data: { ...baseLead, assigned_to: null, queue_id: null }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'oi' }], error: null },
+          { data: [{ id: 'msg-off-1' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.isWithinBusinessHours.mockResolvedValue(false)
+
+      await handleInboundMessage({
+        tenantId: 'tenant-assign-1', from: '5511988887777', text: 'oi', provider: 'evolution', instanceName: 'inst-1',
+      })
+
+      const leadUpdates = callsFor('leads', 'update')
+      expect(leadUpdates).toHaveLength(1)
+      expect(leadUpdates[0].args[0]).toEqual({ assigned_to: 'user-9', queue_id: 'queue-9' })
+    })
+
+    it('não reatribui quando o lead já tem assigned_to e queue_id', async () => {
+      setSupabase({
+        channels: [
+          { data: [{ id: 'ch-1' }], error: null },
+          { data: [{ assigned_user_id: 'user-9', assigned_queue_id: 'queue-9' }], error: null },
+        ],
+        leads: [{ data: { ...baseLead, assigned_to: 'user-existente', queue_id: 'queue-existente' }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'oi' }], error: null },
+          { data: [{ id: 'msg-off-1' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.isWithinBusinessHours.mockResolvedValue(false)
+
+      await handleInboundMessage({
+        tenantId: 'tenant-assign-2', from: '5511988887777', text: 'oi', provider: 'evolution', instanceName: 'inst-1',
+      })
+
+      expect(callsFor('leads', 'update')).toHaveLength(0)
+    })
+
+    it('reabrir uma conversa "resolved" grava conversation_status+updated_at num update só e insere o separador visual', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead, conversation_status: 'resolved' }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-sep-1' }], error: null },
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'oi' }], error: null },
+          { data: [{ id: 'msg-off-1' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.isWithinBusinessHours.mockResolvedValue(false)
+
+      await handleInboundMessage({
+        tenantId: 'tenant-reopen-1', from: '5511988887777', text: 'oi', provider: 'evolution',
+      })
+
+      const leadUpdates = callsFor('leads', 'update')
+      expect(leadUpdates).toHaveLength(1)
+      expect(leadUpdates[0].args[0].conversation_status).toBe('pending')
+      expect(leadUpdates[0].args[0].updated_at).toBeTruthy()
+      const sepMsg = callsFor('messages', 'insert').find((c) => c.args[0]?.role === 'system')
+      expect(sepMsg.args[0].text).toBe('— Nova conversa iniciada —')
+    })
+  })
+
+  describe('handleInboundMessage — mídia recebida (resolveMedia)', () => {
+    it('baixa imagem via Meta Graph API e grava a media_url/mimetype na mensagem', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: '[imagem]' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.metaDownloadMedia.mockResolvedValue({ buffer: Buffer.from('imgbytes'), mimetype: 'image/jpeg' })
+      mockState.isWithinBusinessHours.mockResolvedValue(false) // encurta o teste, não precisa da IA aqui
+
+      await handleInboundMessage({
+        tenantId: 'tenant-media-1', from: '5511988887777', text: '', provider: 'meta_whatsapp',
+        mediaType: 'image', mediaId: 'media-123', mediaMimeType: 'image/jpeg', mediaFilename: 'foto.jpg',
+      })
+
+      expect(mockState.metaDownloadMedia).toHaveBeenCalledWith('tenant-media-1', 'media-123')
+      expect(mockState.uploadChatMedia).toHaveBeenCalledWith('tenant-media-1', Buffer.from('imgbytes'), 'image/jpeg', 'foto.jpg')
+      const leadMsgInsert = callsFor('messages', 'insert').find((c) => c.args[0]?.role === 'lead')
+      expect(leadMsgInsert.args[0]).toMatchObject({ media_url: 'https://cdn.exemplo.com/midia.bin', media_type: 'image', media_mimetype: 'image/jpeg' })
+    })
+
+    it('baixa áudio via Evolution, transcreve e usa a transcrição como texto da mensagem (pra IA "escutar")', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'Isso é uma transcrição de teste.' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+        ai_configs: [{ data: [], error: null }],
+      })
+      mockState.evolutionDownloadMediaBase64.mockResolvedValue({ base64: Buffer.from('audiobytes').toString('base64'), mimetype: 'audio/ogg' })
+      mockState.transcribeAudio.mockResolvedValue('Isso é uma transcrição de teste.')
+      mockState.isWithinBusinessHours.mockResolvedValue(false)
+
+      await handleInboundMessage({
+        tenantId: 'tenant-media-2', from: '5511988887777', text: '', provider: 'evolution', instanceName: 'inst-1',
+        mediaType: 'audio', mediaMessageId: 'wa-msg-1', mediaRemoteJid: '5511988887777@s.whatsapp.net', mediaFromMe: false,
+        mediaMimeType: 'audio/ogg', mediaFilename: 'audio.ogg',
+      })
+
+      expect(mockState.evolutionDownloadMediaBase64).toHaveBeenCalledWith('inst-1', 'wa-msg-1', '5511988887777@s.whatsapp.net', false)
+      expect(mockState.transcribeAudio).toHaveBeenCalled()
+      const leadMsgInsert = callsFor('messages', 'insert').find((c) => c.args[0]?.role === 'lead')
+      expect(leadMsgInsert.args[0]).toMatchObject({ text: 'Isso é uma transcrição de teste.', media_type: 'audio' })
+    })
+
+    it('não quebra o fluxo quando o download da mídia falha', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: '[imagem]' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.metaDownloadMedia.mockRejectedValue(new Error('Graph API indisponível'))
+      mockState.isWithinBusinessHours.mockResolvedValue(false)
+
+      await handleInboundMessage({
+        tenantId: 'tenant-media-3', from: '5511988887777', text: '', provider: 'meta_whatsapp',
+        mediaType: 'image', mediaId: 'media-123',
+      })
+
+      const leadMsgInsert = callsFor('messages', 'insert').find((c) => c.args[0]?.role === 'lead')
+      expect(leadMsgInsert.args[0].media_url).toBeNull()
+    })
+  })
+
+  describe('handleInboundMessage — citação de mensagem (resolveReplyToId)', () => {
+    it('resolve o reply_to_id a partir do wa_message_id citado no webhook', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [{ id: 77 }], error: null }, // resolveReplyToId: acha a mensagem citada
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'respondendo' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.isWithinBusinessHours.mockResolvedValue(false)
+
+      await handleInboundMessage({
+        tenantId: 'tenant-reply-1', from: '5511988887777', text: 'respondendo', provider: 'evolution',
+        replyToWaId: 'wa-quoted-1',
+      })
+
+      const leadMsgInsert = callsFor('messages', 'insert').find((c) => c.args[0]?.role === 'lead')
+      expect(leadMsgInsert.args[0].reply_to_id).toBe(77)
+    })
+
+    it('reply_to_id fica null quando não há replyToWaId', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'oi' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.isWithinBusinessHours.mockResolvedValue(false)
+
+      await handleInboundMessage({
+        tenantId: 'tenant-reply-2', from: '5511988887777', text: 'oi', provider: 'evolution',
+      })
+
+      const leadMsgInsert = callsFor('messages', 'insert').find((c) => c.args[0]?.role === 'lead')
+      expect(leadMsgInsert.args[0].reply_to_id).toBeNull()
+    })
+  })
+
+  describe('handleInboundMessage — reanálise em background após a resposta da IA', () => {
+    it('depois que analyzeLead resolve, grava score/intenção/estágio e registra a mudança de estágio', async () => {
+      setSupabase({
+        leads: [
+          { data: { ...baseLead, stage: 'Novo' }, error: null }, // upsert inicial
+          { data: null, error: null }, // update de score/intention/stage feito pela reanálise
+        ],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'quero comprar' }], error: null },
+          { data: [{ id: 'msg-ai-1' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.runAgent.mockResolvedValue({ reply: 'Ótimo, vou te ajudar!', scheduled: null })
+      mockState.analyzeLead.mockResolvedValue({ score: 85, intention: 'Quer comprar', stage: 'Qualificado', interests: ['plano-pro'] })
+
+      await handleInboundMessage({
+        tenantId: 'tenant-reanalyze-1', from: '5511988887777', text: 'quero comprar', provider: 'evolution',
+      })
+      await flushMicrotasks()
+
+      const leadUpdate = callsFor('leads', 'update').find((c) => c.args[0]?.score === 85)
+      expect(leadUpdate.args[0]).toMatchObject({ score: 85, intention: 'Quer comprar', stage: 'Qualificado' })
+      const historyInsert = callsFor('lead_stage_history', 'insert')[0]
+      expect(historyInsert.args[0]).toMatchObject({ from_stage: 'Novo', to_stage: 'Qualificado', notes: 'Movido automaticamente pela IA' })
+    })
+
+    it('não registra mudança de estágio quando a reanálise mantém o mesmo estágio', async () => {
+      setSupabase({
+        leads: [
+          { data: { ...baseLead, stage: 'Qualificado' }, error: null },
+          { data: null, error: null },
+        ],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'oi de novo' }], error: null },
+          { data: [{ id: 'msg-ai-1' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.runAgent.mockResolvedValue({ reply: 'Oi de novo!', scheduled: null })
+      mockState.analyzeLead.mockResolvedValue({ score: 80, intention: 'Quer comprar', stage: 'Qualificado', interests: [] })
+
+      await handleInboundMessage({
+        tenantId: 'tenant-reanalyze-2', from: '5511988887777', text: 'oi de novo', provider: 'evolution',
+      })
+      await flushMicrotasks()
+
+      expect(callsFor('lead_stage_history', 'insert')).toHaveLength(0)
     })
   })
 

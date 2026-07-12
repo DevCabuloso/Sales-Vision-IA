@@ -5,6 +5,9 @@
 
 import { supabase, unwrap } from '../db/supabase.js'
 import * as whatsapp        from './whatsapp/index.js'
+import { safeFetch }        from '../utils/ssrfGuard.js'
+
+const HISTORY_LIMIT = 40
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
@@ -302,11 +305,13 @@ async function runNode(flow, node, session, tenantId, leadId) {
         const { runAgent }  = await import('./ai/agent.js')
         const tenantRows    = unwrap(await supabase.from('tenants').select('name').eq('id', tenantId).limit(1))
         const tenantName    = tenantRows?.[0]?.name || null
+        // últimas HISTORY_LIMIT mensagens (desc + reverse), mesmo limite do
+        // orchestrator.js — evita query e prompt de IA sem limite em conversas longas.
         const histRows      = unwrap(
           await supabase.from('messages').select('role, text')
-            .eq('lead_id', leadId).order('created_at', { ascending: true })
+            .eq('lead_id', leadId).order('created_at', { ascending: false }).limit(HISTORY_LIMIT)
         )
-        const out = await runAgent({ tenantId, tenantName, history: histRows || [] })
+        const out = await runAgent({ tenantId, tenantName, history: (histRows || []).reverse() })
         if (out?.reply && phone) {
           await whatsapp.sendText(tenantId, phone, out.reply).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
           await saveMsg(tenantId, leadId, 'ai', out.reply)
@@ -325,7 +330,11 @@ async function runNode(flow, node, session, tenantId, leadId) {
         const method = (node.metodo || 'POST').toUpperCase()
         const body   = node.corpo ? interpolate(node.corpo, vars) : null
 
-        const resp = await fetch(url, {
+        // safeFetch em vez de fetch direto: node.url vem do construtor de fluxo,
+        // controlado por qualquer usuário autenticado do tenant (sem checagem de
+        // role) — sem essa proteção seria SSRF trivial contra rede interna, com
+        // a resposta exfiltrada de volta pro WhatsApp via `node.variavel`.
+        const resp = await safeFetch(url, {
           method,
           headers: { 'Content-Type': 'application/json' },
           body:    method !== 'GET' && body ? body : undefined,

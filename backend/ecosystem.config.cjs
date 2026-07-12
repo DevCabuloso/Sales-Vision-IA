@@ -10,6 +10,11 @@ module.exports = {
       cwd: __dirname,
       watch: false,
       autorestart: true,
+      // NÃO aumente sem antes migrar os caches em memória de services/orchestrator.js
+      // pra um store compartilhado (ex: Redis) — eles divergem entre instâncias.
+      // src/utils/assertSingleInstance.js crasha o boot de qualquer instância > 0
+      // como rede de segurança caso isso mude sem querer.
+      instances: 1,
     },
   ],
 }
