@@ -37,6 +37,18 @@ html, body, #app { height: 100%; margin: 0; }
 .fade-enter-active, .fade-leave-active { transition: opacity .25s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
+/* ─── Transição fluida para v-dialog (cards de configuração/edição) ───
+   Substitui o dialog-transition padrão do Vuetify (baseado em Web Animations
+   API, com origem no elemento clicado) por um fade + scale + slide simples,
+   com a mesma curva de entrada e saída — mais lento e suave. */
+.dialog-fluid-enter-active, .dialog-fluid-leave-active {
+  transition: opacity .3s cubic-bezier(.16,1,.3,1), transform .3s cubic-bezier(.16,1,.3,1);
+}
+.dialog-fluid-enter-from, .dialog-fluid-leave-to {
+  opacity: 0;
+  transform: scale(0.95) translateY(12px);
+}
+
 /* ─── Bordas visíveis em temas claros ─── */
 /* Vuetify dividers */
 [data-theme-dark="0"] .v-divider { opacity: 0.6 !important; }

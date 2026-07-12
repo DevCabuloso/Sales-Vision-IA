@@ -34,6 +34,9 @@ const vuetify = createVuetify({
     VTextField: { variant: 'outlined', density: 'comfortable', color: 'primary' },
     VSelect:    { variant: 'outlined', density: 'comfortable', color: 'primary' },
     VChip:      { rounded: 'md' },
+    // transição própria (mais suave/lenta que o dialog-transition padrão do Vuetify) —
+    // ver .dialog-fluid-* em assets/main.css
+    VDialog:    { transition: 'dialog-fluid' },
   },
 })
 

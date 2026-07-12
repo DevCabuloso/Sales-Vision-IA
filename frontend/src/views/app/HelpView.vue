@@ -44,17 +44,22 @@
             <p class="text-body-2" style="color:var(--text-muted)">Nenhum artigo encontrado. Tente outra palavra-chave.</p>
           </div>
 
-          <v-expansion-panels v-else variant="accordion" multiple class="help-panels">
-            <v-expansion-panel v-for="m in flatMatches" :key="m.category + m.q">
-              <v-expansion-panel-title>
+          <div v-else class="help-panels">
+            <div v-for="m in flatMatches" :key="m.category + m.q" class="faq-card" :class="{ open: isFaqOpen(m.category + m.q) }">
+              <button class="faq-head" @click="toggleFaq(m.category + m.q)">
                 <div>
                   <span class="help-result-cat">{{ m.category }}</span>
                   <div class="text-body-2 font-weight-bold">{{ m.q }}</div>
                 </div>
-              </v-expansion-panel-title>
-              <v-expansion-panel-text class="help-answer">{{ m.a }}</v-expansion-panel-text>
-            </v-expansion-panel>
-          </v-expansion-panels>
+                <v-icon icon="mdi-chevron-down" size="18" class="faq-chevron" />
+              </button>
+              <div class="faq-body-outer">
+                <div class="faq-body-inner">
+                  <div class="faq-body help-answer">{{ m.a }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </template>
 
         <template v-else>
@@ -66,12 +71,19 @@
             </h2>
           </div>
 
-          <v-expansion-panels variant="accordion" multiple class="help-panels">
-            <v-expansion-panel v-for="item in activeSection.items" :key="item.q">
-              <v-expansion-panel-title class="text-body-2 font-weight-bold">{{ item.q }}</v-expansion-panel-title>
-              <v-expansion-panel-text class="help-answer">{{ item.a }}</v-expansion-panel-text>
-            </v-expansion-panel>
-          </v-expansion-panels>
+          <div class="help-panels">
+            <div v-for="item in activeSection.items" :key="item.q" class="faq-card" :class="{ open: isFaqOpen(item.q) }">
+              <button class="faq-head" @click="toggleFaq(item.q)">
+                <span class="text-body-2 font-weight-bold">{{ item.q }}</span>
+                <v-icon icon="mdi-chevron-down" size="18" class="faq-chevron" />
+              </button>
+              <div class="faq-body-outer">
+                <div class="faq-body-inner">
+                  <div class="faq-body help-answer">{{ item.a }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </template>
       </main>
     </div>
@@ -86,7 +98,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 const search = ref('')
 
@@ -216,6 +228,16 @@ const flatMatches = computed(() => {
   if (!q) return []
   return sections.flatMap((s) => s.items.filter((i) => (i.q + ' ' + i.a).toLowerCase().includes(q)).map((i) => ({ ...i, category: s.title })))
 })
+
+// abre/fecha cada pergunta no lugar (mesma animação usada no resto do app)
+const openFaqs = ref(new Set())
+function toggleFaq(key) {
+  const next = new Set(openFaqs.value)
+  next.has(key) ? next.delete(key) : next.add(key)
+  openFaqs.value = next
+}
+function isFaqOpen(key) { return openFaqs.value.has(key) }
+watch([activeCategory, search], () => { openFaqs.value = new Set() })
 </script>
 
 <style scoped>
@@ -261,7 +283,7 @@ const flatMatches = computed(() => {
 .help-content-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 1px; color: var(--text-faint); }
 .help-content-title { font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; margin-top: 2px; }
 
-.help-panels { border-radius: 12px; overflow: hidden; border: 1px solid var(--border-subtle); }
+.help-panels { display: flex; flex-direction: column; gap: 8px; }
 .help-answer { color: var(--text-muted); white-space: pre-line; }
 .help-result-cat {
   display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .5px;
@@ -269,6 +291,32 @@ const flatMatches = computed(() => {
   border-radius: 6px; padding: 1px 7px; margin-bottom: 4px;
 }
 .help-empty { text-align: center; padding: 48px 16px; }
+
+/* ─── Card de pergunta/resposta (expande/recolhe no lugar) ─── */
+.faq-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel-bg);
+}
+.faq-head {
+  width: 100%;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 16px;
+  background: none; border: none; cursor: pointer; text-align: left;
+  font: inherit; color: inherit;
+}
+.faq-head:hover { background: var(--panel-hover); }
+.faq-chevron { flex-shrink: 0; color: var(--text-muted); transition: transform .32s cubic-bezier(.4,0,.2,1); }
+.faq-card.open .faq-chevron { transform: rotate(180deg); }
+.faq-body-outer {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .32s cubic-bezier(.4,0,.2,1);
+}
+.faq-card.open .faq-body-outer { grid-template-rows: 1fr; }
+.faq-body-inner { overflow: hidden; }
+.faq-body { padding: 0 16px 16px; }
 
 /* ─── Mobile ─── */
 @media (max-width: 900px) {

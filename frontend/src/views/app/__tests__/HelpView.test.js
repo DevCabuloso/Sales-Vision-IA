@@ -29,4 +29,28 @@ describe('HelpView', () => {
     await wrapper.find('input').setValue('xyzxyz_termo_inexistente')
     expect(wrapper.text()).toContain('Nenhum artigo encontrado')
   })
+
+  it('expande/recolhe a resposta no lugar ao clicar na pergunta (classe "open", sem v-if)', async () => {
+    const wrapper = mount(HelpView, pluginOptions())
+    const card = wrapper.findAll('.faq-card')[0]
+    expect(card.classes()).not.toContain('open')
+
+    await card.find('.faq-head').trigger('click')
+    expect(card.classes()).toContain('open')
+
+    await card.find('.faq-head').trigger('click')
+    expect(card.classes()).not.toContain('open')
+  })
+
+  it('fecha as perguntas abertas ao trocar de categoria', async () => {
+    const wrapper = mount(HelpView, pluginOptions())
+    const card = wrapper.findAll('.faq-card')[0]
+    await card.find('.faq-head').trigger('click')
+    expect(card.classes()).toContain('open')
+
+    const canaisBtn = wrapper.findAll('.help-cat-item').find((b) => b.text().includes('Canais & WhatsApp'))
+    await canaisBtn.trigger('click')
+
+    expect(wrapper.findAll('.faq-card.open')).toHaveLength(0)
+  })
 })

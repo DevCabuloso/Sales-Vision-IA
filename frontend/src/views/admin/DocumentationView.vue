@@ -169,23 +169,30 @@
         <v-btn size="small" variant="text" @click="dbPanels = []">Recolher tudo</v-btn>
       </div>
 
-      <v-expansion-panels v-model="dbPanels" multiple variant="accordion" class="doc-panels">
-        <v-expansion-panel v-for="(t, i) in dbTables" :key="t.name" :value="i">
-          <v-expansion-panel-title>
-            <span class="mono font-weight-bold mr-2">{{ t.name }}</span>
-            <v-chip v-if="t.realtime" size="x-small" color="success" variant="tonal" class="mr-2">realtime</v-chip>
-            <span class="text-caption" style="color:#6B7C88">{{ t.purpose }}</span>
-          </v-expansion-panel-title>
-          <v-expansion-panel-text>
-            <div class="col-row" v-for="(c, ci) in t.cols" :key="ci">
-              <span class="col-name mono">{{ c.n }}</span>
-              <span class="col-type mono">{{ c.t }}</span>
-              <span class="col-note">{{ c.d }}</span>
+      <div class="doc-panels">
+        <div v-for="(t, i) in dbTables" :key="t.name" class="doc-acc-item" :class="{ open: dbPanels.includes(i) }">
+          <button class="doc-acc-head" @click="toggleDbPanel(i)">
+            <span class="doc-acc-head-main">
+              <span class="mono font-weight-bold mr-2">{{ t.name }}</span>
+              <v-chip v-if="t.realtime" size="x-small" color="success" variant="tonal" class="mr-2">realtime</v-chip>
+              <span class="text-caption" style="color:#6B7C88">{{ t.purpose }}</span>
+            </span>
+            <v-icon icon="mdi-chevron-down" size="18" class="doc-acc-chevron" />
+          </button>
+          <div class="doc-acc-body-outer">
+            <div class="doc-acc-body-inner">
+              <div class="doc-acc-body">
+                <div class="col-row" v-for="(c, ci) in t.cols" :key="ci">
+                  <span class="col-name mono">{{ c.n }}</span>
+                  <span class="col-type mono">{{ c.t }}</span>
+                  <span class="col-note">{{ c.d }}</span>
+                </div>
+                <p v-if="t.note" class="doc-footnote">{{ t.note }}</p>
+              </div>
             </div>
-            <p v-if="t.note" class="doc-footnote">{{ t.note }}</p>
-          </v-expansion-panel-text>
-        </v-expansion-panel>
-      </v-expansion-panels>
+          </div>
+        </div>
+      </div>
 
       <h3 class="mt-6">Funções RPC</h3>
       <div class="ztable-wrap mb-4">
@@ -218,23 +225,30 @@
         <v-btn size="small" variant="text" @click="apiPanels = []">Recolher tudo</v-btn>
       </div>
 
-      <v-expansion-panels v-model="apiPanels" multiple variant="accordion" class="doc-panels">
-        <v-expansion-panel v-for="(m, i) in apiModules" :key="m.path" :value="i">
-          <v-expansion-panel-title>
-            <span class="mono font-weight-bold mr-2">{{ m.path }}</span>
-            <v-chip v-if="m.access" size="x-small" :color="m.access === 'owner' ? 'warning' : 'success'" variant="tonal" class="mr-2">{{ m.access }}</v-chip>
-            <span class="text-caption" style="color:#6B7C88">{{ m.desc }}</span>
-          </v-expansion-panel-title>
-          <v-expansion-panel-text>
-            <div class="route-row" v-for="(r, ri) in m.routes" :key="ri">
-              <span class="m" :class="methodClass(r.m)">{{ r.m }}</span>
-              <span class="route-path mono">{{ r.p }}</span>
-              <span class="route-desc">{{ r.d }}</span>
+      <div class="doc-panels">
+        <div v-for="(m, i) in apiModules" :key="m.path" class="doc-acc-item" :class="{ open: apiPanels.includes(i) }">
+          <button class="doc-acc-head" @click="toggleApiPanel(i)">
+            <span class="doc-acc-head-main">
+              <span class="mono font-weight-bold mr-2">{{ m.path }}</span>
+              <v-chip v-if="m.access" size="x-small" :color="m.access === 'owner' ? 'warning' : 'success'" variant="tonal" class="mr-2">{{ m.access }}</v-chip>
+              <span class="text-caption" style="color:#6B7C88">{{ m.desc }}</span>
+            </span>
+            <v-icon icon="mdi-chevron-down" size="18" class="doc-acc-chevron" />
+          </button>
+          <div class="doc-acc-body-outer">
+            <div class="doc-acc-body-inner">
+              <div class="doc-acc-body">
+                <div class="route-row" v-for="(r, ri) in m.routes" :key="ri">
+                  <span class="m" :class="methodClass(r.m)">{{ r.m }}</span>
+                  <span class="route-path mono">{{ r.p }}</span>
+                  <span class="route-desc">{{ r.d }}</span>
+                </div>
+                <p v-if="m.note" class="doc-footnote">{{ m.note }}</p>
+              </div>
             </div>
-            <p v-if="m.note" class="doc-footnote">{{ m.note }}</p>
-          </v-expansion-panel-text>
-        </v-expansion-panel>
-      </v-expansion-panels>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- ── Env ──────────────────────────────────────────────────── -->
@@ -600,6 +614,9 @@ const externalServices = [
 ]
 
 const dbPanels = ref([])
+function toggleDbPanel(i) {
+  dbPanels.value = dbPanels.value.includes(i) ? dbPanels.value.filter((v) => v !== i) : [...dbPanels.value, i]
+}
 const dbTables = [
   { name: 'tenants', purpose: 'Raiz multi-tenant — cada cliente da plataforma', cols: [
     { n: 'id', t: 'uuid pk', d: '' }, { n: 'name, slug', t: 'text', d: 'slug único' },
@@ -687,6 +704,9 @@ const dbTables = [
 ]
 
 const apiPanels = ref([])
+function toggleApiPanel(i) {
+  apiPanels.value = apiPanels.value.includes(i) ? apiPanels.value.filter((v) => v !== i) : [...apiPanels.value, i]
+}
 function methodClass(m) {
   return { GET: 'm-get', POST: 'm-post', PATCH: 'm-patch', PUT: 'm-patch', DELETE: 'm-delete' }[m] || 'm-get'
 }
@@ -1012,9 +1032,34 @@ code {
 
 .role-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 0.85rem; color: #9FB0BC; }
 
-.doc-panels :deep(.v-expansion-panel) { background: var(--glass-bg, #1C2333) !important; border: 1px solid rgba(255,255,255,0.07) !important; margin-bottom: 6px; border-radius: 10px !important; }
-.doc-panels :deep(.v-expansion-panel-title) { font-size: 0.85rem; min-height: 48px; }
-.doc-panels :deep(.v-expansion-panel-text__wrapper) { padding: 4px 20px 14px; }
+.doc-panels { display: flex; flex-direction: column; gap: 6px; }
+
+/* ─── Item de acordeão (expande/recolhe no lugar) ─── */
+.doc-acc-item {
+  background: var(--glass-bg, #1C2333);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.doc-acc-head {
+  width: 100%;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  min-height: 48px; padding: 8px 20px;
+  background: none; border: none; cursor: pointer; text-align: left;
+  font: inherit; color: inherit;
+}
+.doc-acc-head:hover { background: rgba(255,255,255,0.03); }
+.doc-acc-head-main { display: flex; align-items: center; flex-wrap: wrap; font-size: 0.85rem; }
+.doc-acc-chevron { flex-shrink: 0; color: #6B7C88; transition: transform .32s cubic-bezier(.4,0,.2,1); }
+.doc-acc-item.open .doc-acc-chevron { transform: rotate(180deg); }
+.doc-acc-body-outer {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .32s cubic-bezier(.4,0,.2,1);
+}
+.doc-acc-item.open .doc-acc-body-outer { grid-template-rows: 1fr; }
+.doc-acc-body-inner { overflow: hidden; }
+.doc-acc-body { padding: 4px 20px 14px; }
 
 .col-row, .route-row { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed rgba(255,255,255,0.06); font-size: 0.8rem; }
 .col-row:last-child, .route-row:last-child { border-bottom: none; }

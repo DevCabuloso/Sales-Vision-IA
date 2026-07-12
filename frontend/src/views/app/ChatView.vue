@@ -402,24 +402,28 @@
 
           </div>
 
-          <!-- Barra de busca de mensagens (expansível) -->
-          <div v-if="showMsgSearch" class="msg-search-bar">
-            <v-text-field
-              v-model="msgSearchQuery"
-              placeholder="Buscar no histórico..."
-              prepend-inner-icon="mdi-magnify"
-              variant="outlined"
-              density="compact"
-              hide-details
-              clearable
-              autofocus
-              class="flex-1"
-              @keydown.escape="closeMsgSearch"
-            />
-            <span class="text-caption ml-2 flex-shrink-0" style="color:#9FB0BC">
-              {{ msgSearchQuery ? `${msgSearchResults} resultado(s)` : 'Digite para buscar' }}
-            </span>
-            <v-btn icon size="small" variant="text" @click="closeMsgSearch"><v-icon icon="mdi-close" size="16" /></v-btn>
+          <!-- Barra de busca de mensagens (expande/recolhe no lugar) -->
+          <div class="msg-search-wrap" :class="{ open: showMsgSearch }">
+            <div class="msg-search-inner">
+              <div class="msg-search-bar">
+                <v-text-field
+                  ref="msgSearchInputRef"
+                  v-model="msgSearchQuery"
+                  placeholder="Buscar no histórico..."
+                  prepend-inner-icon="mdi-magnify"
+                  variant="outlined"
+                  density="compact"
+                  hide-details
+                  clearable
+                  class="flex-1"
+                  @keydown.escape="closeMsgSearch"
+                />
+                <span class="text-caption ml-2 flex-shrink-0" style="color:#9FB0BC">
+                  {{ msgSearchQuery ? `${msgSearchResults} resultado(s)` : 'Digite para buscar' }}
+                </span>
+                <v-btn icon size="small" variant="text" @click="closeMsgSearch"><v-icon icon="mdi-close" size="16" /></v-btn>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -522,8 +526,10 @@
             </div>
           </div>
 
-          <!-- Painel de detalhes do contato -->
-          <div v-if="showContactPanel" class="contact-panel">
+          <!-- Painel de detalhes do contato (expande/recolhe no lugar) -->
+          <div class="contact-panel-wrap" :class="{ open: showContactPanel }">
+          <div class="contact-panel-inner">
+          <div class="contact-panel">
             <div class="contact-panel-header">
               <span class="text-subtitle-2 font-weight-bold">Detalhes do Contato</span>
               <v-btn icon size="x-small" variant="text" @click="showContactPanel = false"><v-icon icon="mdi-close" size="16" /></v-btn>
@@ -728,6 +734,8 @@
                 </div>
               </div>
             </div>
+          </div>
+          </div>
           </div>
         </div>
 
@@ -1070,7 +1078,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, http } from '@/services/api'
 import { useMessageRealtime, useRealtime } from '@/composables/useRealtime'
@@ -1737,6 +1745,15 @@ function toggleMsgSearch() {
 }
 function closeMsgSearch() { showMsgSearch.value = false; msgSearchQuery.value = '' }
 
+const msgSearchInputRef = ref(null)
+// autofocus não é mais usado no v-text-field pq agora o campo fica sempre montado
+// (a expansão é feita via CSS, não v-if) — foca manualmente só quando abre
+watch(showMsgSearch, async (isOpen) => {
+  if (!isOpen) return
+  await nextTick()
+  msgSearchInputRef.value?.focus?.()
+})
+
 async function returnToQueue() {
   if (!currentLead.value || currentLead.value.conversation_status !== 'open') return
   returningToQueue.value = true
@@ -2343,7 +2360,14 @@ onUnmounted(() => {
 
 .qa-divider { width: 1px; height: 18px; background: var(--sep); margin: 0 2px; flex-shrink: 0; }
 
-/* ———— BUSCA DE MENSAGENS ———— */
+/* ———— BUSCA DE MENSAGENS (expande/recolhe no lugar) ———— */
+.msg-search-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .32s cubic-bezier(.4,0,.2,1);
+}
+.msg-search-wrap.open { grid-template-rows: 1fr; }
+.msg-search-inner { overflow: hidden; }
 .msg-search-bar {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 0 10px;
@@ -2467,9 +2491,18 @@ onUnmounted(() => {
 .typing-indicator span:nth-child(3) { animation-delay:.3s; }
 @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-5px)} }
 
-/* ———— PAINEL DE CONTATO ———— */
+/* ———— PAINEL DE CONTATO (expande/recolhe no lugar) ———— */
+.contact-panel-wrap {
+  width: 0;
+  flex-shrink: 0;
+  transition: width .32s cubic-bezier(.4,0,.2,1);
+  overflow: hidden;
+}
+.contact-panel-wrap.open { width: 260px; }
+.contact-panel-inner { width: 260px; height: 100%; }
 .contact-panel {
   width: 260px; flex-shrink: 0;
+  height: 100%;
   background: rgba(255,255,255,0.02);
   border-left: 1px solid var(--sep);
   display: flex; flex-direction: column;
