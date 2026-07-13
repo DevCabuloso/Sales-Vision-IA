@@ -74,6 +74,7 @@ describe('routes/auth', () => {
       const app = buildApp()
       const res = await request(app).post('/api/auth/login').send({ email: 'x@x.com', password: 'senha123' })
       expect(res.status).toBe(401)
+      expect(mockState.logUsage).toHaveBeenCalledWith(null, null, 'login_failed', { email: 'x@x.com', reason: 'not_found' })
     })
 
     it('retorna 401 quando o usuário está inativo', async () => {
@@ -81,6 +82,7 @@ describe('routes/auth', () => {
       const app = buildApp()
       const res = await request(app).post('/api/auth/login').send({ email: 'ana@ex.com', password: 'senha123' })
       expect(res.status).toBe(401)
+      expect(mockState.logUsage).toHaveBeenCalledWith(null, null, 'login_failed', { email: 'ana@ex.com', reason: 'inactive' })
     })
 
     it('retorna 402 quando o pagamento está pendente (usuário não-owner)', async () => {
@@ -131,6 +133,7 @@ describe('routes/auth', () => {
       const app = buildApp()
       const res = await request(app).post('/api/auth/login').send({ email: 'ana@ex.com', password: 'senha-errada' })
       expect(res.status).toBe(401)
+      expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'login_failed', { email: 'ana@ex.com', reason: 'wrong_password' })
     })
 
     it('loga com sucesso, seta o cookie e monta o mapa de features', async () => {
@@ -176,6 +179,22 @@ describe('routes/auth', () => {
       expect(res.status).toBe(201)
       expect(res.body.user.tenantSlug).toBe('empresa-ana')
       expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'register')
+    })
+
+    // Regressão: sem transação multi-tabela via REST, se o insert do usuário falhar depois
+    // do tenant já ter sido criado, o tenant ficava órfão (sem nenhum usuário) no banco.
+    it('desfaz o tenant recém-criado quando a criação do usuário admin falha', async () => {
+      setSupabase({
+        users: [{ data: [], error: null }, { data: null, error: { message: 'insert failed', code: '23502' } }],
+        tenants: [{ data: [], error: null }, { data: [{ id: 'tenant-1', name: 'Empresa Ana', slug: 'empresa-ana' }], error: null }],
+      })
+      const app = buildApp()
+      const res = await request(app).post('/api/auth/register').send({
+        name: 'Ana', companyName: 'Empresa Ana', email: 'ana@ex.com', password: 'senha1234',
+      })
+      expect(res.status).toBe(500)
+      const tenantDelete = supabaseMock.calls.find((c) => c.table === 'tenants' && c.method === 'delete')
+      expect(tenantDelete).toBeTruthy()
     })
   })
 
@@ -228,6 +247,7 @@ describe('routes/auth', () => {
       const app = buildApp()
       const res = await request(app).post('/api/auth/change-password').send({ currentPassword: 'atual-errada', newPassword: 'novasenha123' })
       expect(res.status).toBe(401)
+      expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'password_change_failed')
     })
 
     it('altera a senha com sucesso', async () => {
@@ -236,6 +256,7 @@ describe('routes/auth', () => {
       const res = await request(app).post('/api/auth/change-password').send({ currentPassword: 'atual', newPassword: 'novasenha123' })
       expect(res.status).toBe(200)
       expect(res.body).toEqual({ changed: true })
+      expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'password_changed')
     })
   })
 })

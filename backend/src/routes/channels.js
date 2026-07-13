@@ -64,6 +64,23 @@ channelsRouter.post('/', requireAuth, requireTenant, async (req, res) => {
       throw new Error(err.message || `Evolution erro ${r.status}`)
     }
 
+    // Registra o webhook já na criação — sem isso a instância cai no webhook global da
+    // Evolution (sem o header do EVOLUTION_WEBHOOK_SECRET) e fica surda em produção.
+    const webhookUrl = `${config.backendUrl}/webhooks/evolution/${req.user.tenantId}`
+    await evoFetch(`/webhook/set/${instance}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        webhook: {
+          enabled: true,
+          url: webhookUrl,
+          webhookByEvents: false,
+          webhookBase64: true,
+          headers: config.evolution.webhookSecret ? { apikey: config.evolution.webhookSecret } : null,
+          events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'MESSAGES_UPDATE', 'SEND_MESSAGE'],
+        },
+      }),
+    }).catch((e) => console.error('[channels] falha ao registrar webhook na criação:', e.message))
+
     res.json({ channel: { ...channel, instance_name: instance } })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -88,7 +105,7 @@ channelsRouter.get('/:id/qr', requireAuth, requireTenant, async (req, res) => {
         await evoFetch('/instance/create', {
           method: 'POST',
           body: JSON.stringify({ instanceName: channel.instance_name, integration: 'WHATSAPP-BAILEYS' }),
-        }).catch(() => {})
+        }).catch((e) => console.warn('[channels/qr] falha ao recriar instância:', e.message))
       }
       // Aguarda a instância estabilizar antes de pedir o QR
       await new Promise((resolve) => setTimeout(resolve, 1500))
@@ -226,7 +243,9 @@ channelsRouter.post('/:id/revalidate-webhook', requireAuth, requireTenant, async
     if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
 
     const webhookUrl = `${config.backendUrl}/webhooks/evolution/${req.user.tenantId}`
-    // Evolution API v2 espera body aninhado em { webhook: { ... } } com camelCase
+    // Evolution API v2 espera body aninhado em { webhook: { ... } } com camelCase.
+    // O header carrega o EVOLUTION_WEBHOOK_SECRET — sem ele, a Evolution chama o
+    // webhook sem nenhuma credencial e a validação em routes/webhooks.js rejeita tudo.
     const r = await evoFetch(`/webhook/set/${rows[0].instance_name}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -235,6 +254,7 @@ channelsRouter.post('/:id/revalidate-webhook', requireAuth, requireTenant, async
           url: webhookUrl,
           webhookByEvents: false,
           webhookBase64: true,
+          headers: config.evolution.webhookSecret ? { apikey: config.evolution.webhookSecret } : null,
           events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'MESSAGES_UPDATE', 'SEND_MESSAGE'],
         },
       }),
@@ -261,10 +281,12 @@ channelsRouter.post('/:id/disconnect', requireAuth, requireTenant, async (req, r
     const { instance_name } = rows[0]
 
     // Logout da sessão WhatsApp
-    await evoFetch(`/instance/logout/${instance_name}`, { method: 'DELETE' }).catch(() => {})
+    await evoFetch(`/instance/logout/${instance_name}`, { method: 'DELETE' })
+      .catch((e) => console.warn('[channels/disconnect] falha ao fazer logout na Evolution:', e.message))
 
     // Reinicia a instância imediatamente para deixá-la pronta para novo QR
-    await evoFetch(`/instance/restart/${instance_name}`, { method: 'POST' }).catch(() => {})
+    await evoFetch(`/instance/restart/${instance_name}`, { method: 'POST' })
+      .catch((e) => console.warn('[channels/disconnect] falha ao reiniciar instância:', e.message))
 
     unwrap(await supabase.from('channels').update({
       status: 'disconnected', phone: null, updated_at: new Date().toISOString(),
@@ -287,8 +309,10 @@ channelsRouter.delete('/:id', requireAuth, requireTenant, async (req, res) => {
 
     // a Evolution recusa excluir uma instância ainda conectada — desconecta antes de excluir
     const { instance_name } = rows[0]
-    await evoFetch(`/instance/logout/${instance_name}`, { method: 'DELETE' }).catch(() => {})
-    await evoFetch(`/instance/delete/${instance_name}`, { method: 'DELETE' }).catch(() => {})
+    await evoFetch(`/instance/logout/${instance_name}`, { method: 'DELETE' })
+      .catch((e) => console.warn('[channels/delete] falha ao fazer logout na Evolution:', e.message))
+    await evoFetch(`/instance/delete/${instance_name}`, { method: 'DELETE' })
+      .catch((e) => console.warn('[channels/delete] falha ao remover instância na Evolution:', e.message))
 
     unwrap(await supabase.from('channels').delete().eq('id', req.params.id))
     res.json({ deleted: true })

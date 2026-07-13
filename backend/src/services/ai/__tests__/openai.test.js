@@ -31,6 +31,16 @@ describe('ai/openai service', () => {
       expect(opts.headers.Authorization).toBe('Bearer tenant-key')
     })
 
+    it('define um timeout na chamada para não travar indefinidamente se a OpenAI não responder', async () => {
+      const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+      })
+      await chat({ messages: [] })
+      const [, opts] = fetchMock.mock.calls[0]
+      expect(opts.signal).toBeInstanceOf(AbortSignal)
+    })
+
     it('monta o body com model/temperature/tools/tool_choice/response_format quando fornecidos', async () => {
       const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({
         ok: true,
@@ -109,6 +119,13 @@ describe('ai/openai service', () => {
       })
       const result = await transcribeAudio(Buffer.from('audio-bytes'), 'audio/ogg', 'nota.ogg')
       expect(result).toBe('transcrição de teste')
+    })
+
+    it('define um timeout na chamada para não travar indefinidamente se a OpenAI não responder', async () => {
+      const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ text: 'x' }) })
+      await transcribeAudio(Buffer.from('x'), 'audio/ogg')
+      const [, opts] = fetchMock.mock.calls[0]
+      expect(opts.signal).toBeInstanceOf(AbortSignal)
     })
 
     it('lança erro com mensagem da API quando falha', async () => {

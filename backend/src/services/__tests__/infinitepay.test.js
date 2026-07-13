@@ -42,6 +42,8 @@ describe('infinitepay service', () => {
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe('https://api.checkout.infinitepay.io/links')
     expect(opts.method).toBe('POST')
+    // Sem timeout, uma InfinitePay lenta pendura a requisição indefinidamente.
+    expect(opts.signal).toBeInstanceOf(AbortSignal)
     const body = JSON.parse(opts.body)
     expect(body.handle).toBe('meu-handle')
     expect(body.order_nsu).toBe('order-1')

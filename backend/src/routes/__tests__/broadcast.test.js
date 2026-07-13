@@ -140,6 +140,44 @@ describe('routes/broadcast', () => {
       expect(res.status).toBe(200)
       expect(res.body).toEqual({ deleted: true })
     })
+
+    // Regressão: broadcast_contacts.campaign_id referencia broadcast_campaigns(id) sem
+    // ON DELETE CASCADE — apagar a campanha sem apagar os contatos primeiro falha por
+    // violação de FK sempre que a campanha já tiver algum contato importado/enviado.
+    it('apaga os contatos da campanha antes de apagar a campanha (evita violação de FK)', async () => {
+      setSupabase({ broadcast_campaigns: [{ data: [{ status: 'completed' }], error: null }] })
+      const app = buildApp()
+      const res = await request(app).delete('/api/broadcast/campaigns/camp-1')
+      expect(res.status).toBe(200)
+
+      const deleteCalls = supabaseMock.calls.filter((c) => c.method === 'delete')
+      const contactsDeleteIdx = deleteCalls.findIndex((c) => c.table === 'broadcast_contacts')
+      const campaignDeleteIdx = deleteCalls.findIndex((c) => c.table === 'broadcast_campaigns')
+      expect(contactsDeleteIdx).toBeGreaterThanOrEqual(0)
+      expect(contactsDeleteIdx).toBeLessThan(campaignDeleteIdx)
+    })
+  })
+
+  describe('GET /campaigns/:id/contacts', () => {
+    it('pagina com limit/offset padrão (2000/0) e devolve os metadados', async () => {
+      setSupabase({ broadcast_contacts: [{ data: [{ id: 'c1' }], error: null }] })
+      const app = buildApp()
+      const res = await request(app).get('/api/broadcast/campaigns/camp-1/contacts')
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ contacts: [{ id: 'c1' }], limit: 2000, offset: 0 })
+      const rangeCall = supabaseMock.calls.find((c) => c.table === 'broadcast_contacts' && c.method === 'range')
+      expect(rangeCall.args).toEqual([0, 1999])
+    })
+
+    it('aceita limit/offset customizados via query, respeitando o teto de 5000', async () => {
+      setSupabase({ broadcast_contacts: [{ data: [], error: null }] })
+      const app = buildApp()
+      const res = await request(app).get('/api/broadcast/campaigns/camp-1/contacts?limit=99999&offset=40')
+      expect(res.body.limit).toBe(5000)
+      expect(res.body.offset).toBe(40)
+      const rangeCall = supabaseMock.calls.find((c) => c.table === 'broadcast_contacts' && c.method === 'range')
+      expect(rangeCall.args).toEqual([40, 5039])
+    })
   })
 
   describe('POST /campaigns/:id/contacts', () => {
@@ -147,6 +185,38 @@ describe('routes/broadcast', () => {
       const app = buildApp()
       const res = await request(app).post('/api/broadcast/campaigns/camp-1/contacts').send({ contacts: [{ phone: '123' }] })
       expect(res.status).toBe(400)
+    })
+
+    // Regra de negócio: no máximo 5000 contatos por requisição (contactSchema.max(5000))
+    // — evita payloads gigantes travando o servidor num único insert.
+    // buildApp() usa o limite padrão do express.json (100kb) — pequeno demais pra um
+    // payload de 5000 contatos; em produção (app.js) o limite real é 2mb. Usamos um app
+    // dedicado aqui só para não bater no limite de tamanho do body, que é ortogonal à
+    // regra de negócio (zod .max(5000)) que estes dois testes querem provar.
+    function buildAppWithLargerBodyLimit() {
+      const app = express()
+      app.use(express.json({ limit: '2mb' }))
+      app.use('/api/broadcast', broadcastRouter)
+      return app
+    }
+
+    it('aceita exatamente 5000 contatos (limite superior permitido)', async () => {
+      setSupabase({})
+      const contacts = Array.from({ length: 5000 }, (_, i) => ({ phone: `1198888${String(i).padStart(4, '0')}` }))
+      const app = buildAppWithLargerBodyLimit()
+      const res = await request(app).post('/api/broadcast/campaigns/camp-1/contacts').send({ contacts })
+      expect(res.status).toBe(201)
+      expect(res.body).toEqual({ imported: 5000 })
+    })
+
+    it('rejeita 5001 contatos numa única requisição (acima do limite)', async () => {
+      setSupabase({})
+      const contacts = Array.from({ length: 5001 }, (_, i) => ({ phone: `1198888${String(i).padStart(4, '0')}` }))
+      const app = buildAppWithLargerBodyLimit()
+      const res = await request(app).post('/api/broadcast/campaigns/camp-1/contacts').send({ contacts })
+      expect(res.status).toBe(400)
+      // não deve ter tentado inserir nada
+      expect(insertCallsFor('broadcast_contacts').length).toBe(0)
     })
 
     it('importa contatos normalizando o telefone para apenas dígitos', async () => {

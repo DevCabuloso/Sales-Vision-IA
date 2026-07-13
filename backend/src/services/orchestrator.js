@@ -7,6 +7,7 @@ import { isWithinBusinessHours, getOffMessage } from '../routes/business-hours.j
 import { uploadChatMedia } from './mediaStorage.js'
 import { decryptJSON } from './crypto.js'
 import { ttlGet, ttlInvalidate } from '../utils/ttlCache.js'
+import { normalizePhone } from '../utils/phone.js'
 
 // Quantas mensagens recentes entram no contexto da IA — sem isso, a query e o
 // prompt cresceriam sem limite conforme a conversa envelhece.
@@ -23,11 +24,6 @@ export function invalidateTenantCache(tenantId) {
 /**
  * Processa uma mensagem recebida de um lead via WhatsApp.
  */
-/** Normaliza número de telefone: só dígitos, sem espaços/traços/+. */
-function normalizePhone(raw) {
-  return (raw || '').replace(/\D/g, '')
-}
-
 /** Registra mensagem enviada pela plataforma para evitar duplicata do webhook fromMe. */
 const _sentByPlatform = new Map()
 export function markSentByPlatform(tenantId, phone, text) {
@@ -353,7 +349,8 @@ export async function handleInboundMessage({
 /** Busca e persiste o nome do grupo uma única vez (cacheado em leads.group_subject). */
 async function resolveGroupSubject(lead, instanceName, groupJid) {
   if (lead.group_subject) return
-  const subject = await whatsapp.evolution.getGroupSubject(instanceName, groupJid).catch(() => null)
+  const subject = await whatsapp.evolution.getGroupSubject(instanceName, groupJid)
+    .catch((e) => { console.warn('[orchestrator] falha ao buscar nome do grupo:', e.message); return null })
   if (subject) {
     await supabase.from('leads').update({ group_subject: subject, name: subject }).eq('id', lead.id)
     lead.group_subject = subject

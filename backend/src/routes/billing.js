@@ -64,14 +64,19 @@ billingRouter.post('/trial-signup', async (req, res) => {
     if (!tenant) return res.status(500).json({ error: 'Erro ao criar conta. Tente novamente.' })
 
     const password_hash = await hashPassword(password)
-    const users = unwrap(
-      await supabase
-        .from('users')
-        .insert({ tenant_id: tenant.id, email: normalizedEmail, password_hash, name, role: 'admin' })
-        .select()
-    )
-    const user = users?.[0]
-    if (!user) return res.status(500).json({ error: 'Erro ao criar usuário. Tente novamente.' })
+    const { data: userRows, error: userErr } = await supabase
+      .from('users')
+      .insert({ tenant_id: tenant.id, email: normalizedEmail, password_hash, name, role: 'admin' })
+      .select()
+    const user = userRows?.[0]
+    // sem transação multi-tabela via REST: se a criação do usuário falhar, desfaz o
+    // tenant recém-criado para não deixar um tenant "pending_payment" órfão (sem
+    // nenhum usuário e sem pedido de checkout) no banco.
+    if (userErr || !user) {
+      await supabase.from('tenants').delete().eq('id', tenant.id)
+      if (userErr?.code === '23505') return res.status(409).json({ error: 'Este e-mail já está cadastrado.' })
+      return res.status(500).json({ error: 'Erro ao criar usuário. Tente novamente.' })
+    }
 
     const orderNsu = `trial-${tenant.id}-${randomUUID()}`
     const amountCents = config.billing.trialPlanPriceCents

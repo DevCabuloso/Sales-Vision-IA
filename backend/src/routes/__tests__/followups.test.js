@@ -150,11 +150,25 @@ describe('routes/followups', () => {
     })
   })
 
-  it('DELETE /:id remove a sequência', async () => {
-    setSupabase({})
-    const app = buildApp()
-    const res = await request(app).delete('/api/followups/s1')
-    expect(res.status).toBe(200)
+  describe('DELETE /:id', () => {
+    // Regressão: followup_steps/followup_enrollments referenciam a sequência via FK sem
+    // ON DELETE CASCADE — apagar a sequência sem tratar isso falharia por violação de FK.
+    it('remove a sequência e suas etapas quando não há inscrições', async () => {
+      setSupabase({ followup_enrollments: [{ data: [], error: null }] })
+      const app = buildApp()
+      const res = await request(app).delete('/api/followups/s1')
+      expect(res.status).toBe(200)
+      expect(deleteCallsFor('followup_steps')).toHaveLength(1)
+      expect(deleteCallsFor('followup_sequences')).toHaveLength(1)
+    })
+
+    it('bloqueia a exclusão quando há contatos inscritos (ativos ou concluídos)', async () => {
+      setSupabase({ followup_enrollments: [{ data: [{ id: 'enr-1' }], error: null }] })
+      const app = buildApp()
+      const res = await request(app).delete('/api/followups/s1')
+      expect(res.status).toBe(400)
+      expect(deleteCallsFor('followup_sequences')).toHaveLength(0)
+    })
   })
 
   describe('POST /:id/duplicate', () => {

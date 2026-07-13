@@ -215,7 +215,7 @@ internalGroupsRouter.post('/:id/location', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
-// PATCH /:id — editar nome / membros
+// PATCH /:id — editar nome / membros (só quem participa do grupo)
 internalGroupsRouter.patch('/:id', async (req, res) => {
   const parsed = updateGroupSchema.safeParse(req.body || {})
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
@@ -226,6 +226,10 @@ internalGroupsRouter.patch('/:id', async (req, res) => {
         .select('created_by').eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
     )
     if (!rows.length) return res.status(404).json({ error: 'Grupo não encontrado.' })
+
+    const { data: mem } = await supabase.from('internal_group_members')
+      .select('group_id').eq('group_id', req.params.id).eq('user_id', req.user.id).limit(1)
+    if (!mem?.length) return res.status(403).json({ error: 'Acesso negado.' })
 
     const update = { updated_at: new Date().toISOString() }
     if (name?.trim()) update.name = name.trim()
@@ -241,7 +245,7 @@ internalGroupsRouter.patch('/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
-// DELETE /:id
+// DELETE /:id — só quem participa do grupo
 internalGroupsRouter.delete('/:id', async (req, res) => {
   try {
     const rows = unwrap(
@@ -249,6 +253,11 @@ internalGroupsRouter.delete('/:id', async (req, res) => {
         .select('created_by').eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
     )
     if (!rows.length) return res.status(404).json({ error: 'Grupo não encontrado.' })
+
+    const { data: mem } = await supabase.from('internal_group_members')
+      .select('group_id').eq('group_id', req.params.id).eq('user_id', req.user.id).limit(1)
+    if (!mem?.length) return res.status(403).json({ error: 'Acesso negado.' })
+
     unwrap(await supabase.from('internal_groups').delete().eq('id', req.params.id))
     res.json({ deleted: true })
   } catch (e) { res.status(500).json({ error: e.message }) }

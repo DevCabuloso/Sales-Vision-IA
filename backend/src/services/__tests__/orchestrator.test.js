@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 
 const mockState = vi.hoisted(() => ({
@@ -539,6 +539,52 @@ describe('orchestrator', () => {
       })
 
       expect(supabaseMock.supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('normaliza o telefone (dígitos) ao casar a marca de dedup, então "(11) 98888-7777" bate com "11988887777"', async () => {
+      setSupabase({})
+      markSentByPlatform('tenant-dedupe-norm', '(11) 98888-7777', 'texto idêntico')
+
+      await handleOutboundMessage({
+        tenantId: 'tenant-dedupe-norm', to: '11988887777', text: 'texto idêntico', provider: 'evolution',
+      })
+
+      expect(supabaseMock.supabase.from).not.toHaveBeenCalled()
+    })
+
+    describe('expiração da marca de dedup após 30s (vi.useFakeTimers)', () => {
+      afterEach(() => {
+        vi.useRealTimers()
+      })
+
+      it('volta a processar normalmente a mesma mensagem depois que a marca de 30s expira', async () => {
+        vi.useFakeTimers()
+        setSupabase({})
+        markSentByPlatform('tenant-ttl-1', '5511988887777', 'mensagem enviada pela IA')
+
+        // ainda dentro da janela de 30s — deve ser descartada sem tocar o banco
+        await handleOutboundMessage({
+          tenantId: 'tenant-ttl-1', to: '5511988887777', text: 'mensagem enviada pela IA', provider: 'evolution',
+        })
+        expect(supabaseMock.supabase.from).not.toHaveBeenCalled()
+
+        // marca de novo (a chamada acima consumiu/deletou a entrada) e avança o relógio
+        // além dos 30s configurados em orchestrator.js — a entrada deve expirar sozinha
+        markSentByPlatform('tenant-ttl-1', '5511988887777', 'mensagem enviada pela IA')
+        await vi.advanceTimersByTimeAsync(30_001)
+
+        setSupabase({
+          leads: [{ data: { id: 'lead-ttl-1', group_subject: null }, error: null }],
+          messages: [{ data: [], error: null }],
+        })
+
+        await handleOutboundMessage({
+          tenantId: 'tenant-ttl-1', to: '5511988887777', text: 'mensagem enviada pela IA', provider: 'evolution',
+        })
+
+        // como a marca expirou, o fluxo normal roda de verdade (consulta/upserta o lead)
+        expect(callsFor('leads', 'upsert')).toHaveLength(1)
+      })
     })
 
     it('salva a mensagem enviada manualmente pelo operador (fromMe) como role=agent', async () => {

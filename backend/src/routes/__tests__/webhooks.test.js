@@ -217,6 +217,31 @@ describe('routes/webhooks', () => {
 
       expect(updateCallsFor('broadcast_contacts').length).toBe(0)
     })
+
+    // Regra de negócio: status não pode regredir de 'read' para 'delivered'/'sent' quando
+    // eventos chegam fora de ordem — applyBroadcastStatus() usa .neq('status', 'read') no
+    // update. Como o mock não filtra de verdade (só grava a chamada), o teste prova as duas
+    // partes: (1) o filtro .neq('status','read') é realmente enviado na query, e (2) quando
+    // o banco de verdade filtraria a linha (0 rows afetadas, pois já está 'read'), o código
+    // corretamente NÃO recomputa os contadores da campanha (não há update em broadcast_campaigns).
+    it('envia o filtro .neq(status, read) no update e não recomputa contadores quando nenhuma linha é afetada (já estava "read")', async () => {
+      setSupabase({
+        integrations: [{ data: [{ tenant_id: 'tenant-1', meta: { phoneNumberId: 'phone-1' } }], error: null }],
+        // simula o comportamento real do Postgres: a cláusula .neq('status','read') não
+        // encontra nenhuma linha pra atualizar porque o contato já está 'read'
+        broadcast_contacts: [{ data: [], error: null }],
+      })
+      mockState.metaParseWebhookStatuses.mockReturnValue([{ messageId: 'wamid-1', recipientId: '5511988887777', status: 'delivered', phoneNumberId: 'phone-1' }])
+
+      const app = buildApp()
+      await request(app).post('/webhooks/meta').set('Content-Type', 'application/json').send(JSON.stringify({}))
+      await flush()
+
+      const neqCall = supabaseMock.calls.find((c) => c.table === 'broadcast_contacts' && c.method === 'neq')
+      expect(neqCall.args).toEqual(['status', 'read'])
+      // nenhuma linha afetada -> não deve recomputar/atualizar broadcast_campaigns
+      expect(updateCallsFor('broadcast_campaigns').length).toBe(0)
+    })
   })
 
   describe('POST /evolution (rota universal)', () => {
@@ -227,6 +252,37 @@ describe('routes/webhooks', () => {
       expect(res.status).toBe(403)
       await flush()
       expect(mockState.handleInboundMessage).not.toHaveBeenCalled()
+    })
+
+    it('rejeita com 403 (sem lançar exceção) quando o header é bem mais curto que o secret configurado', async () => {
+      // Regressão: comparação ingênua com crypto.timingSafeEqual (buffers de tamanho
+      // diferente) lançaria aqui em vez de responder 403 — a rota tem que continuar
+      // recusando de forma limpa independente do tamanho do header enviado.
+      config.evolution.webhookSecret = 'segredo-bem-longo-da-evolution'
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution').set('apikey', 'x').send({ event: 'messages.upsert' })
+      expect(res.status).toBe(403)
+    })
+
+    it('rejeita com 403 (sem lançar exceção) quando o header é bem mais longo que o secret configurado', async () => {
+      config.evolution.webhookSecret = 'curto'
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution').set('apikey', 'x'.repeat(500)).send({ event: 'messages.upsert' })
+      expect(res.status).toBe(403)
+    })
+
+    it('aceita quando o secret do header confere exatamente', async () => {
+      config.evolution.webhookSecret = 'segredo-evo'
+      setSupabase({ channels: [{ data: [{ tenant_id: 'tenant-1' }], error: null }] })
+      mockState.evolutionParseWebhook.mockReturnValue({
+        from: '5511988887777', text: 'Oi', instanceName: 'inst-1', fromMe: false, isGroup: false,
+      })
+
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution').set('apikey', 'segredo-evo').send({ event: 'messages.upsert' })
+      expect(res.status).toBe(200)
+      await flush()
+      expect(mockState.handleInboundMessage).toHaveBeenCalled()
     })
 
     it('resolve o tenant pela instância e chama handleInboundMessage para mensagem recebida', async () => {
@@ -315,6 +371,25 @@ describe('routes/webhooks', () => {
       const app = buildApp()
       const res = await request(app).post('/webhooks/evolution/tenant-1').set('apikey', 'errado').send({ event: 'messages.upsert' })
       expect(res.status).toBe(403)
+    })
+
+    it('rejeita com 403 (sem lançar exceção) quando o header tem tamanho diferente do secret configurado', async () => {
+      config.evolution.webhookSecret = 'segredo-bem-longo-da-evolution'
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution/tenant-1').set('apikey', 'x').send({ event: 'messages.upsert' })
+      expect(res.status).toBe(403)
+    })
+
+    it('aceita quando o secret do header confere exatamente', async () => {
+      config.evolution.webhookSecret = 'segredo-evo'
+      setSupabase({})
+      mockState.evolutionParseWebhook.mockReturnValue({ from: '5511988887777', text: 'Oi', instanceName: 'inst-x', fromMe: false })
+
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution/tenant-explicito').set('apikey', 'segredo-evo').send({ event: 'messages.upsert' })
+      expect(res.status).toBe(200)
+      await flush()
+      expect(mockState.handleInboundMessage).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-explicito' }))
     })
 
     it('chama handleOutboundMessage para mensagens fromMe', async () => {

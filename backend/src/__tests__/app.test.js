@@ -51,6 +51,22 @@ describe('app.js — createApp()', () => {
     })
   })
 
+  describe('X-Request-Id (correlação de logs)', () => {
+    it('inclui um X-Request-Id único em toda resposta, mesmo em rotas inexistentes', async () => {
+      setSupabase({})
+      const app = createApp()
+      const res = await request(app).get('/api/rota-que-nao-existe')
+      expect(res.headers['x-request-id']).toBeTruthy()
+    })
+
+    it('reaproveita o X-Request-Id enviado pelo cliente/proxy em vez de gerar outro', async () => {
+      setSupabase({})
+      const app = createApp()
+      const res = await request(app).get('/api/rota-que-nao-existe').set('X-Request-Id', 'meu-id-123')
+      expect(res.headers['x-request-id']).toBe('meu-id-123')
+    })
+  })
+
   describe('rota inexistente', () => {
     it('retorna 404 com mensagem padrão', async () => {
       setSupabase({})

@@ -12,7 +12,7 @@ vi.mock('../../middleware/auth.js', () => ({
 
 vi.mock('../../config/index.js', () => ({
   config: {
-    evolution: { apiUrl: 'https://evo.exemplo.com', apiKey: 'evo-key' },
+    evolution: { apiUrl: 'https://evo.exemplo.com', apiKey: 'evo-key', webhookSecret: 'evo-webhook-secret' },
     backendUrl: 'https://api.exemplo.com',
   },
 }))
@@ -73,6 +73,12 @@ describe('routes/channels', () => {
       expect(fetchMock.mock.calls[0][0]).toBe('https://evo.exemplo.com/instance/create')
       const instanceUpdate = updateCallsFor('channels')[0]
       expect(instanceUpdate.args[0].instance_name).toBe(res.body.channel.instance_name)
+
+      // registra o webhook já na criação, com o header do EVOLUTION_WEBHOOK_SECRET
+      expect(fetchMock.mock.calls[1][0]).toBe(`https://evo.exemplo.com/webhook/set/${res.body.channel.instance_name}`)
+      const webhookBody = JSON.parse(fetchMock.mock.calls[1][1].body)
+      expect(webhookBody.webhook.headers).toEqual({ apikey: 'evo-webhook-secret' })
+      expect(webhookBody.webhook.url).toBe(`https://api.exemplo.com/webhooks/evolution/tenant-1`)
     })
 
     it('retorna 500 com a mensagem da Evolution quando a criação da instância falha', async () => {
@@ -223,7 +229,7 @@ describe('routes/channels', () => {
       expect(res.status).toBe(404)
     })
 
-    it('revalida o webhook com sucesso', async () => {
+    it('revalida o webhook com sucesso e envia o header com o EVOLUTION_WEBHOOK_SECRET', async () => {
       setSupabase({ channels: [{ data: [{ instance_name: 'sdr_x' }], error: null }] })
       const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({}) })
 
@@ -232,6 +238,22 @@ describe('routes/channels', () => {
       expect(res.status).toBe(200)
       expect(res.body.webhookUrl).toBe('https://api.exemplo.com/webhooks/evolution/tenant-1')
       expect(fetchMock.mock.calls[0][0]).toBe('https://evo.exemplo.com/webhook/set/sdr_x')
+      const webhookBody = JSON.parse(fetchMock.mock.calls[0][1].body)
+      expect(webhookBody.webhook.headers).toEqual({ apikey: 'evo-webhook-secret' })
+    })
+
+    it('envia headers: null quando EVOLUTION_WEBHOOK_SECRET não está configurado', async () => {
+      const { config } = await import('../../config/index.js')
+      config.evolution.webhookSecret = ''
+      setSupabase({ channels: [{ data: [{ instance_name: 'sdr_x' }], error: null }] })
+      const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({}) })
+
+      const app = buildApp()
+      await request(app).post('/api/channels/ch1/revalidate-webhook')
+      const webhookBody = JSON.parse(fetchMock.mock.calls[0][1].body)
+      expect(webhookBody.webhook.headers).toBeNull()
+
+      config.evolution.webhookSecret = 'evo-webhook-secret'
     })
 
     it('retorna 500 quando a Evolution rejeita o webhook', async () => {

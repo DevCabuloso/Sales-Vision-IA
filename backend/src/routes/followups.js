@@ -176,9 +176,21 @@ followupsRouter.patch('/:id', async (req, res) => {
   }
 })
 
-// DELETE /api/followups/:id — apaga sequência (acompanhamentos já ativos continuam normalmente)
+// DELETE /api/followups/:id — apaga sequência (bloqueada se houver inscrições, ativas ou
+// concluídas — followup_enrollments.sequence_id e followup_steps.sequence_id referenciam
+// esta linha via FK sem ON DELETE CASCADE, então apagar a sequência com histórico
+// associado falharia por violação de FK; sem inscrições, apaga as etapas antes)
 followupsRouter.delete('/:id', async (req, res) => {
   try {
+    const enrollments = unwrap(
+      await supabase.from('followup_enrollments').select('id')
+        .eq('sequence_id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
+    )
+    if (enrollments.length) {
+      return res.status(400).json({ error: 'Não é possível excluir uma sequência com contatos inscritos. Duplique-a ou remova as inscrições antes.' })
+    }
+
+    await supabase.from('followup_steps').delete().eq('sequence_id', req.params.id).eq('tenant_id', req.user.tenantId)
     await supabase.from('followup_sequences').delete().eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
     res.json({ deleted: true })
   } catch (e) {

@@ -247,8 +247,21 @@ describe('routes/internal-groups', () => {
       expect(res.status).toBe(404)
     })
 
+    it('PATCH retorna 403 quando o usuário não participa do grupo', async () => {
+      setSupabase({
+        internal_groups: [{ data: [{ created_by: 'outro-user' }], error: null }],
+        internal_group_members: [{ data: [], error: null }],
+      })
+      const app = buildApp()
+      const res = await request(app).patch('/api/internal-groups/g1').send({ name: 'Novo nome' })
+      expect(res.status).toBe(403)
+    })
+
     it('PATCH atualiza nome e substitui os membros', async () => {
-      setSupabase({ internal_groups: [{ data: [{ created_by: 'user-1' }], error: null }] })
+      setSupabase({
+        internal_groups: [{ data: [{ created_by: 'user-1' }], error: null }],
+        internal_group_members: [{ data: [{ group_id: 'g1' }], error: null }],
+      })
       const app = buildApp()
       const res = await request(app).patch('/api/internal-groups/g1').send({ name: 'Novo nome', member_ids: ['user-2'] })
       expect(res.status).toBe(200)
@@ -263,8 +276,21 @@ describe('routes/internal-groups', () => {
       expect(res.status).toBe(404)
     })
 
+    it('DELETE retorna 403 quando o usuário não participa do grupo', async () => {
+      setSupabase({
+        internal_groups: [{ data: [{ created_by: 'outro-user' }], error: null }],
+        internal_group_members: [{ data: [], error: null }],
+      })
+      const app = buildApp()
+      const res = await request(app).delete('/api/internal-groups/g1')
+      expect(res.status).toBe(403)
+    })
+
     it('DELETE remove o grupo com sucesso', async () => {
-      setSupabase({ internal_groups: [{ data: [{ created_by: 'user-1' }], error: null }] })
+      setSupabase({
+        internal_groups: [{ data: [{ created_by: 'user-1' }], error: null }],
+        internal_group_members: [{ data: [{ group_id: 'g1' }], error: null }],
+      })
       const app = buildApp()
       const res = await request(app).delete('/api/internal-groups/g1')
       expect(res.status).toBe(200)

@@ -57,11 +57,23 @@ describe('routes/appointments', () => {
     mockState.logUsage = vi.fn().mockResolvedValue(undefined)
   })
 
-  it('GET / lista as reuniões do tenant', async () => {
+  it('GET / lista as reuniões do tenant paginando com limit/offset padrão (500/0)', async () => {
     setSupabase({ appointments: [{ data: [{ id: 'a1', title: 'Demo' }], error: null }] })
     const app = buildApp()
     const res = await request(app).get('/api/appointments')
     expect(res.body.appointments).toHaveLength(1)
+    expect(res.body).toMatchObject({ limit: 500, offset: 0 })
+    const rangeCall = supabaseMock.calls.find((c) => c.table === 'appointments' && c.method === 'range')
+    expect(rangeCall.args).toEqual([0, 499])
+  })
+
+  it('GET / aceita limit/offset customizados via query, respeitando o teto de 1000', async () => {
+    setSupabase({ appointments: [{ data: [], error: null }] })
+    const app = buildApp()
+    const res = await request(app).get('/api/appointments?limit=99999&offset=20')
+    expect(res.body).toMatchObject({ limit: 1000, offset: 20 })
+    const rangeCall = supabaseMock.calls.find((c) => c.table === 'appointments' && c.method === 'range')
+    expect(rangeCall.args).toEqual([20, 1019])
   })
 
   describe('POST /sync', () => {

@@ -4,6 +4,7 @@ import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { analyzeLead } from '../services/ai/analyze.js'
 import { logUsage } from '../services/usage.js'
+import { normalizePhone } from '../utils/phone.js'
 
 export const leadsRouter = Router()
 leadsRouter.use(requireAuth, requireTenant)
@@ -56,7 +57,7 @@ leadsRouter.post('/', async (req, res) => {
   const { data, error } = await supabase.from('leads').insert({
     tenant_id: req.user.tenantId,
     name: d.name || null,
-    phone: d.phone.replace(/\D/g, ''),
+    phone: normalizePhone(d.phone),
     stage: d.stage || 'Novo Lead',
     intention: d.intention || null,
     interests: d.interests || [],

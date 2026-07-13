@@ -48,6 +48,10 @@ authRouter.post('/login', async (req, res) => {
     )
     const user = users?.[0]
     if (!user || !user.active) {
+      // Evento de segurança: tentativa de login com e-mail inexistente/inativo.
+      // Sem tenant/user resolvido ainda, então registra sem tenant_id/user_id —
+      // o e-mail informado vai no meta para permitir detectar força-bruta depois.
+      await logUsage(null, null, 'login_failed', { email, reason: !user ? 'not_found' : 'inactive' })
       return res.status(401).json({ error: 'Credenciais inválidas.' })
     }
 
@@ -77,7 +81,10 @@ authRouter.post('/login', async (req, res) => {
     }
 
     const ok = await verifyPassword(parsed.data.password, user.password_hash)
-    if (!ok) return res.status(401).json({ error: 'Credenciais inválidas.' })
+    if (!ok) {
+      await logUsage(user.tenant_id, user.id, 'login_failed', { email, reason: 'wrong_password' })
+      return res.status(401).json({ error: 'Credenciais inválidas.' })
+    }
 
     await supabase.from('users').update({ last_login_at: new Date().toISOString() }).eq('id', user.id)
     await logUsage(user.tenant_id, user.id, 'login')
@@ -160,14 +167,18 @@ authRouter.post('/register', async (req, res) => {
 
     // cria usuário admin do tenant
     const password_hash = await hashPassword(password)
-    const users = unwrap(
-      await supabase
-        .from('users')
-        .insert({ tenant_id: tenant.id, email: normalizedEmail, password_hash, name, role: 'admin' })
-        .select()
-    )
-    const user = users?.[0]
-    if (!user) return res.status(500).json({ error: 'Erro ao criar usuário. Tente novamente.' })
+    const { data: userRows, error: userErr } = await supabase
+      .from('users')
+      .insert({ tenant_id: tenant.id, email: normalizedEmail, password_hash, name, role: 'admin' })
+      .select()
+    const user = userRows?.[0]
+    // sem transação multi-tabela via REST: se a criação do usuário falhar, desfaz o
+    // tenant recém-criado para não deixar um tenant órfão (sem nenhum usuário) no banco.
+    if (userErr || !user) {
+      await supabase.from('tenants').delete().eq('id', tenant.id)
+      if (userErr?.code === '23505') return res.status(409).json({ error: 'Este e-mail já está cadastrado.' })
+      return res.status(500).json({ error: 'Erro ao criar usuário. Tente novamente.' })
+    }
 
     await logUsage(tenant.id, user.id, 'register')
 
@@ -222,8 +233,12 @@ authRouter.post('/change-password', requireAuth, async (req, res) => {
     )
     if (!users.length) return res.status(404).json({ error: 'Usuário não encontrado.' })
     const ok = await verifyPassword(currentPassword, users[0].password_hash)
-    if (!ok) return res.status(401).json({ error: 'Senha atual incorreta.' })
+    if (!ok) {
+      await logUsage(req.user.tenantId, req.user.id, 'password_change_failed')
+      return res.status(401).json({ error: 'Senha atual incorreta.' })
+    }
     await supabase.from('users').update({ password_hash: await hashPassword(newPassword) }).eq('id', req.user.id)
+    await logUsage(req.user.tenantId, req.user.id, 'password_changed')
     res.json({ changed: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

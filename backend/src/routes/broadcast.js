@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { normalizePhone } from '../utils/phone.js'
 
 export const broadcastRouter = Router()
 broadcastRouter.use(requireAuth, requireTenant)
@@ -102,6 +103,11 @@ broadcastRouter.delete('/campaigns/:id', async (req, res) => {
     if (rows[0]?.status === 'sending') {
       return res.status(400).json({ error: 'Não é possível excluir uma campanha em andamento.' })
     }
+    // broadcast_contacts referencia campaign_id via FK sem ON DELETE CASCADE —
+    // sem apagar os contatos antes, o DELETE da campanha falharia (violação de FK)
+    // sempre que já houvesse algum contato importado/enviado.
+    await supabase.from('broadcast_contacts').delete()
+      .eq('campaign_id', req.params.id).eq('tenant_id', req.user.tenantId)
     await supabase.from('broadcast_campaigns').delete()
       .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
     res.json({ deleted: true })
@@ -115,14 +121,17 @@ broadcastRouter.delete('/campaigns/:id', async (req, res) => {
 // GET /api/broadcast/campaigns/:id/contacts
 broadcastRouter.get('/campaigns/:id/contacts', async (req, res) => {
   try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 2000, 5000)
+    const offset = parseInt(req.query.offset, 10) || 0
+
     const rows = unwrap(
       await supabase.from('broadcast_contacts').select('*')
         .eq('campaign_id', req.params.id)
         .eq('tenant_id', req.user.tenantId)
         .order('created_at', { ascending: true })
-        .limit(2000)
+        .range(offset, offset + limit - 1)
     )
-    res.json({ contacts: rows })
+    res.json({ contacts: rows, limit, offset })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -145,7 +154,7 @@ broadcastRouter.post('/campaigns/:id/contacts', async (req, res) => {
       campaign_id: req.params.id,
       tenant_id:   req.user.tenantId,
       name:        c.name || null,
-      phone:       c.phone.replace(/\D/g, ''),
+      phone:       normalizePhone(c.phone),
     }))
 
     await supabase.from('broadcast_contacts').insert(rows)

@@ -28,6 +28,9 @@ export async function chat({ messages, tools, toolChoice = 'auto', temperature =
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    // Sem timeout, uma resposta lenta/pendurada da OpenAI trava a conversa do
+    // lead inteira (o webhook do WhatsApp fica esperando indefinidamente).
+    signal: AbortSignal.timeout(30000),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
@@ -50,6 +53,7 @@ export async function transcribeAudio(buffer, mimetype, filename = 'audio.ogg', 
     method: 'POST',
     headers: { Authorization: `Bearer ${key}` },
     body: form,
+    signal: AbortSignal.timeout(30000),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {

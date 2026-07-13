@@ -7,6 +7,7 @@ import { logUsage } from '../services/usage.js'
 import { uploadChatMedia } from '../services/mediaStorage.js'
 import { getTenantTimezone } from './business-hours.js'
 import { safeFetch } from '../utils/ssrfGuard.js'
+import { normalizePhone } from '../utils/phone.js'
 
 const ALLOWED_MIMETYPES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif',
@@ -150,7 +151,7 @@ chatRouter.post('/start', async (req, res) => {
   const { phone, name, message } = req.body
   if (!phone) return res.status(400).json({ error: 'Telefone obrigatório.' })
   try {
-    const clean = phone.replace(/\D/g, '')
+    const clean = normalizePhone(phone)
     const lead = unwrap(
       await supabase.from('leads').upsert({
         tenant_id: req.user.tenantId,

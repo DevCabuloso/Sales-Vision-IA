@@ -3,7 +3,7 @@ import express from 'express'
 import request from 'supertest'
 import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 
-const mockState = vi.hoisted(() => ({ box: {}, user: null, hashPassword: null }))
+const mockState = vi.hoisted(() => ({ box: {}, user: null, hashPassword: null, logUsage: null }))
 
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = mockState.user; next() },
@@ -20,6 +20,10 @@ vi.mock('../../db/supabase.js', () => ({
 
 vi.mock('../../services/auth.js', () => ({
   hashPassword: (...args) => mockState.hashPassword(...args),
+}))
+
+vi.mock('../../services/usage.js', () => ({
+  logUsage: (...args) => mockState.logUsage(...args),
 }))
 
 const { operatorsRouter } = await import('../operators.js')
@@ -44,6 +48,7 @@ describe('routes/operators', () => {
     vi.clearAllMocks()
     mockState.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }
     mockState.hashPassword = vi.fn().mockResolvedValue('hashed-pw')
+    mockState.logUsage = vi.fn().mockResolvedValue(undefined)
   })
 
   it('GET / lista operadores excluindo o owner', async () => {
@@ -128,6 +133,25 @@ describe('routes/operators', () => {
       const res = await request(app).patch('/api/operators/u1').send({ role: 'admin' })
       expect(res.status).toBe(200)
     })
+
+    it('registra um evento de auditoria quando role/permissions/is_restricted/active mudam', async () => {
+      setSupabase({ users: [{ data: { id: 'u1', role: 'admin' }, error: null }] })
+      const app = buildApp()
+      const res = await request(app).patch('/api/operators/u1').send({ role: 'admin' })
+      expect(res.status).toBe(200)
+      expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'operator_permissions_changed', {
+        targetUserId: 'u1',
+        changes: { role: 'admin', permissions: expect.any(Object) },
+      })
+    })
+
+    it('não registra evento de auditoria quando só campos não sensíveis mudam (ex.: nome)', async () => {
+      setSupabase({ users: [{ data: { id: 'u1', name: 'Novo' }, error: null }] })
+      const app = buildApp()
+      const res = await request(app).patch('/api/operators/u1').send({ name: 'Novo' })
+      expect(res.status).toBe(200)
+      expect(mockState.logUsage).not.toHaveBeenCalled()
+    })
   })
 
   describe('POST /:id/reset-password', () => {
@@ -137,12 +161,13 @@ describe('routes/operators', () => {
       expect(res.status).toBe(400)
     })
 
-    it('reseta a senha com sucesso', async () => {
+    it('reseta a senha com sucesso e registra um evento de auditoria', async () => {
       setSupabase({})
       const app = buildApp()
       const res = await request(app).post('/api/operators/u1/reset-password').send({ password: 'novasenha123' })
       expect(res.status).toBe(200)
       expect(res.body).toEqual({ reset: true })
+      expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'operator_password_reset', { targetUserId: 'u1' })
     })
   })
 

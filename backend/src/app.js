@@ -9,6 +9,7 @@ import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import cookieParser from 'cookie-parser'
 import { config } from './config/index.js'
+import { requestId } from './middleware/requestId.js'
 import { authRouter } from './routes/auth.js'
 import { leadsRouter } from './routes/leads.js'
 import { appointmentsRouter } from './routes/appointments.js'
@@ -82,6 +83,9 @@ export function createApp() {
   app.use(helmet())
   app.use(cors({ origin: config.frontendUrl, credentials: true }))
   app.use(cookieParser())
+  // Correlação: um ID por requisição (req.requestId), devolvido também no header
+  // X-Request-Id — ver middleware/requestId.js para o racional e limitações atuais.
+  app.use(requestId)
 
   // Webhooks montados ANTES do express.json() para que /webhooks/meta
   // possa usar express.raw() e verificar a assinatura HMAC do Meta
@@ -153,7 +157,11 @@ export function createApp() {
   // handler de erro global
   app.use((err, req, res, _next) => {
     const status = err.status || err.statusCode || 500
-    console.error(`[erro] ${req.method} ${req.originalUrl} ->`, err.message)
+    // Inclui requestId no log (quando presente) para permitir cruzar este erro nos
+    // logs do PM2 com o header X-Request-Id devolvido ao cliente. Os demais
+    // console.* espalhados pelo código ainda não incluem esse ID (fora do escopo
+    // desta mudança) — ver middleware/requestId.js.
+    console.error(`[erro]${req.requestId ? ` [${req.requestId}]` : ''} ${req.method} ${req.originalUrl} ->`, err.message)
     res.status(status).json({ error: status === 413 ? 'Payload muito grande.' : 'Erro interno do servidor.' })
   })
 

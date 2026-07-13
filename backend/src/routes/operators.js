@@ -4,6 +4,7 @@ import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { hashPassword } from '../services/auth.js'
 import { passwordSchema } from '../utils/passwordSchema.js'
+import { logUsage } from '../services/usage.js'
 
 export const operatorsRouter = Router()
 operatorsRouter.use(requireAuth, requireTenant)
@@ -139,6 +140,21 @@ operatorsRouter.patch('/:id', requireAdmin, async (req, res) => {
         .neq('role', 'owner')
         .select(SELECT_COLS).single()
     )
+
+    // Evento de segurança/auditoria: mudança de permissão/role/status de outro
+    // usuário é sensível o bastante para registrar quem mudou o quê, mesmo sem
+    // um sistema de auditoria completo — cobre só os campos realmente sensíveis.
+    const sensitiveChange = {}
+    for (const key of ['role', 'permissions', 'is_restricted', 'active']) {
+      if (key in update) sensitiveChange[key] = update[key]
+    }
+    if (Object.keys(sensitiveChange).length) {
+      await logUsage(req.user.tenantId, req.user.id, 'operator_permissions_changed', {
+        targetUserId: req.params.id,
+        changes: sensitiveChange,
+      })
+    }
+
     res.json({ operator: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -156,6 +172,7 @@ operatorsRouter.post('/:id/reset-password', requireAdmin, async (req, res) => {
   try {
     await supabase.from('users').update({ password_hash: await hashPassword(parsed.data.password) })
       .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).neq('role', 'owner')
+    await logUsage(req.user.tenantId, req.user.id, 'operator_password_reset', { targetUserId: req.params.id })
     res.json({ reset: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

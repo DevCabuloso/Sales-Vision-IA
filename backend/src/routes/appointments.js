@@ -10,13 +10,17 @@ appointmentsRouter.use(requireAuth, requireTenant)
 
 // ─── GET /api/appointments ───
 appointmentsRouter.get('/', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000)
+  const offset = parseInt(req.query.offset, 10) || 0
+
   const rows = unwrap(
     await supabase.from('appointments')
       .select('id, lead_id, lead_name, title, provider, external_id, start_time, end_time, meeting_link, status')
       .eq('tenant_id', req.user.tenantId)
       .order('start_time', { ascending: false })
+      .range(offset, offset + limit - 1)
   )
-  res.json({ appointments: rows })
+  res.json({ appointments: rows, limit, offset })
 })
 
 // ─── POST /api/appointments/sync ─── importa eventos do Google Calendar

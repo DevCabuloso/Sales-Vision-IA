@@ -25,6 +25,9 @@ export async function createCheckoutLink({ orderNsu, amountCents, description, c
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    // Sem timeout, uma InfinitePay lenta/instável pendura a requisição de
+    // checkout indefinidamente (o cliente fica esperando o link de pagamento).
+    signal: AbortSignal.timeout(15000),
   })
   const data = await r.json().catch(() => ({}))
   if (!r.ok || !data.url) {

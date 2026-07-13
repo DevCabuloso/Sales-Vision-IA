@@ -4,6 +4,7 @@ import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import multer from 'multer'
 import * as XLSX from 'xlsx'
+import { normalizePhone } from '../utils/phone.js'
 
 export const contactsRouter = Router()
 contactsRouter.use(requireAuth, requireTenant)
@@ -159,7 +160,7 @@ contactsRouter.post('/import', upload.single('file'), async (req, res) => {
       const emailIdx = header.findIndex((h) => h.includes('email') || h.includes('e-mail'))
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i].split(/[,;]/).map((c) => c.trim().replace(/^"|"$/g, ''))
-        const phone = phoneIdx >= 0 ? cols[phoneIdx]?.replace(/\D/g, '') : null
+        const phone = phoneIdx >= 0 ? normalizePhone(cols[phoneIdx]) : null
         if (!phone || phone.length < 6) continue
         rows.push({
           name:  nameIdx >= 0 ? cols[nameIdx] || null : null,
@@ -176,7 +177,7 @@ contactsRouter.post('/import', upload.single('file'), async (req, res) => {
         const nameKey  = Object.keys(row).find((k) => k.toLowerCase().includes('nome') || k.toLowerCase().includes('name'))
         const phoneKey = Object.keys(row).find((k) => k.toLowerCase().includes('tel') || k.toLowerCase().includes('fone') || k.toLowerCase().includes('phone') || k.toLowerCase().includes('cel') || k.toLowerCase().includes('whats'))
         const emailKey = Object.keys(row).find((k) => k.toLowerCase().includes('email'))
-        const phone = phoneKey ? String(row[phoneKey]).replace(/\D/g, '') : null
+        const phone = phoneKey ? normalizePhone(String(row[phoneKey])) : null
         if (!phone || phone.length < 6) continue
         rows.push({ name: nameKey ? String(row[nameKey]) || null : null, phone, email: emailKey ? String(row[emailKey]) || null : null })
       }

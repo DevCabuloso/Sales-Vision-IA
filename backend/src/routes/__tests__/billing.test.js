@@ -100,6 +100,28 @@ describe('routes/billing', () => {
       expect(checkoutCall.webhookUrl).toMatch(/^https:\/\/api\.exemplo\.com\/api\/billing\/webhook\?token=/)
       expect(checkoutCall.amountCents).toBe(49700)
     })
+
+    // Regressão: sem transação multi-tabela via REST, se o insert do usuário falhar depois
+    // do tenant "pending_payment" já ter sido criado, o tenant ficava órfão no banco.
+    it('desfaz o tenant recém-criado quando a criação do usuário admin falha', async () => {
+      setSupabase({
+        users: [
+          { data: [], error: null }, // checagem de e-mail existente
+          { data: null, error: { message: 'insert failed', code: '23502' } }, // insert de usuário falha
+        ],
+        tenants: [
+          { data: [], error: null }, // checagem de slug duplicado
+          { data: [{ id: 'tenant-1', name: 'Empresa Ana' }], error: null }, // insert do tenant
+        ],
+      })
+      const app = buildApp()
+      const res = await request(app).post('/api/billing/trial-signup').send(validPayload)
+
+      expect(res.status).toBe(500)
+      const tenantDelete = supabaseMock.calls.find((c) => c.table === 'tenants' && c.method === 'delete')
+      expect(tenantDelete).toBeTruthy()
+      expect(mockState.createCheckoutLink).not.toHaveBeenCalled()
+    })
   })
 
   describe('GET /orders/:orderNsu/status', () => {

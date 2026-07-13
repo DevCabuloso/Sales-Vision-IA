@@ -18,6 +18,19 @@ const hubVerifyQuerySchema = z.object({
   'hub.challenge':     z.string().optional(),
 })
 
+// Compara duas strings em tempo constante SEM depender de terem o mesmo
+// tamanho (diferente de crypto.timingSafeEqual puro, que lança se os buffers
+// tiverem tamanhos diferentes). Faz hash de cada lado para um digest de
+// tamanho fixo (32 bytes) antes de comparar — assim nem o timing do próprio
+// check de tamanho vaza informação sobre o quão perto o valor informado está
+// do secret esperado (o mesmo cuidado que já existe pra assinatura HMAC da
+// Meta acima, só que aqui os dois lados podem ter tamanhos arbitrários).
+function timingSafeStringEqual(a, b) {
+  const hashA = crypto.createHash('sha256').update(String(a ?? '')).digest()
+  const hashB = crypto.createHash('sha256').update(String(b ?? '')).digest()
+  return crypto.timingSafeEqual(hashA, hashB)
+}
+
 // Formato exato de um header X-Hub-Signature-256 válido (sha256=<64 hex>).
 // Validar isso ANTES de comparar com crypto.timingSafeEqual é obrigatório:
 // timingSafeEqual lança se os dois buffers não tiverem o mesmo tamanho, e um
@@ -197,7 +210,7 @@ webhooksRouter.post('/evolution',
     }
     if (config.evolution.webhookSecret) {
       const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
-      if (provided !== config.evolution.webhookSecret) {
+      if (!timingSafeStringEqual(provided, config.evolution.webhookSecret)) {
         console.warn('[webhook evolution] secret inválido')
         return res.sendStatus(403)
       }
@@ -272,7 +285,7 @@ webhooksRouter.post('/evolution/:tenantId',
     // Verificação do secret da Evolution via header apikey
     if (config.evolution.webhookSecret) {
       const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
-      if (provided !== config.evolution.webhookSecret) {
+      if (!timingSafeStringEqual(provided, config.evolution.webhookSecret)) {
         console.warn(`[webhook evolution] secret inválido para tenant=${req.params.tenantId}`)
         return res.sendStatus(403)
       }
