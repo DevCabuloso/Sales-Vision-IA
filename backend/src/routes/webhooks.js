@@ -102,7 +102,14 @@ webhooksRouter.get('/meta', (req, res) => {
 webhooksRouter.post('/meta',
   express.raw({ type: 'application/json', limit: '10mb' }),
   async (req, res) => {
-    // Verificação HMAC — obrigatória quando META_APP_SECRET estiver configurado
+    // Em produção a verificação HMAC é obrigatória: sem META_APP_SECRET configurado,
+    // qualquer requisição não assinada seria aceita como se viesse da Meta (forjar
+    // mensagens/leads em qualquer tenant). Em dev, sem a secret, a rota fica aberta
+    // de propósito para facilitar testes locais sem precisar configurar tudo.
+    if (process.env.NODE_ENV === 'production' && !config.meta.appSecret) {
+      console.error('[webhook meta] META_APP_SECRET ausente em produção — recusando requisição')
+      return res.sendStatus(403)
+    }
     if (config.meta.appSecret) {
       const sigParsed = metaSignatureSchema.safeParse(req.headers['x-hub-signature-256'])
       if (!sigParsed.success) {
@@ -180,6 +187,14 @@ webhooksRouter.post('/meta',
 webhooksRouter.post('/evolution',
   express.json({ limit: '10mb' }),
   async (req, res) => {
+    // Mesma lógica de fail-closed do webhook da Meta acima: em produção, sem
+    // EVOLUTION_WEBHOOK_SECRET configurado, esta rota resolve o tenant só pelo
+    // nome da instância vindo do payload — sem a secret, qualquer requisição
+    // externa conseguiria injetar mensagens/leads falsos em qualquer tenant.
+    if (process.env.NODE_ENV === 'production' && !config.evolution.webhookSecret) {
+      console.error('[webhook evolution] EVOLUTION_WEBHOOK_SECRET ausente em produção — recusando requisição')
+      return res.sendStatus(403)
+    }
     if (config.evolution.webhookSecret) {
       const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
       if (provided !== config.evolution.webhookSecret) {
@@ -249,6 +264,11 @@ webhooksRouter.post('/evolution',
 webhooksRouter.post('/evolution/:tenantId',
   express.json({ limit: '10mb' }),
   async (req, res) => {
+    // Mesma lógica de fail-closed das outras rotas de webhook acima.
+    if (process.env.NODE_ENV === 'production' && !config.evolution.webhookSecret) {
+      console.error('[webhook evolution] EVOLUTION_WEBHOOK_SECRET ausente em produção — recusando requisição')
+      return res.sendStatus(403)
+    }
     // Verificação do secret da Evolution via header apikey
     if (config.evolution.webhookSecret) {
       const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')

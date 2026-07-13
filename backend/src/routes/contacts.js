@@ -36,11 +36,14 @@ function escapeOrValue(v) {
 contactsRouter.get('/', async (req, res) => {
   try {
     const { search, tags } = req.query
+    const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000)
+    const offset = parseInt(req.query.offset, 10) || 0
+
     let q = supabase.from('leads')
       .select('id, name, phone, email, tags, stage, score, conversation_status, created_at, updated_at')
       .eq('tenant_id', req.user.tenantId)
       .order('updated_at', { ascending: false })
-      .limit(500)
+      .range(offset, offset + limit - 1)
 
     if (search) {
       const s = escapeOrValue(search)
@@ -52,7 +55,7 @@ contactsRouter.get('/', async (req, res) => {
     }
 
     const rows = unwrap(await q)
-    res.json({ contacts: rows })
+    res.json({ contacts: rows, limit, offset })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

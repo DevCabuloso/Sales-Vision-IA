@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 import crypto from 'node:crypto'
@@ -326,6 +326,55 @@ describe('routes/webhooks', () => {
       await flush()
 
       expect(mockState.handleOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'tenant-explicito', to: '5511988887777' }))
+    })
+  })
+
+  describe('fail-closed em produção (sem secret configurado)', () => {
+    const ORIGINAL_NODE_ENV = process.env.NODE_ENV
+    afterEach(() => {
+      process.env.NODE_ENV = ORIGINAL_NODE_ENV
+    })
+
+    it('POST /meta rejeita com 403 quando META_APP_SECRET não está configurado em produção', async () => {
+      process.env.NODE_ENV = 'production'
+      const app = buildApp()
+      const res = await request(app)
+        .post('/webhooks/meta')
+        .set('Content-Type', 'application/json')
+        .send(JSON.stringify({ entry: [] }))
+
+      expect(res.status).toBe(403)
+      await flush()
+      expect(mockState.handleInboundMessage).not.toHaveBeenCalled()
+    })
+
+    it('POST /evolution (rota universal) rejeita com 403 quando EVOLUTION_WEBHOOK_SECRET não está configurado em produção', async () => {
+      process.env.NODE_ENV = 'production'
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution').send({ event: 'messages.upsert' })
+
+      expect(res.status).toBe(403)
+      await flush()
+      expect(mockState.handleInboundMessage).not.toHaveBeenCalled()
+    })
+
+    it('POST /evolution/:tenantId rejeita com 403 quando EVOLUTION_WEBHOOK_SECRET não está configurado em produção', async () => {
+      process.env.NODE_ENV = 'production'
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution/tenant-1').send({ event: 'messages.upsert' })
+
+      expect(res.status).toBe(403)
+    })
+
+    it('fora de produção, sem secret configurado, continua aceitando (comportamento de dev)', async () => {
+      process.env.NODE_ENV = 'test'
+      setSupabase({ channels: [{ data: [{ tenant_id: 'tenant-1' }], error: null }] })
+      mockState.evolutionParseWebhook.mockReturnValue({ from: '5511988887777', text: 'Oi', instanceName: 'inst-1', fromMe: false })
+
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution').send({ event: 'messages.upsert' })
+
+      expect(res.status).toBe(200)
     })
   })
 })

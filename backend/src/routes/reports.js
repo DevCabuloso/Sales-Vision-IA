@@ -26,7 +26,7 @@ reportsRouter.get('/daily', async (req, res) => {
   const { start, end } = dayRangeUtc(dateStr)
 
   try {
-    const [users, ticketLogs, leadsToday, messagesToday, apptsToday, usageEvents, stageRows] = await Promise.all([
+    const [users, ticketLogs, leadsToday, messagesToday, apptsToday, usageEvents, stageCountRows] = await Promise.all([
       supabase.from('users').select('id, name, email, role')
         .eq('tenant_id', tenantId).neq('role', 'owner'),
       supabase.from('ticket_logs').select('lead_id, user_id, user_name, action, to_user_id, to_user_name, created_at')
@@ -40,7 +40,9 @@ reportsRouter.get('/daily', async (req, res) => {
         .eq('tenant_id', tenantId).gte('created_at', start).lt('created_at', end),
       supabase.from('usage_events').select('user_id, event_type, meta, created_at')
         .eq('tenant_id', tenantId).gte('created_at', start).lt('created_at', end),
-      supabase.from('leads').select('stage').eq('tenant_id', tenantId).limit(20000),
+      // GROUP BY feito no banco (RPC) em vez de buscar até 20.000 linhas de
+      // `stage` e agregar em JS a cada chamada.
+      supabase.rpc('leads_stage_counts', { p_tenant_id: tenantId }),
     ]).then((rs) => rs.map(unwrap))
 
     // leads tocados hoje via ticket_logs podem ter sido criados em dias anteriores
@@ -119,10 +121,8 @@ reportsRouter.get('/daily', async (req, res) => {
     const messagesByRole = {}
     for (const m of messagesToday) messagesByRole[m.role] = (messagesByRole[m.role] || 0) + 1
 
-    const stageCounts = {}
-    for (const l of stageRows) { const s = l.stage || 'Novo Lead'; stageCounts[s] = (stageCounts[s] || 0) + 1 }
-    const funnel = Object.entries(stageCounts)
-      .map(([stage, count]) => ({ stage, count }))
+    const funnel = stageCountRows
+      .map((r) => ({ stage: r.stage, count: Number(r.count) }))
       .sort((a, b) => b.count - a.count)
 
     const summary = {

@@ -56,6 +56,19 @@ const apiLimiter = rateLimit({
   message: { error: 'Muitas requisições. Tente novamente em instantes.' },
 })
 
+// /webhooks/* não exige autenticação (é chamado pela Meta/Evolution), então
+// fica de fora do apiLimiter (que só cobre /api). Sem limite nenhum, era uma
+// rota aberta a flood ilimitado. Teto generoso porque picos legítimos de
+// eventos (broadcast grande, campanha) podem gerar muitas chamadas em pouco
+// tempo — o alvo aqui é abuso/flood, não tráfego normal do provedor.
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas requisições.' },
+})
+
 export function createApp() {
   const app = express()
 
@@ -72,7 +85,7 @@ export function createApp() {
 
   // Webhooks montados ANTES do express.json() para que /webhooks/meta
   // possa usar express.raw() e verificar a assinatura HMAC do Meta
-  app.use('/webhooks', webhooksRouter)
+  app.use('/webhooks', webhookLimiter, webhooksRouter)
 
   app.use(express.json({ limit: '2mb' }))
 
@@ -106,6 +119,7 @@ export function createApp() {
 
   app.use('/api/auth/login', authLimiter)
   app.use('/api/auth/register', authLimiter)
+  app.use('/api/auth/change-password', authLimiter)
   app.use('/api/billing/trial-signup', authLimiter)
   app.use('/api/billing/orders', authLimiter)
 

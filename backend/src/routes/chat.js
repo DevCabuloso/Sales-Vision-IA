@@ -44,12 +44,14 @@ async function logTicketEvent(tenantId, leadId, userId, userName, action, toUser
 chatRouter.get('/', async (req, res) => {
   try {
     const { stage, assigned_to, type } = req.query
+    const limit = Math.min(parseInt(req.query.limit, 10) || 300, 1000)
+    const offset = parseInt(req.query.offset, 10) || 0
 
     let q = supabase.from('leads')
       .select('id, name, phone, stage, human_takeover, conversation_status, assigned_to, channel_id, queue_id, is_group, group_subject, updated_at')
       .eq('tenant_id', req.user.tenantId)
       .order('updated_at', { ascending: false })
-      .limit(300)
+      .range(offset, offset + limit - 1)
 
     if (stage) q = q.eq('stage', stage)
     if (assigned_to) q = q.eq('assigned_to', assigned_to)
@@ -57,7 +59,7 @@ chatRouter.get('/', async (req, res) => {
     if (type === 'private') q = q.eq('is_group', false)
 
     const leads = unwrap(await q)
-    if (!leads.length) return res.json({ leads: [] })
+    if (!leads.length) return res.json({ leads: [], limit, offset })
 
     const leadIds = leads.map((l) => l.id)
 
@@ -122,30 +124,7 @@ chatRouter.get('/', async (req, res) => {
       })
     }
 
-    res.json({ leads: result })
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
-
-// GET /api/chat/debug-recent — últimas 20 mensagens do tenant (debug)
-chatRouter.get('/debug-recent', async (req, res) => {
-  try {
-    const msgs = unwrap(
-      await supabase.from('messages')
-        .select('id, lead_id, role, text, created_at')
-        .eq('tenant_id', req.user.tenantId)
-        .order('created_at', { ascending: false })
-        .limit(20)
-    )
-    const leads = unwrap(
-      await supabase.from('leads')
-        .select('id, name, phone, conversation_status')
-        .eq('tenant_id', req.user.tenantId)
-        .order('updated_at', { ascending: false })
-        .limit(20)
-    )
-    res.json({ messages: msgs, leads })
+    res.json({ leads: result, limit, offset })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

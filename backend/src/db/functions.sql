@@ -84,3 +84,25 @@ AS $$
     (SELECT COUNT(*) FROM usage_events WHERE created_at > now() - interval '24 hours') AS events_24h,
     (SELECT COUNT(*) FROM messages WHERE created_at > now() - interval '24 hours') AS messages_24h;
 $$;
+
+-- ─── leads_stage_counts(p_tenant_id) ───
+-- Funil de estágios do relatório diário (reports.js). Substitui buscar até
+-- 20.000 linhas de `leads.stage` e agregar em JS por um GROUP BY no banco —
+-- mesmo trade-off das funções acima (SECURITY DEFINER, tenant_id explícito
+-- no parâmetro): a autorização por tenant já é feita no Express
+-- (requireTenant), não via RLS, então isso não muda o modelo de segurança
+-- do restante da aplicação, que já usa a service key do Supabase.
+DROP FUNCTION IF EXISTS leads_stage_counts(uuid);
+CREATE FUNCTION leads_stage_counts(p_tenant_id uuid)
+RETURNS TABLE (
+  stage text,
+  count  bigint
+)
+LANGUAGE sql
+SECURITY DEFINER
+AS $$
+  SELECT COALESCE(stage, 'Novo Lead') AS stage, COUNT(*) AS count
+  FROM leads
+  WHERE tenant_id = p_tenant_id
+  GROUP BY COALESCE(stage, 'Novo Lead');
+$$;

@@ -116,6 +116,28 @@ describe('routes/chat', () => {
       expect(ids).toContain('lead-C') // atribuído a mim
       expect(ids).not.toContain('lead-B') // pendente com fila que não é minha
     })
+
+    it('aceita limit/offset e reflete na resposta e no range da query', async () => {
+      setSupabase({
+        leads: [{ data: [], error: null }],
+      })
+      const app = buildApp()
+      const res = await request(app).get('/api/chat').query({ limit: '20', offset: '40' })
+      expect(res.status).toBe(200)
+      expect(res.body).toMatchObject({ limit: 20, offset: 40 })
+      const rangeCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'range')
+      expect(rangeCall.args).toEqual([40, 59])
+    })
+
+    it('usa limit=300 e offset=0 por padrão, e limita o teto a 1000', async () => {
+      setSupabase({ leads: [{ data: [], error: null }] })
+      const app = buildApp()
+      const defaultRes = await request(app).get('/api/chat')
+      expect(defaultRes.body).toMatchObject({ limit: 300, offset: 0 })
+
+      const cappedRes = await request(app).get('/api/chat').query({ limit: '5000' })
+      expect(cappedRes.body.limit).toBe(1000)
+    })
   })
 
   describe('POST /start', () => {

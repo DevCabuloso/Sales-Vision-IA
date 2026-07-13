@@ -110,4 +110,23 @@ describe('app.js — createApp()', () => {
       expect(lastStatus).toBe(429)
     }, 15000)
   })
+
+  // Roda depois do teste acima de propósito: o authLimiter é compartilhado por IP entre
+  // TODAS as rotas em que é montado (não por rota), então o contador já esgotado pelo
+  // teste de login acima também bloqueia /api/auth/change-password aqui.
+  describe('rate limiting de change-password e webhooks', () => {
+    it('change-password é coberto pelo mesmo authLimiter do login (contador já esgotado)', async () => {
+      const app = createApp()
+      const res = await request(app).post('/api/auth/change-password').send({ currentPassword: 'x', newPassword: 'y12345678' })
+      expect(res.status).toBe(429)
+    })
+
+    it('/webhooks tem rate limit próprio (teto de 300/min, distinto do apiLimiter)', async () => {
+      setSupabase({})
+      const app = createApp()
+      const res = await request(app).get('/webhooks/ping')
+      expect(res.status).toBe(200)
+      expect(res.headers['ratelimit-limit']).toBe('300')
+    })
+  })
 })

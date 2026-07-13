@@ -66,6 +66,26 @@ describe('routes/contacts', () => {
       const orCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'or')
       expect(orCall.args[0]).toBe('name.ilike."%x\\",tags.cs.{admin}%",phone.ilike."%x\\",tags.cs.{admin}%",email.ilike."%x\\",tags.cs.{admin}%"')
     })
+
+    it('aceita limit/offset e reflete na resposta e no range da query', async () => {
+      setSupabase({ leads: [{ data: [{ id: 'l1', name: 'Ana', phone: '11988887777' }], error: null }] })
+      const app = buildApp()
+      const res = await request(app).get('/api/contacts').query({ limit: '50', offset: '100' })
+      expect(res.status).toBe(200)
+      expect(res.body).toMatchObject({ limit: 50, offset: 100 })
+      const rangeCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'range')
+      expect(rangeCall.args).toEqual([100, 149])
+    })
+
+    it('usa limit=500 e offset=0 por padrão, e limita o teto a 1000', async () => {
+      setSupabase({ leads: [{ data: [], error: null }] })
+      const app = buildApp()
+      const defaultRes = await request(app).get('/api/contacts')
+      expect(defaultRes.body).toMatchObject({ limit: 500, offset: 0 })
+
+      const cappedRes = await request(app).get('/api/contacts').query({ limit: '5000' })
+      expect(cappedRes.body.limit).toBe(1000)
+    })
   })
 
   describe('POST /', () => {

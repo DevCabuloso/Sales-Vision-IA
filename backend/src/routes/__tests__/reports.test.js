@@ -49,7 +49,6 @@ describe('routes/reports', () => {
       }],
       leads: [
         { data: [{ id: 'lead-1', name: 'Lead Um', phone: '123', stage: 'Qualificado', score: 80, created_at: '2026-01-01T09:00:00.000Z' }], error: null },
-        { data: [{ stage: 'Qualificado' }, { stage: 'Novo Lead' }, { stage: 'Novo Lead' }], error: null },
         { data: [{ id: 'lead-1', name: 'Lead Um', phone: '123', stage: 'Qualificado' }], error: null },
       ],
       messages: [{ data: [{ role: 'lead' }, { role: 'ai' }, { role: 'agent' }], error: null }],
@@ -58,6 +57,7 @@ describe('routes/reports', () => {
         { user_id: 'u1', event_type: 'message_sent', created_at: '2026-01-01T10:30:00.000Z' },
         { user_id: 'u1', event_type: 'appointment_created', created_at: '2026-01-01T15:00:00.000Z' },
       ], error: null }],
+      'rpc:leads_stage_counts': [{ data: [{ stage: 'Qualificado', count: 1 }, { stage: 'Novo Lead', count: 2 }], error: null }],
     })
 
     const app = buildApp()
@@ -80,9 +80,10 @@ describe('routes/reports', () => {
     expect(res.body.funnel).toEqual([{ stage: 'Novo Lead', count: 2 }, { stage: 'Qualificado', count: 1 }])
     expect(res.body.date).toBe('2026-01-01')
 
-    // a query do funil (stage de todo lead do tenant) não pode ficar sem limite
-    const limitCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'limit')
-    expect(limitCall.args[0]).toBe(20000)
+    // funil de estágios é calculado no banco (GROUP BY via RPC), não buscando
+    // todas as linhas de `leads` e agregando em JS
+    const rpcCall = supabaseMock.calls.find((c) => c.table === 'rpc:leads_stage_counts')
+    expect(rpcCall.args[0]).toEqual({ p_tenant_id: 'tenant-1' })
   })
 
   it('ignora datas em formato inválido e usa a data de hoje', async () => {
@@ -93,6 +94,7 @@ describe('routes/reports', () => {
       messages: [{ data: [], error: null }],
       appointments: [{ data: [], error: null }],
       usage_events: [{ data: [], error: null }],
+      'rpc:leads_stage_counts': [{ data: [], error: null }],
     })
     const app = buildApp()
     const res = await request(app).get('/api/reports/daily').query({ date: 'não-é-data' })
@@ -108,6 +110,7 @@ describe('routes/reports', () => {
       messages: [{ data: [], error: null }],
       appointments: [{ data: [], error: null }],
       usage_events: [{ data: [], error: null }],
+      'rpc:leads_stage_counts': [{ data: [], error: null }],
     })
     const app = buildApp()
     const res = await request(app).get('/api/reports/daily').query({ date: '2026-01-01' })
