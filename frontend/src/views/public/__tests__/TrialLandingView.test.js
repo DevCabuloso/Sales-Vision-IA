@@ -79,4 +79,37 @@ describe('TrialLandingView', () => {
     expect(mockState.trialSignup).toHaveBeenCalledWith(expect.objectContaining({ name: 'Ana', companyName: 'Empresa Ana', email: 'ana@ex.com', password: 'senha1234' }))
     wrapper.unmount()
   })
+
+  it('mostra o tour de produto começando pela aba Atendimento', () => {
+    const wrapper = mount(TrialLandingView, { attachTo: document.body, ...pluginOptions() })
+    expect(wrapper.find('.tour-tab.active').text()).toContain('Atendimento')
+    expect(wrapper.find('.tour-chat').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('troca para a aba Kanban ao clicar', async () => {
+    const wrapper = mount(TrialLandingView, { attachTo: document.body, ...pluginOptions() })
+    const tabs = wrapper.findAll('.tour-tab')
+    await tabs.find((t) => t.text().includes('Kanban')).trigger('click')
+    expect(wrapper.find('.tour-kanban').exists()).toBe(true)
+    expect(wrapper.find('.tour-chat').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('troca para a aba Leads ao clicar', async () => {
+    const wrapper = mount(TrialLandingView, { attachTo: document.body, ...pluginOptions() })
+    const tabs = wrapper.findAll('.tour-tab')
+    await tabs.find((t) => t.text().includes('Leads')).trigger('click')
+    expect(wrapper.find('.tour-table').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('mostra as 4 etapas do processo e o checklist da oferta', () => {
+    const wrapper = mount(TrialLandingView, { attachTo: document.body, ...pluginOptions() })
+    expect(wrapper.findAll('.tl-process-card')).toHaveLength(4)
+    expect(wrapper.text()).toContain('Captação')
+    expect(wrapper.text()).toContain('Acompanhamento')
+    expect(wrapper.findAll('.tl-offer-check-item').length).toBeGreaterThan(0)
+    wrapper.unmount()
+  })
 })
