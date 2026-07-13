@@ -30,10 +30,10 @@ describe('router/index.js — beforeEach guard', () => {
     localStorage.clear()
     sessionStorage.clear()
     setUser(null)
-    // ponto de partida neutro (rota pública, distinta de /login) — evita que o
-    // vue-router trate a navegação do teste como "mesma rota" (no-op) quando
-    // o teste anterior já tiver deixado o router em cima do alvo testado
-    await router.replace('/apresentacao')
+    // ponto de partida neutro (rota pública, distinta de /login e de '/') — evita que
+    // o vue-router trate a navegação do teste como "mesma rota" (no-op) quando o teste
+    // anterior já tiver deixado o router em cima do alvo testado
+    await router.replace('/pagamento/retorno')
   })
 
   it('rota pública é acessível sem autenticação', async () => {
@@ -61,6 +61,12 @@ describe('router/index.js — beforeEach guard', () => {
     setUser(null)
     await router.push('/')
     expect(router.currentRoute.value.name).toBe('trial-landing')
+  })
+
+  it('path raiz "/" leva ao admin-overview quando já autenticado como owner', async () => {
+    setUser({ id: 'owner-1', role: 'owner', onboardingCompleted: true })
+    await router.push('/')
+    expect(router.currentRoute.value.name).toBe('admin-overview')
   })
 
   it('owner navegando para rota fora de /admin é redirecionado para admin-overview', async () => {
@@ -113,7 +119,7 @@ describe('router/index.js — beforeEach guard', () => {
 
   it('rotas públicas continuam acessíveis mesmo autenticado como owner', async () => {
     setUser({ id: 'owner-1', role: 'owner', onboardingCompleted: true })
-    await router.push('/apresentacao')
-    expect(router.currentRoute.value.name).toBe('trial-landing')
+    await router.push('/pagamento/retorno')
+    expect(router.currentRoute.value.name).toBe('payment-return')
   })
 })

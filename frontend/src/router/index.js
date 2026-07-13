@@ -3,6 +3,15 @@ import { useAuthStore } from '@/stores/auth'
 
 const routes = [
   {
+    // A apresentação (marketing) mora direto na raiz — não existe mais uma rota
+    // /apresentacao separada. Usuário autenticado que cair aqui é mandado pro
+    // dashboard pelo beforeEach abaixo (mesmo padrão do /login autenticado).
+    path: '/',
+    name: 'trial-landing',
+    component: () => import('@/views/public/TrialLandingView.vue'),
+    meta: { public: true },
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('@/views/LoginView.vue'),
@@ -12,12 +21,6 @@ const routes = [
     path: '/impersonate',
     name: 'impersonate',
     component: () => import('@/views/ImpersonateView.vue'),
-    meta: { public: true },
-  },
-  {
-    path: '/apresentacao',
-    name: 'trial-landing',
-    component: () => import('@/views/public/TrialLandingView.vue'),
     meta: { public: true },
   },
   {
@@ -33,38 +36,36 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
-    path: '/',
+    // '/app' nunca é navegado diretamente — é só o registro-pai que dá o layout
+    // (AppLayout) pros filhos abaixo. Os filhos usam paths absolutos (começando
+    // com /) pra manter as URLs finais (/dashboard, /leads, ...) sem o prefixo
+    // /app, já que a raiz '/' agora é ocupada pela página de apresentação acima.
+    path: '/app',
     component: () => import('@/layouts/AppLayout.vue'),
     meta: { requiresAuth: true },
     children: [
-      // Não autenticado: mostra a página de apresentação (marketing) em vez do login direto.
-      // Autenticado: segue pro dashboard normalmente. Resolvido aqui (redirect da rota filha),
-      // não no beforeEach, porque o matcher do vue-router resolve o redirect da rota filha
-      // ANTES de rodar os guards globais — um `if (to.path === '/')` no beforeEach nunca veria
-      // esse caminho (ver teste em router/__tests__/index.test.js).
-      { path: '', redirect: () => (useAuthStore().isAuthenticated ? '/dashboard' : '/apresentacao') },
-      { path: 'dashboard',   name: 'dashboard',   component: () => import('@/views/app/DashboardView.vue') },
-      { path: 'kanban',      name: 'kanban',       component: () => import('@/views/app/KanbanView.vue') },
-      { path: 'chat',        name: 'chat',         component: () => import('@/views/app/ChatView.vue') },
-      { path: 'chat/:id',    name: 'chat-lead',    component: () => import('@/views/app/ChatView.vue'), props: true },
-      { path: 'grupos',      name: 'grupos',       component: () => import('@/views/app/InternalGroupsView.vue') },
-      { path: 'leads',       name: 'leads',        component: () => import('@/views/app/LeadsView.vue') },
-      { path: 'agenda',      name: 'agenda',       component: () => import('@/views/app/AgendaView.vue') },
-      { path: 'templates',   name: 'templates',    component: () => import('@/views/app/TemplatesView.vue') },
-      { path: 'broadcast',   name: 'broadcast',    component: () => import('@/views/app/BroadcastView.vue') },
-      { path: 'acompanhamentos', name: 'acompanhamentos', component: () => import('@/views/app/FollowupsView.vue') },
-      { path: 'operadores',  name: 'operadores',   component: () => import('@/views/app/OperatorsView.vue') },
-      { path: 'ia-config',   name: 'ia-config',    component: () => import('@/views/app/AIConfigView.vue') },
-      { path: 'apis',        name: 'custom-apis',  component: () => import('@/views/app/CustomApisView.vue') },
-      { path: 'canais',      name: 'canais',       component: () => import('@/views/app/ChannelsView.vue') },
-      { path: 'contatos',    name: 'contatos',     component: () => import('@/views/app/ContactsView.vue') },
-      { path: 'integracoes', name: 'integracoes',  component: () => import('@/views/app/IntegrationsView.vue') },
-      { path: 'configuracoes', name: 'config',     component: () => import('@/views/app/TenantSettingsView.vue') },
-      { path: 'atendimento',  name: 'atendimento', component: () => import('@/views/app/AttendanceConfigView.vue') },
-      { path: 'operacao',     name: 'operacao',    component: () => import('@/views/app/OperationalSettingsView.vue') },
-      { path: 'flows',        name: 'flows',        component: () => import('@/views/app/FlowsView.vue') },
-      { path: 'flows/:id',    name: 'flow-editor',  component: () => import('@/views/app/FlowEditorView.vue'), props: true },
-      { path: 'ajuda',        name: 'ajuda',        component: () => import('@/views/app/HelpView.vue') },
+      { path: '/dashboard',   name: 'dashboard',   component: () => import('@/views/app/DashboardView.vue') },
+      { path: '/kanban',      name: 'kanban',       component: () => import('@/views/app/KanbanView.vue') },
+      { path: '/chat',        name: 'chat',         component: () => import('@/views/app/ChatView.vue') },
+      { path: '/chat/:id',    name: 'chat-lead',    component: () => import('@/views/app/ChatView.vue'), props: true },
+      { path: '/grupos',      name: 'grupos',       component: () => import('@/views/app/InternalGroupsView.vue') },
+      { path: '/leads',       name: 'leads',        component: () => import('@/views/app/LeadsView.vue') },
+      { path: '/agenda',      name: 'agenda',       component: () => import('@/views/app/AgendaView.vue') },
+      { path: '/templates',   name: 'templates',    component: () => import('@/views/app/TemplatesView.vue') },
+      { path: '/broadcast',   name: 'broadcast',    component: () => import('@/views/app/BroadcastView.vue') },
+      { path: '/acompanhamentos', name: 'acompanhamentos', component: () => import('@/views/app/FollowupsView.vue') },
+      { path: '/operadores',  name: 'operadores',   component: () => import('@/views/app/OperatorsView.vue') },
+      { path: '/ia-config',   name: 'ia-config',    component: () => import('@/views/app/AIConfigView.vue') },
+      { path: '/apis',        name: 'custom-apis',  component: () => import('@/views/app/CustomApisView.vue') },
+      { path: '/canais',      name: 'canais',       component: () => import('@/views/app/ChannelsView.vue') },
+      { path: '/contatos',    name: 'contatos',     component: () => import('@/views/app/ContactsView.vue') },
+      { path: '/integracoes', name: 'integracoes',  component: () => import('@/views/app/IntegrationsView.vue') },
+      { path: '/configuracoes', name: 'config',     component: () => import('@/views/app/TenantSettingsView.vue') },
+      { path: '/atendimento',  name: 'atendimento', component: () => import('@/views/app/AttendanceConfigView.vue') },
+      { path: '/operacao',     name: 'operacao',    component: () => import('@/views/app/OperationalSettingsView.vue') },
+      { path: '/flows',        name: 'flows',        component: () => import('@/views/app/FlowsView.vue') },
+      { path: '/flows/:id',    name: 'flow-editor',  component: () => import('@/views/app/FlowEditorView.vue'), props: true },
+      { path: '/ajuda',        name: 'ajuda',        component: () => import('@/views/app/HelpView.vue') },
     ],
   },
   {
@@ -95,6 +96,12 @@ router.beforeEach((to) => {
 
   if (to.meta.requiresAuth && !auth.isAuthenticated) {
     return { name: 'login' }
+  }
+
+  // já autenticado navegando pra raiz ('/', a página de apresentação) — manda
+  // direto pro dashboard/admin, mesmo padrão do '/login' autenticado abaixo.
+  if (to.name === 'trial-landing' && auth.isAuthenticated) {
+    return auth.isOwner ? { name: 'admin-overview' } : { name: 'dashboard' }
   }
 
   // owner não acessa rotas de cliente
