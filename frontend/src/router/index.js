@@ -37,7 +37,12 @@ const routes = [
     component: () => import('@/layouts/AppLayout.vue'),
     meta: { requiresAuth: true },
     children: [
-      { path: '', redirect: '/dashboard' },
+      // Não autenticado: mostra a página de apresentação (marketing) em vez do login direto.
+      // Autenticado: segue pro dashboard normalmente. Resolvido aqui (redirect da rota filha),
+      // não no beforeEach, porque o matcher do vue-router resolve o redirect da rota filha
+      // ANTES de rodar os guards globais — um `if (to.path === '/')` no beforeEach nunca veria
+      // esse caminho (ver teste em router/__tests__/index.test.js).
+      { path: '', redirect: () => (useAuthStore().isAuthenticated ? '/dashboard' : '/apresentacao') },
       { path: 'dashboard',   name: 'dashboard',   component: () => import('@/views/app/DashboardView.vue') },
       { path: 'kanban',      name: 'kanban',       component: () => import('@/views/app/KanbanView.vue') },
       { path: 'chat',        name: 'chat',         component: () => import('@/views/app/ChatView.vue') },
@@ -87,13 +92,6 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const auth = useAuthStore()
-
-  // Root URL: limpa a sessão da aba atual e vai sempre para login
-  if (to.path === '/') {
-    auth.clearSession()
-    auth.logout().catch(() => {}) // limpa cookie em background
-    return { name: 'login' }
-  }
 
   if (to.meta.requiresAuth && !auth.isAuthenticated) {
     return { name: 'login' }

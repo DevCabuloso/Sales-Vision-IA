@@ -2,7 +2,9 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Página de Login', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
+    // "/" agora mostra a página de apresentação (marketing) para visitantes não
+    // autenticados — o formulário de login vive em /login.
+    await page.goto('/login')
   })
 
   test('exibe o formulário de login corretamente', async ({ page }) => {
