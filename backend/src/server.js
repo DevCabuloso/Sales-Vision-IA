@@ -20,8 +20,8 @@ process.on('uncaughtException', (err) => {
 
 const app = createApp()
 
-app.listen(config.port, () => {
-  console.log(`[SDR IA] backend rodando em http://localhost:${config.port}`)
+app.listen(config.port, config.host, () => {
+  console.log(`[SDR IA] backend rodando em http://${config.host}:${config.port}`)
   console.log(`[SDR IA] ambiente: ${config.env}`)
 })
 

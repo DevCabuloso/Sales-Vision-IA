@@ -57,6 +57,16 @@ describe('config/index.js', () => {
       expect(config.backendUrl).toBe('http://localhost:3000')
     })
 
+    it('usa 127.0.0.1 como host padrão quando HOST não é definida (bind só em loopback)', async () => {
+      const config = await loadConfig({ NODE_ENV: 'test', JWT_SECRET: 'x', ENCRYPTION_KEY: 'a'.repeat(64), HOST: '' })
+      expect(config.host).toBe('127.0.0.1')
+    })
+
+    it('respeita HOST explícito (ex.: 0.0.0.0 em topologias com proxy em outro host/container)', async () => {
+      const config = await loadConfig({ NODE_ENV: 'test', JWT_SECRET: 'x', ENCRYPTION_KEY: 'a'.repeat(64), HOST: '0.0.0.0' })
+      expect(config.host).toBe('0.0.0.0')
+    })
+
     it('deriva backendUrl a partir de PORT quando BACKEND_URL não é definida', async () => {
       const config = await loadConfig({ NODE_ENV: 'test', JWT_SECRET: 'x', ENCRYPTION_KEY: 'a'.repeat(64), PORT: '4000', BACKEND_URL: '' })
       expect(config.backendUrl).toBe('http://localhost:4000')

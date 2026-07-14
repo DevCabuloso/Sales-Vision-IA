@@ -15,6 +15,13 @@ function required(name, fallback) {
 export const config = {
   env: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '3000', 10),
+  // Bind só em loopback por padrão — em produção o nginx roda no MESMO host e
+  // faz proxy_pass pra localhost:PORT, então isso não muda nada pro tráfego
+  // real. Sem isso, o backend ficava acessível diretamente de qualquer lugar
+  // da internet na porta PORT, contornando nginx (rate limit, TLS, etc.)
+  // inteiramente. HOST=0.0.0.0 continua disponível via env pra topologias
+  // onde o proxy roda num host/container diferente (ex.: Docker).
+  host: process.env.HOST || '127.0.0.1',
 
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
   backendUrl: process.env.BACKEND_URL || `http://localhost:${parseInt(process.env.PORT || '3000', 10)}`,
