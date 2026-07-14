@@ -1,13 +1,13 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
-import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import multer from 'multer'
 import * as XLSX from 'xlsx'
 import { normalizePhone } from '../utils/phone.js'
 
 export const contactsRouter = Router()
-contactsRouter.use(requireAuth, requireTenant)
+contactsRouter.use(requireAuth, requireTenant, requirePermission('contatos'))
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
 

@@ -143,6 +143,7 @@ export const api = {
   adminUpdateFeatures: (id, features) => http.patch(`/admin/clients/${id}/features`, features).then((r) => r.data.client),
   adminUpdateStatus: (id, status) => http.patch(`/admin/clients/${id}/status`, { status }).then((r) => r.data.client),
   adminRenewClient: (id, payload) => http.patch(`/admin/clients/${id}/renew`, payload).then((r) => r.data.client),
+  adminSendBillingAlert: () => http.post('/admin/clients/billing-alert').then((r) => r.data),
   adminDeleteClient: (id) => http.delete(`/admin/clients/${id}`).then((r) => r.data),
   adminImpersonate: (clientId) =>
     http.post(`/admin/clients/${clientId}/impersonate`).then((r) => r.data),
@@ -268,4 +269,5 @@ export const api = {
 
   // admin — configurações
   adminSettings: () => http.get('/admin/settings').then((r) => r.data.settings),
+  adminUpdateSettings: (payload) => http.put('/admin/settings', payload).then((r) => r.data),
 }

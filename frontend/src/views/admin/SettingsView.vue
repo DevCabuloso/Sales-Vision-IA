@@ -234,6 +234,43 @@
         </v-col>
       </v-row>
 
+      <!-- Aviso de vencimento de mensalidade -->
+      <v-card class="glass pa-6 mt-4" border>
+        <div class="d-flex align-center ga-3 mb-4 flex-wrap">
+          <div class="settings-icon billing d-flex align-center justify-center">
+            <v-icon icon="mdi-cash-clock" size="22" color="white" />
+          </div>
+          <div>
+            <div class="text-subtitle-1 font-weight-bold">Aviso de vencimento de mensalidade</div>
+            <div class="text-caption" style="color:#9FB0BC">
+              Quando o sino de notificações avisa a pessoa designada em cada cliente
+            </div>
+          </div>
+        </div>
+        <v-row dense>
+          <v-col cols="12" sm="6" md="4">
+            <v-text-field
+              v-model.number="billingForm.billing_reminder_days_before"
+              label="Dias antes do vencimento"
+              type="number" min="0" max="30"
+              variant="outlined" density="compact"
+            />
+          </v-col>
+          <v-col cols="12" sm="6" md="4">
+            <v-text-field
+              v-model="billingForm.billing_reminder_time"
+              label="Horário do aviso"
+              type="time"
+              variant="outlined" density="compact"
+            />
+          </v-col>
+        </v-row>
+        <v-alert v-if="billingError" type="error" variant="tonal" density="compact" :text="billingError" class="mt-2" />
+        <v-btn class="mt-2" color="accent" :loading="savingBilling" @click="saveBillingSettings">
+          Salvar
+        </v-btn>
+      </v-card>
+
       <!-- Webhooks de referência -->
       <v-card class="glass pa-6 mt-4" border>
         <div class="text-subtitle-1 font-weight-bold mb-4">
@@ -269,10 +306,31 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '@/services/api'
+import { platformSettingsSchema } from '@/schemas/admin'
+import { validateForm } from '@/composables/useZodValidation'
 
 const loading = ref(true)
 const copied = ref(false)
 const s = ref({})
+
+const billingForm = reactive({ billing_reminder_days_before: 3, billing_reminder_time: '09:00' })
+const billingError = ref('')
+const savingBilling = ref(false)
+
+async function saveBillingSettings() {
+  billingError.value = ''
+  const check = validateForm(platformSettingsSchema, billingForm)
+  if (!check.success) { billingError.value = check.error; return }
+  savingBilling.value = true
+  try {
+    const { billing } = await api.adminUpdateSettings(check.data)
+    Object.assign(billingForm, billing)
+  } catch (e) {
+    billingError.value = e.message
+  } finally {
+    savingBilling.value = false
+  }
+}
 
 const webhooks = [
   { name: 'Meta WhatsApp', icon: 'mdi-whatsapp', color: 'success', path: '/webhooks/meta' },
@@ -288,6 +346,7 @@ async function load() {
   loading.value = true
   try {
     s.value = await api.adminSettings()
+    if (s.value.billing) Object.assign(billingForm, s.value.billing)
   } catch (e) {
     console.error('[settings]', e.message)
   } finally {
@@ -308,6 +367,7 @@ onMounted(load)
 .settings-icon.supabase { background: linear-gradient(135deg, #3ECF8E, #1C7C4A); }
 .settings-icon.jwt { background: linear-gradient(135deg, #6366F1, #8B5CF6); }
 .settings-icon.env { background: linear-gradient(135deg, #F59E0B, #FBBF24); }
+.settings-icon.billing { background: linear-gradient(135deg, #EC4899, #F43F5E); }
 
 .webhook-card {
   background: rgba(255,255,255,0.03);

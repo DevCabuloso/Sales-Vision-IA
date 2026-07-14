@@ -33,6 +33,14 @@ export const updateClientSchema = z.object({
   plan: z.enum(['trial', 'starter', 'pro', 'enterprise']),
   max_leads: z.number({ invalid_type_error: 'Limite de leads deve ser um número.' })
     .int().positive('Limite de leads deve ser um número positivo.'),
+  billing_notify_user_id: z.string().uuid().nullable().optional(),
+})
+
+export const platformSettingsSchema = z.object({
+  billing_reminder_days_before: z.number({ invalid_type_error: 'Informe um número de dias.' })
+    .int().min(0, 'Não pode ser negativo.').max(30, 'No máximo 30 dias.'),
+  billing_reminder_time: z.string().trim().min(1, 'Informe um horário.')
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Horário inválido, use HH:MM.'),
 })
 
 export const renewClientSchema = z.object({

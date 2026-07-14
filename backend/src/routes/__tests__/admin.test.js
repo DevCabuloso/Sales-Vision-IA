@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
+import jwt from 'jsonwebtoken'
 import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, hashPassword: null, invalidateTenantStatusCache: null, user: null }))
@@ -197,13 +198,43 @@ describe('routes/admin', () => {
     })
 
     it('PATCH /clients/:id/renew com next_billing_at explícito atualiza direto', async () => {
-      setSupabase({ tenants: [{ data: [{ id: 'tenant-1', next_billing_at: '2026-09-01T00:00:00.000Z' }], error: null }] })
+      setSupabase({
+        tenants: [{ data: [{ id: 'tenant-1', next_billing_at: '2026-09-01T00:00:00.000Z' }], error: null }],
+        notifications: [{ data: [], error: null }],
+      })
       const app = buildApp()
       const res = await request(app).patch('/api/admin/clients/tenant-1/renew').send({ next_billing_at: '2026-09-01T00:00:00.000Z' })
       expect(res.status).toBe(200)
       expect(res.body.client.next_billing_at).toBe('2026-09-01T00:00:00.000Z')
       const updateCall = supabaseMock.calls.find((c) => c.table === 'tenants' && c.method === 'update')
       expect(updateCall.args[0].payment_status).toBe('paid')
+    })
+
+    it('PATCH /clients/:id/renew resolve avisos de vencimento pendentes daquele tenant', async () => {
+      setSupabase({
+        tenants: [{ data: [{ id: 'tenant-1', next_billing_at: '2026-09-01T00:00:00.000Z' }], error: null }],
+        notifications: [{ data: [], error: null }],
+      })
+      const app = buildApp()
+      await request(app).patch('/api/admin/clients/tenant-1/renew').send({ next_billing_at: '2026-09-01T00:00:00.000Z' })
+      const notifUpdate = supabaseMock.calls.find((c) => c.table === 'notifications' && c.method === 'update')
+      expect(notifUpdate.args[0].resolved_at).toBeTruthy()
+    })
+
+    it('PATCH /clients/:id aceita designar o destinatário do aviso de vencimento', async () => {
+      const userId = '11111111-1111-1111-1111-111111111111'
+      setSupabase({ tenants: [{ data: [{ id: 'tenant-1', billing_notify_user_id: userId }], error: null }] })
+      const app = buildApp()
+      const res = await request(app).patch('/api/admin/clients/tenant-1').send({ billing_notify_user_id: userId })
+      expect(res.status).toBe(200)
+      const updateCall = supabaseMock.calls.find((c) => c.table === 'tenants' && c.method === 'update')
+      expect(updateCall.args[0].billing_notify_user_id).toBe(userId)
+    })
+
+    it('PATCH /clients/:id rejeita billing_notify_user_id que não é um uuid', async () => {
+      const app = buildApp()
+      const res = await request(app).patch('/api/admin/clients/tenant-1').send({ billing_notify_user_id: 'not-a-uuid' })
+      expect(res.status).toBe(400)
     })
 
     it('PATCH /clients/:id/renew retorna 404 quando o cliente não existe (next_billing_at explícito)', async () => {
@@ -232,6 +263,61 @@ describe('routes/admin', () => {
       const app = buildApp()
       const res = await request(app).patch('/api/admin/clients/tenant-x/renew').send({ days: 30 })
       expect(res.status).toBe(404)
+    })
+
+    describe('POST /clients/billing-alert', () => {
+      it('emite alerta só pros tenants dentro do limiar configurado, com destinatário definido', async () => {
+        setSupabase({
+          platform_settings: [{ data: [{ billing_reminder_days_before: 3 }], error: null }],
+          tenants: [{
+            data: [
+              { id: 'tenant-1', name: 'Empresa A', next_billing_at: new Date(Date.now() + 2 * 86400000).toISOString(), billing_notify_user_id: 'user-1' },
+            ], error: null,
+          }],
+          notifications: [{ data: [], error: null }],
+        })
+        const app = buildApp()
+        const res = await request(app).post('/api/admin/clients/billing-alert')
+        expect(res.status).toBe(200)
+        expect(res.body).toEqual({ notified: 1, total: 1, withoutRecipient: [] })
+        const insert = insertCallsFor('notifications')[0]
+        expect(insert.args[0]).toMatchObject({ tenant_id: 'tenant-1', user_id: 'user-1', type: 'billing_reminder' })
+      })
+
+      it('não duplica quando já existe um aviso não resolvido criado hoje', async () => {
+        setSupabase({
+          platform_settings: [{ data: [{ billing_reminder_days_before: 3 }], error: null }],
+          tenants: [{ data: [{ id: 'tenant-1', name: 'Empresa A', next_billing_at: new Date().toISOString(), billing_notify_user_id: 'user-1' }], error: null }],
+          notifications: [{ data: [{ id: 'notif-1' }], error: null }],
+        })
+        const app = buildApp()
+        const res = await request(app).post('/api/admin/clients/billing-alert')
+        expect(res.body).toEqual({ notified: 0, total: 1, withoutRecipient: [] })
+        expect(insertCallsFor('notifications')).toHaveLength(0)
+      })
+
+      it('usa 3 dias como padrão quando platform_settings não retorna nada', async () => {
+        setSupabase({ platform_settings: [{ data: [], error: null }], tenants: [{ data: [], error: null }] })
+        const app = buildApp()
+        const res = await request(app).post('/api/admin/clients/billing-alert')
+        expect(res.status).toBe(200)
+        expect(res.body).toEqual({ notified: 0, total: 0, withoutRecipient: [] })
+      })
+
+      it('reporta separadamente tenants vencendo sem destinatário configurado, sem quebrar a contagem', async () => {
+        setSupabase({
+          platform_settings: [{ data: [{ billing_reminder_days_before: 3 }], error: null }],
+          tenants: [{
+            data: [
+              { id: 'tenant-1', name: 'Interprise', next_billing_at: new Date(Date.now() + 1 * 86400000).toISOString(), billing_notify_user_id: null },
+            ], error: null,
+          }],
+        })
+        const app = buildApp()
+        const res = await request(app).post('/api/admin/clients/billing-alert')
+        expect(res.body).toEqual({ notified: 0, total: 1, withoutRecipient: ['Interprise'] })
+        expect(insertCallsFor('notifications')).toHaveLength(0)
+      })
     })
 
     it('DELETE /clients/:id remove o tenant', async () => {
@@ -405,6 +491,25 @@ describe('routes/admin', () => {
       expect(typeof res.body.token).toBe('string')
     })
 
+    it('POST /clients/:id/impersonate registra auditoria e embute quem iniciou no token', async () => {
+      setSupabase({
+        tenants: [{ data: [{ name: 'Empresa', slug: 'empresa' }], error: null }],
+        users: [{ data: [{ id: 'admin-1', email: 'admin@ex.com', name: 'Admin', role: 'admin' }], error: null }],
+      })
+      const app = buildApp()
+      const res = await request(app).post('/api/admin/clients/tenant-1/impersonate')
+
+      const decoded = jwt.verify(res.body.token, 'test-secret')
+      expect(decoded.impersonatedBy).toBe('owner-1')
+      expect(decoded.sub).toBe('admin-1')
+
+      const usageInsert = supabaseMock.calls.find((c) => c.table === 'usage_events' && c.method === 'insert')
+      expect(usageInsert.args[0]).toMatchObject({
+        tenant_id: 'tenant-1', user_id: 'owner-1', event_type: 'impersonation_started',
+        meta: { targetUserId: 'admin-1', targetUserEmail: 'admin@ex.com' },
+      })
+    })
+
     it('POST /users/:id/impersonate retorna 404 quando o usuário não existe', async () => {
       setSupabase({ users: [{ data: [], error: null }] })
       const app = buildApp()
@@ -429,6 +534,24 @@ describe('routes/admin', () => {
       expect(res.status).toBe(200)
       expect(res.body.user.id).toBe('u1')
     })
+
+    it('POST /users/:id/impersonate registra auditoria e embute quem iniciou no token', async () => {
+      setSupabase({
+        users: [{ data: [{ id: 'u1', email: 'op@ex.com', name: 'Operador', role: 'agent', active: true, tenant_id: 'tenant-1' }], error: null }],
+        tenants: [{ data: [{ name: 'Empresa', slug: 'empresa' }], error: null }],
+      })
+      const app = buildApp()
+      const res = await request(app).post('/api/admin/users/u1/impersonate')
+
+      const decoded = jwt.verify(res.body.token, 'test-secret')
+      expect(decoded.impersonatedBy).toBe('owner-1')
+
+      const usageInsert = supabaseMock.calls.find((c) => c.table === 'usage_events' && c.method === 'insert')
+      expect(usageInsert.args[0]).toMatchObject({
+        tenant_id: 'tenant-1', user_id: 'owner-1', event_type: 'impersonation_started',
+        meta: { targetUserId: 'u1', targetUserEmail: 'op@ex.com' },
+      })
+    })
   })
 
   it('GET /monitoring agrega leads/mensagens/agendamentos com o nome do tenant', async () => {
@@ -448,6 +571,29 @@ describe('routes/admin', () => {
     const res = await request(app).get('/api/admin/settings')
     expect(res.body.settings.openai).toEqual({ model: 'gpt-4o-mini', configured: true })
     expect(JSON.stringify(res.body)).not.toContain('sk-xxx')
+  })
+
+  it('GET /settings inclui a config do aviso de vencimento', async () => {
+    setSupabase({ platform_settings: [{ data: [{ billing_reminder_days_before: 5, billing_reminder_time: '08:30' }], error: null }] })
+    const app = buildApp()
+    const res = await request(app).get('/api/admin/settings')
+    expect(res.body.settings.billing).toEqual({ billing_reminder_days_before: 5, billing_reminder_time: '08:30' })
+  })
+
+  describe('PUT /settings', () => {
+    it('rejeita horário em formato inválido', async () => {
+      const app = buildApp()
+      const res = await request(app).put('/api/admin/settings').send({ billing_reminder_days_before: 3, billing_reminder_time: '9:00' })
+      expect(res.status).toBe(400)
+    })
+
+    it('atualiza a config do aviso de vencimento', async () => {
+      setSupabase({ platform_settings: [{ data: [{ billing_reminder_days_before: 5, billing_reminder_time: '08:00' }], error: null }] })
+      const app = buildApp()
+      const res = await request(app).put('/api/admin/settings').send({ billing_reminder_days_before: 5, billing_reminder_time: '08:00' })
+      expect(res.status).toBe(200)
+      expect(res.body.billing).toEqual({ billing_reminder_days_before: 5, billing_reminder_time: '08:00' })
+    })
   })
 
   describe('GET /overview', () => {

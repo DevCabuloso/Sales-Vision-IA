@@ -8,6 +8,28 @@ import { uploadChatMedia } from './mediaStorage.js'
 import { decryptJSON } from './crypto.js'
 import { ttlGet, ttlInvalidate } from '../utils/ttlCache.js'
 import { normalizePhone } from '../utils/phone.js'
+import { notifyOpsFailure } from './opsAlerts.js'
+import { config } from '../config/index.js'
+
+// Rede de segurança contra custo de IA descontrolado (bug num fluxo, ou
+// alguém mandando mensagens repetidas só pra gerar chamadas de IA) — NÃO é
+// limite de plano/cobrança. Cacheado por 60s: contar isso a cada mensagem
+// recebida seria uma query extra por mensagem só pra checar um teto que na
+// prática quase nunca é atingido.
+async function isOverDailyAiCap(tenantId) {
+  const cap = config.openai.dailyMessageCapPerTenant
+  if (!cap) return false
+  const count = await ttlGet(`ai-cap-count:${tenantId}`, 60, async () => {
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const { count: c } = await supabase.from('usage_events')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId).eq('event_type', 'message_sent')
+      .gte('created_at', todayStart.toISOString())
+    return c ?? 0
+  })
+  return count >= cap
+}
 
 // Quantas mensagens recentes entram no contexto da IA — sem isso, a query e o
 // prompt cresceriam sem limite conforme a conversa envelhece.
@@ -109,6 +131,21 @@ export async function handleInboundMessage({
       return rows?.[0]?.op_settings || {}
     })
     if (opSettings.ignore_group_messages !== false) return { reply: null, scheduled: null }
+  }
+
+  // Idempotência: a Evolution pode reentregar o mesmo evento messages.upsert
+  // (reconexão do Baileys, retry interno) — sem essa checagem, a mesma
+  // mensagem rodava o flow/IA de novo e mandava uma segunda resposta pro
+  // mesmo lead, além de contar o uso em dobro nos relatórios.
+  if (waMessageId) {
+    const dup = unwrap(
+      await supabase.from('messages').select('id')
+        .eq('tenant_id', tenantId).eq('wa_message_id', waMessageId).limit(1)
+    )
+    if (dup?.length) {
+      console.log(`[orchestrator] mensagem duplicada (wa_message_id=${waMessageId}) ignorada`)
+      return { reply: null, scheduled: null }
+    }
   }
 
   const from = normalizePhone(rawFrom)
@@ -266,36 +303,85 @@ export async function handleInboundMessage({
   const aiEnabled = (tenantInfo.ai_enabled ?? true) && !lead.human_takeover
   if (!withinHours) {
     const offMsg = await getOffMessage(tenantId)
+    let offSendError = null
     try {
       await whatsapp.sendText(tenantId, from, offMsg)
-      await supabase.from('messages').insert({ tenant_id: tenantId, lead_id: lead.id, role: 'ai', text: offMsg, provider })
-    } catch (e) { console.warn('[orchestrator] off-hours msg:', e.message) }
+    } catch (e) {
+      console.warn('[orchestrator] off-hours msg:', e.message)
+      offSendError = e.message
+    }
+    await supabase.from('messages').insert({
+      tenant_id: tenantId, lead_id: lead.id, role: 'ai', text: offMsg, provider,
+      send_status: offSendError ? 'failed' : 'sent', send_error: offSendError,
+    })
+    if (offSendError) {
+      await notifyOpsFailure(tenantId, {
+        type: 'message_send_failed', leadId: lead.id,
+        title: 'Falha ao enviar mensagem de fora de horário',
+        message: `Não foi possível enviar a mensagem automática de fora de horário para ${lead.name || from}: ${offSendError}`,
+      })
+    }
     return { reply: offMsg, scheduled: null }
   }
 
-  // 4) roda o agente (se IA estiver habilitada)
+  // 4) roda o agente (se IA estiver habilitada e dentro do teto diário de segurança)
   let reply = ''
   let scheduled = null
-  if (aiEnabled) {
+  if (aiEnabled && await isOverDailyAiCap(tenantId)) {
+    console.warn(`[orchestrator] teto diário de mensagens de IA atingido para tenant=${tenantId}`)
+    await supabase.from('leads')
+      .update({ human_takeover: true, updated_at: new Date().toISOString() })
+      .eq('id', lead.id)
+    lead.human_takeover = true
+    await notifyOpsFailure(tenantId, {
+      type: 'ai_daily_cap_reached',
+      title: 'Teto diário de mensagens de IA atingido',
+      message: `O limite de segurança de ${config.openai.dailyMessageCapPerTenant} mensagens de IA no dia foi atingido. Novas conversas estão sendo movidas para atendimento humano automaticamente até a virada do dia.`,
+    })
+  } else if (aiEnabled) {
     try {
       const out = await runAgent({ tenantId, tenantName, history: hist })
       reply = out.reply
       scheduled = out.scheduled
     } catch (e) {
       console.error('[orchestrator] IA falhou:', e.message)
+      // Antes disso, uma falha da IA (chave inválida, rate limit, timeout) fazia
+      // o lead ficar em silêncio total — ninguém no time era avisado, e sem
+      // human_takeover a conversa nem aparecia como pendente de atenção humana.
+      await supabase.from('leads')
+        .update({ human_takeover: true, updated_at: new Date().toISOString() })
+        .eq('id', lead.id)
+      lead.human_takeover = true
+      await notifyOpsFailure(tenantId, {
+        type: 'ai_reply_failed', leadId: lead.id,
+        title: 'IA não conseguiu responder um lead',
+        message: `A IA falhou ao responder ${lead.name || from} e a conversa foi movida para atendimento humano automaticamente. Erro: ${e.message}`,
+      })
     }
   }
 
   // 5) envia resposta
   if (reply) {
+    let sendError = null
     try {
       await whatsapp.sendText(tenantId, from, reply)
-      await Promise.all([
-        supabase.from('messages').insert({ tenant_id: tenantId, lead_id: lead.id, role: 'ai', text: reply, provider }),
-        logUsage(tenantId, null, 'message_sent', { provider }),
-      ])
     } catch (e) {
       console.error('[orchestrator] falha ao enviar:', e.message)
+      sendError = e.message
+    }
+    await Promise.all([
+      supabase.from('messages').insert({
+        tenant_id: tenantId, lead_id: lead.id, role: 'ai', text: reply, provider,
+        send_status: sendError ? 'failed' : 'sent', send_error: sendError,
+      }),
+      logUsage(tenantId, null, 'message_sent', { provider }),
+    ])
+    if (sendError) {
+      await notifyOpsFailure(tenantId, {
+        type: 'message_send_failed', leadId: lead.id,
+        title: 'Falha ao enviar resposta da IA',
+        message: `Não foi possível enviar a resposta da IA para ${lead.name || from}: ${sendError}`,
+      })
     }
   }
 

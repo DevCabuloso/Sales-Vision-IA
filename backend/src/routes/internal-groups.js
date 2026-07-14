@@ -29,6 +29,48 @@ const locationSchema = z.object({
   longitude: z.number(),
 })
 
+// internal_group_members não tem coluna tenant_id — sem essas duas checagens
+// juntas, (1) um user_id de outro tenant podia ser inserido como membro sem
+// nenhuma validação, e (2) mesmo sem esse bug, as rotas abaixo checavam SÓ a
+// linha de membership (group_id + user_id), nunca se o próprio grupo pertence
+// ao tenant do usuário — um membro "vazado" de outro tenant (por erro ou
+// enumeração de UUID) teria acesso completo às mensagens daquele grupo.
+// assertGroupMembership fecha as duas pontas de uma vez: confirma que o grupo
+// existe NESTE tenant e que o usuário é membro dele.
+async function assertGroupMembership(tenantId, groupId, userId) {
+  const groups = unwrap(
+    await supabase.from('internal_groups').select('id, created_by').eq('id', groupId).eq('tenant_id', tenantId).limit(1)
+  )
+  if (!groups.length) {
+    const err = new Error('Grupo não encontrado.')
+    err.status = 404
+    throw err
+  }
+  const mem = unwrap(
+    await supabase.from('internal_group_members').select('group_id').eq('group_id', groupId).eq('user_id', userId).limit(1)
+  )
+  if (!mem.length) {
+    const err = new Error('Acesso negado.')
+    err.status = 403
+    throw err
+  }
+  return groups[0]
+}
+
+async function assertUsersBelongToTenant(tenantId, userIds) {
+  if (!userIds.length) return
+  const rows = unwrap(
+    await supabase.from('users').select('id').eq('tenant_id', tenantId).in('id', userIds)
+  )
+  const found = new Set(rows.map((r) => r.id))
+  const invalid = userIds.filter((id) => !found.has(id))
+  if (invalid.length) {
+    const err = new Error('Um ou mais membros não pertencem a este cliente.')
+    err.status = 400
+    throw err
+  }
+}
+
 // GET / — grupos do usuário atual
 internalGroupsRouter.get('/', async (req, res) => {
   try {
@@ -54,6 +96,7 @@ internalGroupsRouter.post('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const { name, member_ids = [] } = parsed.data
   try {
+    await assertUsersBelongToTenant(req.user.tenantId, member_ids)
     const group = unwrap(
       await supabase.from('internal_groups')
         .insert({ tenant_id: req.user.tenantId, name: name.trim(), created_by: req.user.id })
@@ -63,15 +106,13 @@ internalGroupsRouter.post('/', async (req, res) => {
     await supabase.from('internal_group_members')
       .insert(all.map((uid) => ({ group_id: group.id, user_id: uid })))
     res.status(201).json({ group: { ...group, members: [] } })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }) }
 })
 
 // GET /:id/messages
 internalGroupsRouter.get('/:id/messages', async (req, res) => {
   try {
-    const { data: mem } = await supabase.from('internal_group_members')
-      .select('group_id').eq('group_id', req.params.id).eq('user_id', req.user.id).limit(1)
-    if (!mem?.length) return res.status(403).json({ error: 'Acesso negado.' })
+    await assertGroupMembership(req.user.tenantId, req.params.id, req.user.id)
 
     const { after, limit = 60 } = req.query
     let q = supabase.from('internal_messages')
@@ -85,7 +126,7 @@ internalGroupsRouter.get('/:id/messages', async (req, res) => {
     let msgs = unwrap(await q)
     if (!after) msgs = msgs.reverse()
     res.json({ messages: msgs })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }) }
 })
 
 // POST /:id/messages — enviar mensagem
@@ -94,9 +135,7 @@ internalGroupsRouter.post('/:id/messages', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const { text } = parsed.data
   try {
-    const { data: mem } = await supabase.from('internal_group_members')
-      .select('group_id').eq('group_id', req.params.id).eq('user_id', req.user.id).limit(1)
-    if (!mem?.length) return res.status(403).json({ error: 'Acesso negado.' })
+    await assertGroupMembership(req.user.tenantId, req.params.id, req.user.id)
 
     const msg = unwrap(
       await supabase.from('internal_messages')
@@ -106,7 +145,7 @@ internalGroupsRouter.post('/:id/messages', async (req, res) => {
     await supabase.from('internal_groups')
       .update({ updated_at: new Date().toISOString() }).eq('id', req.params.id)
     res.status(201).json({ message: msg })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }) }
 })
 
 // PATCH /:id/messages/:messageId — edita mensagem (só o autor)
@@ -170,9 +209,7 @@ internalGroupsRouter.post('/:id/messages/:messageId/forward', async (req, res) =
     const original = msgRows?.[0]
     if (!original || original.deleted_at) return res.status(404).json({ error: 'Mensagem não encontrada.' })
 
-    const { data: mem } = await supabase.from('internal_group_members')
-      .select('group_id').eq('group_id', toGroupId).eq('user_id', req.user.id).limit(1)
-    if (!mem?.length) return res.status(403).json({ error: 'Você não participa do grupo de destino.' })
+    await assertGroupMembership(req.user.tenantId, toGroupId, req.user.id)
 
     const row = unwrap(
       await supabase.from('internal_messages').insert({
@@ -187,7 +224,7 @@ internalGroupsRouter.post('/:id/messages/:messageId/forward', async (req, res) =
     )
     await supabase.from('internal_groups').update({ updated_at: new Date().toISOString() }).eq('id', toGroupId)
     res.status(201).json({ message: row })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }) }
 })
 
 // POST /:id/location — envia localização no chat interno (sem WhatsApp envolvido)
@@ -196,9 +233,7 @@ internalGroupsRouter.post('/:id/location', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Localização inválida.' })
   const { latitude, longitude } = parsed.data
   try {
-    const { data: mem } = await supabase.from('internal_group_members')
-      .select('group_id').eq('group_id', req.params.id).eq('user_id', req.user.id).limit(1)
-    if (!mem?.length) return res.status(403).json({ error: 'Acesso negado.' })
+    await assertGroupMembership(req.user.tenantId, req.params.id, req.user.id)
 
     const row = unwrap(
       await supabase.from('internal_messages').insert({
@@ -212,7 +247,7 @@ internalGroupsRouter.post('/:id/location', async (req, res) => {
     )
     await supabase.from('internal_groups').update({ updated_at: new Date().toISOString() }).eq('id', req.params.id)
     res.status(201).json({ message: row })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }) }
 })
 
 // PATCH /:id — editar nome / membros (só quem participa do grupo)
@@ -221,44 +256,28 @@ internalGroupsRouter.patch('/:id', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const { name, member_ids } = parsed.data
   try {
-    const rows = unwrap(
-      await supabase.from('internal_groups')
-        .select('created_by').eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Grupo não encontrado.' })
-
-    const { data: mem } = await supabase.from('internal_group_members')
-      .select('group_id').eq('group_id', req.params.id).eq('user_id', req.user.id).limit(1)
-    if (!mem?.length) return res.status(403).json({ error: 'Acesso negado.' })
+    if (member_ids !== undefined) await assertUsersBelongToTenant(req.user.tenantId, member_ids)
+    const group = await assertGroupMembership(req.user.tenantId, req.params.id, req.user.id)
 
     const update = { updated_at: new Date().toISOString() }
     if (name?.trim()) update.name = name.trim()
     await supabase.from('internal_groups').update(update).eq('id', req.params.id)
 
     if (member_ids !== undefined) {
-      const all = [...new Set([rows[0].created_by, ...member_ids])]
+      const all = [...new Set([group.created_by, ...member_ids])]
       await supabase.from('internal_group_members').delete().eq('group_id', req.params.id)
       await supabase.from('internal_group_members')
         .insert(all.map((uid) => ({ group_id: req.params.id, user_id: uid })))
     }
     res.json({ updated: true })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }) }
 })
 
 // DELETE /:id — só quem participa do grupo
 internalGroupsRouter.delete('/:id', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('internal_groups')
-        .select('created_by').eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Grupo não encontrado.' })
-
-    const { data: mem } = await supabase.from('internal_group_members')
-      .select('group_id').eq('group_id', req.params.id).eq('user_id', req.user.id).limit(1)
-    if (!mem?.length) return res.status(403).json({ error: 'Acesso negado.' })
-
+    await assertGroupMembership(req.user.tenantId, req.params.id, req.user.id)
     unwrap(await supabase.from('internal_groups').delete().eq('id', req.params.id))
     res.json({ deleted: true })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }) }
 })

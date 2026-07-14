@@ -182,6 +182,93 @@ describe('orchestrator', () => {
       expect(aiMsgInsert).toBeTruthy()
     })
 
+    it('ignora um wa_message_id já processado (idempotência contra redelivery da Evolution)', async () => {
+      setSupabase({
+        messages: [{ data: [{ id: 'msg-existente' }], error: null }], // já existe mensagem com esse wa_message_id
+      })
+
+      const result = await handleInboundMessage({
+        tenantId: 'tenant-dup-1', from: '5511988887777', text: 'oi', provider: 'evolution',
+        waMessageId: 'wa-repetida',
+      })
+
+      expect(result).toEqual({ reply: null, scheduled: null })
+      expect(mockState.runAgent).not.toHaveBeenCalled()
+      expect(mockState.sendText).not.toHaveBeenCalled()
+      // nem chega a consultar leads — a checagem de duplicata roda antes de qualquer upsert
+      expect(callsFor('leads').length).toBe(0)
+    })
+
+    it('processa normalmente quando o wa_message_id ainda não existe', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [], error: null }, // checagem de duplicata: nada encontrado
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'oi' }], error: null },
+          { data: [{ id: 'msg-ai-1' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+      })
+      mockState.runAgent.mockResolvedValue({ reply: 'Oi!', scheduled: null })
+
+      const result = await handleInboundMessage({
+        tenantId: 'tenant-nova-1', from: '5511988887777', text: 'oi', provider: 'evolution',
+        waMessageId: 'wa-nova',
+      })
+
+      expect(result).toEqual({ reply: 'Oi!', scheduled: null })
+    })
+
+    it('quando a IA falha, move a conversa para atendimento humano e cria um alerta (sino) em vez de deixar o lead em silêncio', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'oi' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+        notifications: [{ data: [], error: null }], // dedupe: nenhum alerta recente
+        users: [{ data: [{ id: 'admin-1' }], error: null }],
+      })
+      mockState.runAgent.mockRejectedValue(new Error('OpenAI indisponível'))
+
+      const result = await handleInboundMessage({
+        tenantId: 'tenant-ia-falha-1', from: '5511988887777', text: 'oi', provider: 'evolution',
+      })
+
+      expect(result).toEqual({ reply: '', scheduled: null })
+      expect(mockState.sendText).not.toHaveBeenCalled() // sem reply, nada é enviado
+      const takeoverUpdate = callsFor('leads', 'update').find((c) => c.args[0]?.human_takeover === true)
+      expect(takeoverUpdate).toBeTruthy()
+      const notifInsert = callsFor('notifications', 'insert').find((c) => c.args[0]?.type === 'ai_reply_failed')
+      expect(notifInsert).toBeTruthy()
+      expect(notifInsert.args[0]).toMatchObject({ tenant_id: 'tenant-ia-falha-1', user_id: 'admin-1' })
+    })
+
+    it('quando o envio da resposta da IA falha, ainda assim persiste a mensagem (send_status=failed) e alerta os admins', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'oi' }], error: null },
+          { data: [{ id: 'msg-ai-1' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+        notifications: [{ data: [], error: null }],
+        users: [{ data: [{ id: 'admin-1' }], error: null }],
+      })
+      mockState.runAgent.mockResolvedValue({ reply: 'Oi! Como posso ajudar?', scheduled: null })
+      mockState.sendText.mockRejectedValue(new Error('Evolution indisponível'))
+
+      await handleInboundMessage({ tenantId: 'tenant-send-falha-1', from: '5511988887777', text: 'oi', provider: 'evolution' })
+
+      const aiMsgInsert = callsFor('messages', 'insert').find((c) => c.args[0]?.role === 'ai')
+      expect(aiMsgInsert.args[0]).toMatchObject({ send_status: 'failed', send_error: 'Evolution indisponível' })
+      const notifInsert = callsFor('notifications', 'insert').find((c) => c.args[0]?.type === 'message_send_failed')
+      expect(notifInsert).toBeTruthy()
+    })
+
     it('busca só as últimas 40 mensagens (desc+limit) e entrega ao agente em ordem cronológica', async () => {
       setSupabase({
         leads: [{ data: { ...baseLead }, error: null }],
@@ -234,6 +321,31 @@ describe('orchestrator', () => {
       expect(result).toEqual({ reply: '', scheduled: null })
       expect(mockState.runAgent).not.toHaveBeenCalled()
       expect(mockState.sendText).not.toHaveBeenCalled()
+    })
+
+    it('quando o teto diário de mensagens de IA é atingido, não chama o agente e move a conversa pra humano', async () => {
+      setSupabase({
+        leads: [{ data: { ...baseLead }, error: null }],
+        messages: [
+          { data: [{ id: 'msg-lead-1' }], error: null },
+          { data: [{ role: 'lead', text: 'oi' }], error: null },
+        ],
+        tenants: [{ data: [{ name: 'Empresa Teste', ai_enabled: true }], error: null }],
+        usage_events: [{ data: null, error: null, count: 2000 }], // >= AI_DAILY_MESSAGE_CAP default (2000)
+        notifications: [{ data: [], error: null }],
+        users: [{ data: [{ id: 'admin-1' }], error: null }],
+      })
+
+      const result = await handleInboundMessage({
+        tenantId: 'tenant-teto-1', from: '5511988887777', text: 'oi', provider: 'evolution',
+      })
+
+      expect(result).toEqual({ reply: '', scheduled: null })
+      expect(mockState.runAgent).not.toHaveBeenCalled()
+      const takeoverUpdate = callsFor('leads', 'update').find((c) => c.args[0]?.human_takeover === true)
+      expect(takeoverUpdate).toBeTruthy()
+      const notifInsert = callsFor('notifications', 'insert').find((c) => c.args[0]?.type === 'ai_daily_cap_reached')
+      expect(notifInsert).toBeTruthy()
     })
 
     it('quando o agente agenda uma reunião, persiste o appointment e move o estágio do lead', async () => {

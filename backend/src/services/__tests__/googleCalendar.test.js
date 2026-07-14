@@ -225,7 +225,7 @@ describe('googleCalendar service', () => {
 
       const result = await gcal.cancelEvent('tenant-1', 'evt-1')
       expect(result).toEqual({ cancelled: true })
-      expect(del).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'evt-1' }))
+      expect(del).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'evt-1' }), expect.objectContaining({ timeout: 10_000 }))
     })
 
     it('getFreeBusy retorna o array de horários ocupados do calendário', async () => {

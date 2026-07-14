@@ -238,4 +238,60 @@ describe('scheduler', () => {
       expect(failUpdate.args[0].error).toBe('Lead sem telefone.')
     })
   })
+
+  describe('aviso de vencimento de mensalidade (billing reminder)', () => {
+    it('não faz nada quando o horário atual não bate com o configurado', async () => {
+      vi.setSystemTime(new Date('2026-07-14T11:00:00.000Z')) // 08:00 em São Paulo, config é 09:00
+      setSupabase({
+        ...emptyOtherQueues,
+        platform_settings: [{ data: [{ billing_reminder_days_before: 3, billing_reminder_time: '09:00' }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(insertCallsFor('notifications')).toHaveLength(0)
+    })
+
+    it('cria o aviso quando o vencimento cai exatamente N dias à frente, no horário configurado', async () => {
+      vi.setSystemTime(new Date('2026-07-14T12:00:00.000Z')) // 09:00 em São Paulo
+      setSupabase({
+        ...emptyOtherQueues,
+        platform_settings: [{ data: [{ billing_reminder_days_before: 3, billing_reminder_time: '09:00' }], error: null }],
+        tenants: [{ data: [{ id: 'tenant-1', name: 'Empresa X', next_billing_at: '2026-07-17T15:00:00.000Z', billing_notify_user_id: 'user-1' }], error: null }],
+        notifications: [{ data: [], error: null }], // nenhum aviso pendente hoje ainda
+      })
+
+      await runOneTick()
+
+      const insert = insertCallsFor('notifications')[0]
+      expect(insert.args[0]).toMatchObject({ tenant_id: 'tenant-1', user_id: 'user-1', type: 'billing_reminder' })
+    })
+
+    it('não duplica quando já existe um aviso não resolvido criado hoje', async () => {
+      vi.setSystemTime(new Date('2026-07-14T12:00:00.000Z'))
+      setSupabase({
+        ...emptyOtherQueues,
+        platform_settings: [{ data: [{ billing_reminder_days_before: 3, billing_reminder_time: '09:00' }], error: null }],
+        tenants: [{ data: [{ id: 'tenant-1', name: 'Empresa X', next_billing_at: '2026-07-17T15:00:00.000Z', billing_notify_user_id: 'user-1' }], error: null }],
+        notifications: [{ data: [{ id: 'notif-1' }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(insertCallsFor('notifications')).toHaveLength(0)
+    })
+
+    it('ignora tenants cujo vencimento não cai no dia alvo', async () => {
+      vi.setSystemTime(new Date('2026-07-14T12:00:00.000Z'))
+      setSupabase({
+        ...emptyOtherQueues,
+        platform_settings: [{ data: [{ billing_reminder_days_before: 3, billing_reminder_time: '09:00' }], error: null }],
+        tenants: [{ data: [{ id: 'tenant-1', name: 'Empresa X', next_billing_at: '2026-08-01T15:00:00.000Z', billing_notify_user_id: 'user-1' }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(insertCallsFor('notifications')).toHaveLength(0)
+    })
+  })
 })

@@ -41,10 +41,38 @@ describe('routes/notifications', () => {
   })
 
   it('retorna vazio quando não há mensagens recentes', async () => {
-    setSupabase({ messages: [{ data: [], error: null }] })
+    setSupabase({ messages: [{ data: [], error: null }], notifications: [{ data: [], error: null }] })
     const app = buildApp()
     const res = await request(app).get('/api/notifications')
-    expect(res.body).toEqual({ notifications: [] })
+    expect(res.body).toEqual({ notifications: [], alerts: [] })
+  })
+
+  it('inclui avisos persistidos (alerts) mesmo sem leads sem resposta', async () => {
+    setSupabase({
+      messages: [{ data: [], error: null }],
+      notifications: [{ data: [{ id: 'notif-1', type: 'billing_reminder', title: 'Vencimento', message: 'Vence em 3 dias.' }], error: null }],
+    })
+    const app = buildApp()
+    const res = await request(app).get('/api/notifications')
+    expect(res.body.alerts).toHaveLength(1)
+    expect(res.body.alerts[0]).toMatchObject({ type: 'billing_reminder', title: 'Vencimento' })
+  })
+
+  describe('PATCH /:id/read', () => {
+    it('marca o aviso como lido', async () => {
+      setSupabase({ notifications: [{ data: [{ id: 'notif-1' }], error: null }] })
+      const app = buildApp()
+      const res = await request(app).patch('/api/notifications/notif-1/read')
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ read: true })
+    })
+
+    it('retorna 404 quando o aviso não existe (ou não é do usuário/tenant)', async () => {
+      setSupabase({ notifications: [{ data: [], error: null }] })
+      const app = buildApp()
+      const res = await request(app).patch('/api/notifications/notif-x/read')
+      expect(res.status).toBe(404)
+    })
   })
 
   it('inclui lead cuja última mensagem é dele mesmo e já passou do tempo configurado (padrão 30min)', async () => {

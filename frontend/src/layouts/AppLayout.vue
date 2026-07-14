@@ -178,6 +178,7 @@ import NotificationBell from '@/components/NotificationBell.vue'
 import { useNotificationsStore } from '@/stores/notifications'
 import { supabase } from '@/services/supabase'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { useIdleLogout } from '@/composables/useIdleLogout'
 
 const router = useRouter()
 const route  = useRoute()
@@ -275,19 +276,30 @@ function feat(key) {
   return f[key] !== false
 }
 
+// Permissão POR OPERADOR (distinta de feat(), que é o plano do tenant): só se
+// aplica quando o admin marcou este usuário como restrito (is_restricted) —
+// caso contrário, ou pra admin/owner, libera tudo. Backend reforça a mesma
+// checagem em requirePermission() (middleware/auth.js) — isso aqui é só pra
+// não mostrar no menu uma área que a API vai recusar.
+function perm(key) {
+  if (!auth.user?.is_restricted) return true
+  if (auth.user?.role === 'admin' || auth.user?.role === 'owner') return true
+  return auth.user?.permissions?.[key] === true
+}
+
 const navMain = computed(() => [
   { title: t('nav.dashboard'),  icon: 'mdi-view-dashboard-outline',  to: '/dashboard' },
-  { title: t('nav.kanban'),     icon: 'mdi-view-column-outline',     to: '/kanban',   show: feat('kanban') },
-  { title: t('nav.chat'),       icon: 'mdi-chat-outline',            to: '/chat' },
+  { title: t('nav.kanban'),     icon: 'mdi-view-column-outline',     to: '/kanban',   show: feat('kanban') && perm('kanban') },
+  { title: t('nav.chat'),       icon: 'mdi-chat-outline',            to: '/chat',     show: perm('chat') },
   { title: t('nav.grupos'),     icon: 'mdi-account-group-outline',   to: '/grupos' },
-  { title: t('nav.contatos'),   icon: 'mdi-contacts-outline',        to: '/contatos', show: feat('contacts') },
-  { title: t('nav.leads'),      icon: 'mdi-account-multiple-outline',to: '/leads' },
-  { title: t('nav.agenda'),     icon: 'mdi-calendar-clock-outline',  to: '/agenda',   show: feat('agenda') },
+  { title: t('nav.contatos'),   icon: 'mdi-contacts-outline',        to: '/contatos', show: feat('contacts') && perm('contatos') },
+  { title: t('nav.leads'),      icon: 'mdi-account-multiple-outline',to: '/leads',    show: perm('leads') },
+  { title: t('nav.agenda'),     icon: 'mdi-calendar-clock-outline',  to: '/agenda',   show: feat('agenda') && perm('agenda') },
 ].filter((i) => i.show !== false))
 
 const navTools = computed(() => [
-  { title: t('nav.templates'),  icon: 'mdi-file-document-multiple-outline', to: '/templates' },
-  { title: t('nav.broadcast'),  icon: 'mdi-bullhorn-outline',               to: '/broadcast',  show: feat('broadcast') },
+  { title: t('nav.templates'),  icon: 'mdi-file-document-multiple-outline', to: '/templates', show: perm('templates') },
+  { title: t('nav.broadcast'),  icon: 'mdi-bullhorn-outline',               to: '/broadcast',  show: feat('broadcast') && perm('broadcast') },
   { title: t('nav.acompanhamentos'), icon: 'mdi-timeline-clock-outline',    to: '/acompanhamentos' },
   { title: 'Chat Flow',         icon: 'mdi-robot-outline',                  to: '/flows' },
   { title: t('nav.usuarios'),   icon: 'mdi-account-group-outline',          to: '/operadores', show: feat('operators') },
@@ -310,12 +322,17 @@ const initials   = computed(() => (auth.user?.email || '?').slice(0, 2).toUpperC
 
 const bottomNavItems = computed(() => [
   { title: 'Dashboard', icon: 'mdi-view-dashboard-outline', to: '/dashboard' },
-  { title: 'Chat',      icon: 'mdi-chat-outline',           to: '/chat' },
-  { title: 'Kanban',    icon: 'mdi-view-column-outline',    to: '/kanban' },
-  { title: 'Leads',     icon: 'mdi-account-multiple-outline', to: '/leads' },
-])
+  { title: 'Chat',      icon: 'mdi-chat-outline',           to: '/chat',   show: perm('chat') },
+  { title: 'Kanban',    icon: 'mdi-view-column-outline',    to: '/kanban', show: feat('kanban') && perm('kanban') },
+  { title: 'Leads',     icon: 'mdi-account-multiple-outline', to: '/leads', show: perm('leads') },
+].filter((i) => i.show !== false))
 
 async function logout() { await auth.logout(); router.push('/login') }
+
+// Sessão de 7 dias (cookie httpOnly) não tinha nenhum limite de inatividade —
+// um dispositivo compartilhado/perdido com a plataforma aberta continuava
+// com acesso total indefinidamente. 30min sem nenhuma interação = logout.
+useIdleLogout(logout)
 </script>
 
 <style scoped>

@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import multer from 'multer'
 import { supabase, unwrap } from '../db/supabase.js'
-import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { logUsage } from '../services/usage.js'
 import { uploadChatMedia } from '../services/mediaStorage.js'
 import { getTenantTimezone } from './business-hours.js'
@@ -25,7 +25,7 @@ const upload = multer({
 })
 
 export const chatRouter = Router()
-chatRouter.use(requireAuth, requireTenant)
+chatRouter.use(requireAuth, requireTenant, requirePermission('chat'))
 
 const isManager = (role) => role === 'owner' || role === 'admin'
 
@@ -64,9 +64,13 @@ chatRouter.get('/', async (req, res) => {
 
     const leadIds = leads.map((l) => l.id)
 
-    // Limita a 1500 mensagens (5 por lead em média) para obter a última de cada um
+    // Limita a 1500 mensagens (5 por lead em média) para obter a última de cada um.
+    // .eq('tenant_id', ...) é redundante aqui na prática (leadIds já vem de uma
+    // consulta de `leads` scoped ao tenant), mas fica como defesa em profundidade —
+    // sem ela, essa era a única query de `messages` do arquivo sem filtro de tenant.
     const msgs = unwrap(
       await supabase.from('messages').select('lead_id, text, role, created_at')
+        .eq('tenant_id', req.user.tenantId)
         .in('lead_id', leadIds)
         .order('created_at', { ascending: false })
         .limit(1500)
@@ -147,9 +151,15 @@ chatRouter.get('/operators', async (req, res) => {
 })
 
 // POST /api/chat/start — iniciar conversa avulsa
+const startSchema = z.object({
+  phone: z.string().min(1, 'Telefone obrigatório.'),
+  name: z.string().max(200).optional().nullable(),
+  message: z.string().max(4000).optional().nullable(),
+})
 chatRouter.post('/start', async (req, res) => {
-  const { phone, name, message } = req.body
-  if (!phone) return res.status(400).json({ error: 'Telefone obrigatório.' })
+  const parsed = startSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { phone, name, message } = parsed.data
   try {
     const clean = normalizePhone(phone)
     const lead = unwrap(
@@ -169,19 +179,26 @@ chatRouter.post('/start', async (req, res) => {
     await logTicketEvent(req.user.tenantId, lead.id, req.user.id, req.user.name, 'opened')
 
     if (message?.trim()) {
+      let sent = null
+      let sendError = null
+      try {
+        const { sendText } = await import('../services/whatsapp/index.js')
+        sent = await sendText(req.user.tenantId, clean, message.trim())
+      } catch (e) {
+        console.warn('[chat/start] WhatsApp:', e.message)
+        sendError = e.message
+      }
       await supabase.from('messages').insert({
         tenant_id: req.user.tenantId,
         lead_id: lead.id,
         role: 'agent',
         text: message.trim(),
         is_human_takeover: true,
+        wa_message_id: sent?.id || null,
+        provider: sent?.provider || null,
+        send_status: sendError ? 'failed' : 'sent',
+        send_error: sendError,
       })
-      try {
-        const { sendText } = await import('../services/whatsapp/index.js')
-        await sendText(req.user.tenantId, clean, message.trim())
-      } catch (e) {
-        console.warn('[chat/start] WhatsApp:', e.message)
-      }
     }
 
     res.status(201).json({ lead })
@@ -307,6 +324,29 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
       }
     }
 
+    // Envia ANTES de persistir — sem essa ordem, a mensagem aparecia como
+    // "enviada" no Chat mesmo quando o envio ao WhatsApp falhava de verdade
+    // (a falha virava só um console.warn). Continua sempre gravando a
+    // mensagem (o atendente não perde o que digitou), mas com send_status
+    // explícito pra a UI poder mostrar a falha em vez de escondê-la.
+    let sent = null
+    let sendError = null
+    if (lead.phone) {
+      try {
+        const { sendText } = await import('../services/whatsapp/index.js')
+        const { markSentByPlatform } = await import('../services/orchestrator.js')
+        markSentByPlatform(req.user.tenantId, lead.phone, parsed.data.text)
+        sent = await sendText(req.user.tenantId, lead.phone, parsed.data.text, {
+          quotedWaId: quoted?.wa_message_id || undefined,
+          quotedFromMe: quoted ? quoted.role !== 'lead' : undefined,
+          quotedText: quoted?.text || undefined,
+        })
+      } catch (e) {
+        console.warn('[chat] falha ao enviar WhatsApp:', e.message)
+        sendError = e.message
+      }
+    }
+
     const row = unwrap(
       await supabase.from('messages').insert({
         tenant_id: req.user.tenantId,
@@ -315,29 +355,13 @@ chatRouter.post('/:leadId/messages', async (req, res) => {
         text: parsed.data.text,
         is_human_takeover: lead.human_takeover,
         reply_to_id: quoted?.id || null,
+        wa_message_id: sent?.id || null,
+        provider: sent?.provider || null,
+        wa_remote_jid: sent?.remoteJid || null,
+        send_status: sendError ? 'failed' : 'sent',
+        send_error: sendError,
       }).select('*').single()
     )
-
-    if (lead.phone) {
-      try {
-        const { sendText } = await import('../services/whatsapp/index.js')
-        const { markSentByPlatform } = await import('../services/orchestrator.js')
-        markSentByPlatform(req.user.tenantId, lead.phone, parsed.data.text)
-        const sent = await sendText(req.user.tenantId, lead.phone, parsed.data.text, {
-          quotedWaId: quoted?.wa_message_id || undefined,
-          quotedFromMe: quoted ? quoted.role !== 'lead' : undefined,
-          quotedText: quoted?.text || undefined,
-        })
-        if (sent?.id) {
-          await supabase.from('messages').update({ wa_message_id: sent.id, provider: sent.provider, wa_remote_jid: sent.remoteJid || null }).eq('id', row.id)
-          row.wa_message_id = sent.id
-          row.provider = sent.provider
-          row.wa_remote_jid = sent.remoteJid || null
-        }
-      } catch (e) {
-        console.warn('[chat] falha ao enviar WhatsApp:', e.message)
-      }
-    }
 
     await logUsage(req.user.tenantId, req.user.id, 'message_sent', { by: 'agent' })
     res.status(201).json({ message: row })
@@ -469,6 +493,31 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
       }
     }
 
+    // Envia ANTES de persistir (ver comentário equivalente na rota de texto acima).
+    let sent = null
+    let sendError = null
+    if (lead.phone) {
+      try {
+        const { sendMedia } = await import('../services/whatsapp/index.js')
+        const { markSentByPlatform } = await import('../services/orchestrator.js')
+        // Evolution ecoa a própria mensagem enviada via webhook (fromMe) com esse mesmo texto —
+        // marca como "já processada" para não duplicar a mensagem no histórico.
+        markSentByPlatform(req.user.tenantId, lead.phone, caption || `[${mediaType}]`)
+        sent = await sendMedia(req.user.tenantId, lead.phone, {
+          buffer: req.file.buffer,
+          mimetype: req.file.mimetype,
+          filename,
+          caption,
+          quotedWaId: quoted?.wa_message_id || undefined,
+          quotedFromMe: quoted ? quoted.role !== 'lead' : undefined,
+          quotedText: quoted?.text || undefined,
+        })
+      } catch (e) {
+        console.warn('[chat/media] WhatsApp:', e.message)
+        sendError = e.message
+      }
+    }
+
     const row = unwrap(
       await supabase.from('messages').insert({
         tenant_id: req.user.tenantId,
@@ -482,35 +531,13 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
         media_filename: filename,
         media_duration_seconds: mediaDurationSeconds,
         reply_to_id: quoted?.id || null,
+        wa_message_id: sent?.id || null,
+        provider: sent?.provider || null,
+        wa_remote_jid: sent?.remoteJid || null,
+        send_status: sendError ? 'failed' : 'sent',
+        send_error: sendError,
       }).select('*').single()
     )
-
-    if (lead.phone) {
-      try {
-        const { sendMedia } = await import('../services/whatsapp/index.js')
-        const { markSentByPlatform } = await import('../services/orchestrator.js')
-        // Evolution ecoa a própria mensagem enviada via webhook (fromMe) com esse mesmo texto —
-        // marca como "já processada" para não duplicar a mensagem no histórico.
-        markSentByPlatform(req.user.tenantId, lead.phone, caption || `[${mediaType}]`)
-        const sent = await sendMedia(req.user.tenantId, lead.phone, {
-          buffer: req.file.buffer,
-          mimetype: req.file.mimetype,
-          filename,
-          caption,
-          quotedWaId: quoted?.wa_message_id || undefined,
-          quotedFromMe: quoted ? quoted.role !== 'lead' : undefined,
-          quotedText: quoted?.text || undefined,
-        })
-        if (sent?.id) {
-          await supabase.from('messages').update({ wa_message_id: sent.id, provider: sent.provider, wa_remote_jid: sent.remoteJid || null }).eq('id', row.id)
-          row.wa_message_id = sent.id
-          row.provider = sent.provider
-          row.wa_remote_jid = sent.remoteJid || null
-        }
-      } catch (e) {
-        console.warn('[chat/media] WhatsApp:', e.message)
-      }
-    }
 
     res.status(201).json({ message: row })
   } catch (e) {
@@ -644,12 +671,22 @@ chatRouter.post('/:leadId/messages/:messageId/forward', async (req, res) => {
       text: original.text,
     }
     let sent = null
+    let sendError = null
 
+    // Cada branch fica no seu próprio try/catch: uma falha no reenvio não pode
+    // derrubar a rota inteira com 500 (o encaminhamento em si é uma ação
+    // válida mesmo se o envio ao WhatsApp falhar) nem virar uma mensagem
+    // "fantasma" gravada como se tivesse sido entregue.
     if (original.location_lat != null) {
       insertPayload.location_lat = original.location_lat
       insertPayload.location_lng = original.location_lng
       if (dest.phone) {
-        sent = await sendLocation(req.user.tenantId, dest.phone, { latitude: original.location_lat, longitude: original.location_lng })
+        try {
+          sent = await sendLocation(req.user.tenantId, dest.phone, { latitude: original.location_lat, longitude: original.location_lng })
+        } catch (e) {
+          console.warn('[chat/forward] falha ao reenviar localização:', e.message)
+          sendError = e.message
+        }
       }
     } else if (original.media_url) {
       insertPayload.media_url = original.media_url
@@ -664,16 +701,24 @@ chatRouter.post('/:leadId/messages/:messageId/forward', async (req, res) => {
           })
         } catch (e) {
           console.warn('[chat/forward] falha ao reenviar mídia:', e.message)
+          sendError = e.message
         }
       }
     } else if (dest.phone) {
-      sent = await sendText(req.user.tenantId, dest.phone, original.text || '')
+      try {
+        sent = await sendText(req.user.tenantId, dest.phone, original.text || '')
+      } catch (e) {
+        console.warn('[chat/forward] falha ao reenviar texto:', e.message)
+        sendError = e.message
+      }
     }
 
     if (sent?.id) {
       insertPayload.wa_message_id = sent.id
       insertPayload.provider = sent.provider
     }
+    insertPayload.send_status = sendError ? 'failed' : 'sent'
+    insertPayload.send_error = sendError
 
     const row = unwrap(await supabase.from('messages').insert(insertPayload).select('*').single())
     res.status(201).json({ message: row })
@@ -696,6 +741,18 @@ chatRouter.post('/:leadId/location', async (req, res) => {
     if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' })
     if (lead.conversation_status !== 'open') return res.status(403).json({ error: 'Ticket não está aberto.' })
 
+    let sent = null
+    let sendError = null
+    if (lead.phone) {
+      try {
+        const { sendLocation } = await import('../services/whatsapp/index.js')
+        sent = await sendLocation(req.user.tenantId, lead.phone, { latitude: parsed.data.latitude, longitude: parsed.data.longitude })
+      } catch (e) {
+        console.warn('[chat] falha ao enviar localização:', e.message)
+        sendError = e.message
+      }
+    }
+
     const row = unwrap(
       await supabase.from('messages').insert({
         tenant_id: req.user.tenantId,
@@ -705,23 +762,13 @@ chatRouter.post('/:leadId/location', async (req, res) => {
         is_human_takeover: lead.human_takeover,
         location_lat: parsed.data.latitude,
         location_lng: parsed.data.longitude,
+        wa_message_id: sent?.id || null,
+        provider: sent?.provider || null,
+        wa_remote_jid: sent?.remoteJid || null,
+        send_status: sendError ? 'failed' : 'sent',
+        send_error: sendError,
       }).select('*').single()
     )
-
-    if (lead.phone) {
-      try {
-        const { sendLocation } = await import('../services/whatsapp/index.js')
-        const sent = await sendLocation(req.user.tenantId, lead.phone, { latitude: parsed.data.latitude, longitude: parsed.data.longitude })
-        if (sent?.id) {
-          await supabase.from('messages').update({ wa_message_id: sent.id, provider: sent.provider, wa_remote_jid: sent.remoteJid || null }).eq('id', row.id)
-          row.wa_message_id = sent.id
-          row.provider = sent.provider
-          row.wa_remote_jid = sent.remoteJid || null
-        }
-      } catch (e) {
-        console.warn('[chat] falha ao enviar localização:', e.message)
-      }
-    }
 
     res.status(201).json({ message: row })
   } catch (e) {
@@ -730,8 +777,11 @@ chatRouter.post('/:leadId/location', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/transfer
+const transferSchema = z.object({ human_takeover: z.boolean() })
 chatRouter.post('/:leadId/transfer', async (req, res) => {
-  const { human_takeover } = req.body
+  const parsed = transferSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'human_takeover deve ser true ou false.' })
+  const { human_takeover } = parsed.data
   try {
     const row = unwrap(
       await supabase.from('leads').update({
@@ -760,9 +810,11 @@ chatRouter.post('/:leadId/transfer', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/transfer-to
+const transferToSchema = z.object({ userId: z.string().min(1, 'userId obrigatório.') })
 chatRouter.post('/:leadId/transfer-to', async (req, res) => {
-  const { userId } = req.body
-  if (!userId) return res.status(400).json({ error: 'userId obrigatório.' })
+  const parsed = transferToSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { userId } = parsed.data
   try {
     const opRows = unwrap(
       await supabase.from('users').select('id, name, email')

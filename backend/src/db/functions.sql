@@ -109,3 +109,12 @@ AS $$
   WHERE tenant_id = p_tenant_id
   GROUP BY COALESCE(stage, 'Novo Lead');
 $$;
+
+-- Diferente dos migration_*.sql, este arquivo não é "aplicado uma vez" — é
+-- reexecutado sempre que uma função muda (DROP+CREATE é idempotente). Ainda
+-- assim, registrar aqui deixa rastreável, olhando só schema_migrations,
+-- que pelo menos ALGUMA versão deste arquivo já rodou em produção — sem
+-- isso não havia como saber isso sem checar manualmente se as 3 funções
+-- existiam no banco.
+INSERT INTO schema_migrations (filename) VALUES ('functions.sql')
+ON CONFLICT DO NOTHING;

@@ -22,6 +22,13 @@
         >
           <v-icon icon="mdi-refresh" />
         </v-btn>
+        <v-btn
+          color="warning" variant="tonal" prepend-icon="mdi-bell-alert-outline"
+          :loading="sendingAlert"
+          @click="emitirAlerta"
+        >
+          Emitir Alerta
+        </v-btn>
         <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" @click="openCreate">
           Novo Cliente
         </v-btn>
@@ -205,6 +212,7 @@ const snack = reactive({ show: false, text: '', color: 'success' })
 
 const deleteDialog = ref(false)
 const deleteTarget = ref(null)
+const sendingAlert = ref(false)
 
 const search = ref('')
 const plans = ['trial', 'starter', 'pro', 'enterprise']
@@ -310,6 +318,24 @@ async function toggleStatus(c) {
     await load()
   } catch (e) {
     toast(e.message, 'error')
+  }
+}
+
+async function emitirAlerta() {
+  sendingAlert.value = true
+  try {
+    const { notified, withoutRecipient } = await api.adminSendBillingAlert()
+    const parts = []
+    if (notified > 0) parts.push(`Alerta enviado para ${notified} cliente${notified === 1 ? '' : 's'}.`)
+    if (withoutRecipient?.length) {
+      parts.push(`${withoutRecipient.length} cliente${withoutRecipient.length === 1 ? '' : 's'} vencendo sem destinatário configurado: ${withoutRecipient.join(', ')}.`)
+    }
+    if (!parts.length) parts.push('Nenhum cliente com mensalidade próxima do vencimento no momento.')
+    toast(parts.join(' '), withoutRecipient?.length ? 'warning' : 'success')
+  } catch (e) {
+    toast(e.message, 'error')
+  } finally {
+    sendingAlert.value = false
   }
 }
 

@@ -36,6 +36,10 @@ function updateCallsFor(table) {
   return supabaseMock.calls.filter((c) => c.table === table && c.method === 'update')
 }
 
+function insertCallsFor(table) {
+  return supabaseMock.calls.filter((c) => c.table === table && c.method === 'insert')
+}
+
 describe('flowEngine', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -140,6 +144,50 @@ describe('flowEngine', () => {
 
     expect(result).toBe(true)
     expect(mockState.sendText).toHaveBeenCalledWith('t1', '5511999999999', 'Que bom que você confirmou!')
+  })
+
+  it('não deixa mensagem "fantasma": grava send_status=failed quando o envio ao WhatsApp falha (nó mensagem)', async () => {
+    const flow = {
+      id: 'flow-1', timeout_minutes: 30, trigger_keywords: ['oi'],
+      nodes: [{ id: 'n1', tipo: 'mensagem', conteudo: 'Olá!' }],
+    }
+    setSupabase({
+      flow_sessions: [
+        { data: [], error: null }, // getSession: nenhuma sessão ativa
+        { data: { id: 'session-1', flow_id: 'flow-1', lead_id: 'lead-1', current_node_id: 'n1', variables: {}, status: 'active' }, error: null }, // createSession
+      ],
+      flows: [{ data: [flow], error: null }],
+      leads: [{ data: [{ phone: '5511999999999' }], error: null }],
+    })
+    mockState.sendText.mockRejectedValue(new Error('Evolution indisponível'))
+
+    const result = await processFlowMessage({ tenantId: 't1', leadId: 'lead-1', text: 'oi', channelId: null })
+
+    expect(result).toBe(true) // o flow continua normalmente mesmo com falha de envio
+    const insertCall = insertCallsFor('messages').find((c) => c.args[0]?.text === 'Olá!')
+    expect(insertCall).toBeTruthy()
+    expect(insertCall.args[0]).toMatchObject({ send_status: 'failed', send_error: 'Evolution indisponível', wa_message_id: null })
+  })
+
+  it('grava wa_message_id/provider e send_status=sent quando o envio ao WhatsApp é confirmado', async () => {
+    const flow = {
+      id: 'flow-1', timeout_minutes: 30, trigger_keywords: ['oi'],
+      nodes: [{ id: 'n1', tipo: 'mensagem', conteudo: 'Olá!' }],
+    }
+    setSupabase({
+      flow_sessions: [
+        { data: [], error: null },
+        { data: { id: 'session-1', flow_id: 'flow-1', lead_id: 'lead-1', current_node_id: 'n1', variables: {}, status: 'active' }, error: null },
+      ],
+      flows: [{ data: [flow], error: null }],
+      leads: [{ data: [{ phone: '5511999999999' }], error: null }],
+    })
+    mockState.sendText.mockResolvedValue({ id: 'wa-99', provider: 'evolution' })
+
+    await processFlowMessage({ tenantId: 't1', leadId: 'lead-1', text: 'oi', channelId: null })
+
+    const insertCall = insertCallsFor('messages').find((c) => c.args[0]?.text === 'Olá!')
+    expect(insertCall.args[0]).toMatchObject({ send_status: 'sent', send_error: null, wa_message_id: 'wa-99', provider: 'evolution' })
   })
 
   it('roteia para o padrão quando a resposta do usuário não corresponde a nenhuma opção', async () => {

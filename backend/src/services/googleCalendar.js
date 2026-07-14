@@ -8,6 +8,11 @@ import { encrypt, decryptJSON } from './crypto.js';
 // Integração REAL com o Google Calendar (OAuth2)
 // ════════════════════════════════════════════════
 
+// Timeout defensivo pras chamadas à API do Google — sem isso, uma instabilidade
+// pontual do lado do Google prende a requisição (e, se chamada a partir do
+// agente de IA, a resposta ao lead) por tempo indefinido.
+const GOOGLE_TIMEOUT_MS = 10_000;
+
 /** Retorna { clientId, clientSecret } do tenant, ou cai para as ENVs globais. */
 async function getTenantOAuthConfig(tenantId) {
   if (tenantId) {
@@ -140,7 +145,7 @@ export async function createEvent(tenantId, { summary, description, start, end, 
         },
       },
     },
-  });
+  }, { timeout: GOOGLE_TIMEOUT_MS });
   return {
     externalId: data.id,
     htmlLink: data.htmlLink,
@@ -161,7 +166,7 @@ export async function updateEvent(tenantId, externalId, { summary, start, end, t
     eventId: externalId,
     sendUpdates: 'all',
     requestBody,
-  });
+  }, { timeout: GOOGLE_TIMEOUT_MS });
   return {
     externalId: data.id,
     meetingLink: data.hangoutLink || data.conferenceData?.entryPoints?.[0]?.uri || null,
@@ -180,7 +185,7 @@ export async function listEvents(tenantId, { timeMin, timeMax, maxResults = 50, 
     singleEvents: true,
     orderBy: 'startTime',
     showDeleted,
-  });
+  }, { timeout: GOOGLE_TIMEOUT_MS });
   return (data.items || []).map((e) => ({
     externalId: e.id,
     title: e.summary,
@@ -195,7 +200,7 @@ export async function listEvents(tenantId, { timeMin, timeMax, maxResults = 50, 
 /** Cancela (deleta) um evento. */
 export async function cancelEvent(tenantId, externalId) {
   const { calendar, calendarId } = await getCalendarClient(tenantId);
-  await calendar.events.delete({ calendarId, eventId: externalId, sendUpdates: 'all' });
+  await calendar.events.delete({ calendarId, eventId: externalId, sendUpdates: 'all' }, { timeout: GOOGLE_TIMEOUT_MS });
   return { cancelled: true };
 }
 
@@ -209,7 +214,7 @@ export async function getFreeBusy(tenantId, { timeMin, timeMax, timeZone = 'Amer
       timeZone,
       items: [{ id: calendarId }],
     },
-  });
+  }, { timeout: GOOGLE_TIMEOUT_MS });
   return data.calendars?.[calendarId]?.busy || [];
 }
 

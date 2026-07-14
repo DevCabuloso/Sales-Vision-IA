@@ -134,7 +134,7 @@ async function resumeFlow(session, userText, tenantId, leadId) {
     await closeSession(session.id, 'timeout')
     if (flow.fallback_text) {
       const phone = await getLeadPhone(tenantId, leadId)
-      if (phone) await whatsapp.sendText(tenantId, phone, flow.fallback_text).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
+      if (phone) await sendAndSaveText(tenantId, leadId, phone, flow.fallback_text)
     }
     return
   }
@@ -165,7 +165,7 @@ async function resumeFlow(session, userText, tenantId, leadId) {
     await runNode(flow, nextNode, updatedSession, tenantId, leadId)
   } else if (flow.fallback_text) {
     const phone = await getLeadPhone(tenantId, leadId)
-    if (phone) await whatsapp.sendText(tenantId, phone, flow.fallback_text).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
+    if (phone) await sendAndSaveText(tenantId, leadId, phone, flow.fallback_text)
   }
 }
 
@@ -238,8 +238,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
     case 'passo': {
       const txt = interpolate(node.mensagem || '', vars)
       if (phone && txt) {
-        await whatsapp.sendText(tenantId, phone, txt).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
-        await saveMsg(tenantId, leadId, 'ai', txt)
+        await sendAndSaveText(tenantId, leadId, phone, txt)
       }
       switch (node.saida) {
         case 'aguardar':
@@ -248,8 +247,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
         case 'transferir': {
           const msg = node.msg_transferencia ? interpolate(node.msg_transferencia, vars) : null
           if (msg && phone) {
-            await whatsapp.sendText(tenantId, phone, msg).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
-            await saveMsg(tenantId, leadId, 'ai', msg)
+            await sendAndSaveText(tenantId, leadId, phone, msg)
           }
           await supabase.from('leads')
             .update({
@@ -275,8 +273,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
     case 'mensagem': {
       const txt = interpolate(node.conteudo || '', vars)
       if (phone && txt) {
-        await whatsapp.sendText(tenantId, phone, txt).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
-        await saveMsg(tenantId, leadId, 'ai', txt)
+        await sendAndSaveText(tenantId, leadId, phone, txt)
       }
       await advance()
       break
@@ -286,8 +283,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
     case 'captura': {
       const txt = interpolate(node.pergunta || '', vars)
       if (phone && txt) {
-        await whatsapp.sendText(tenantId, phone, txt).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
-        await saveMsg(tenantId, leadId, 'ai', txt)
+        await sendAndSaveText(tenantId, leadId, phone, txt)
       }
       // Não avança — próximo resumeFlow() tratará a resposta
       break
@@ -313,8 +309,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
         )
         const out = await runAgent({ tenantId, tenantName, history: (histRows || []).reverse() })
         if (out?.reply && phone) {
-          await whatsapp.sendText(tenantId, phone, out.reply).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
-          await saveMsg(tenantId, leadId, 'ai', out.reply)
+          await sendAndSaveText(tenantId, leadId, phone, out.reply)
         }
       } catch (e) {
         console.warn('[flowEngine] nó ia:', e.message)
@@ -361,8 +356,7 @@ async function runNode(flow, node, session, tenantId, leadId) {
     case 'transferencia': {
       const msg = node.mensagem ? interpolate(node.mensagem, vars) : null
       if (msg && phone) {
-        await whatsapp.sendText(tenantId, phone, msg).catch((e) => console.warn('[flowEngine] falha ao enviar mensagem:', e.message))
-        await saveMsg(tenantId, leadId, 'ai', msg)
+        await sendAndSaveText(tenantId, leadId, phone, msg)
       }
       await supabase.from('leads')
         .update({
@@ -454,8 +448,34 @@ async function getLeadPhone(tenantId, leadId) {
   return rows?.[0]?.phone || null
 }
 
-async function saveMsg(tenantId, leadId, role, text) {
+async function saveMsg(tenantId, leadId, role, text, { waMessageId = null, provider = null, sendError = null } = {}) {
   try {
-    await supabase.from('messages').insert({ tenant_id: tenantId, lead_id: leadId, role, text })
+    await supabase.from('messages').insert({
+      tenant_id: tenantId, lead_id: leadId, role, text,
+      wa_message_id: waMessageId, provider,
+      send_status: sendError ? 'failed' : 'sent',
+      send_error: sendError,
+    })
   } catch { /* ignora */ }
+}
+
+/**
+ * Envia uma mensagem de texto do bot e SEMPRE grava no histórico (o
+ * atendente precisa ver o que o bot tentou dizer, mesmo que o envio real ao
+ * WhatsApp tenha falhado) — mas com send_status correto, em vez do padrão
+ * antigo (`sendText(...).catch(() => console.warn(...))` seguido de um
+ * `saveMsg` incondicional) que fazia a mensagem aparecer como "enviada" no
+ * Chat mesmo quando o WhatsApp nunca recebeu nada.
+ */
+async function sendAndSaveText(tenantId, leadId, phone, text, role = 'ai') {
+  let sent = null
+  let sendError = null
+  try {
+    sent = await whatsapp.sendText(tenantId, phone, text)
+  } catch (e) {
+    console.warn('[flowEngine] falha ao enviar mensagem:', e.message)
+    sendError = e.message
+  }
+  await saveMsg(tenantId, leadId, role, text, { waMessageId: sent?.id || null, provider: sent?.provider || null, sendError })
+  return !sendError
 }

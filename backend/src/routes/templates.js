@@ -1,11 +1,11 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
-import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { chat } from '../services/ai/openai.js'
 
 export const templatesRouter = Router()
-templatesRouter.use(requireAuth, requireTenant)
+templatesRouter.use(requireAuth, requireTenant, requirePermission('templates'))
 
 const schema = z.object({
   name:     z.string().min(1).max(200),

@@ -136,7 +136,7 @@ customApisRouter.post('/:id/test', async (req, res) => {
       }
     }
 
-    const r = await safeFetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) })
+    const r = await safeFetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) })
     const data = await r.json().catch(() => ({}))
     if (!r.ok) throw new Error(data.error?.message || `HTTP ${r.status}`)
 

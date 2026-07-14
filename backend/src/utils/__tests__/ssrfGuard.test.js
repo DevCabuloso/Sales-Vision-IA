@@ -32,6 +32,25 @@ describe('ssrfGuard', () => {
       await expect(assertPublicUrl('https://interno.exemplo.com/x')).rejects.toThrow(/rede privada/)
     })
 
+    it('bloqueia endereços IPv4 mapeados em IPv6 (bypass histórico do guard)', async () => {
+      await expect(assertPublicUrl('http://[::ffff:127.0.0.1]/x')).rejects.toThrow(/não permitido/)
+      await expect(assertPublicUrl('http://[::ffff:169.254.169.254]/x')).rejects.toThrow(/não permitido/)
+      // new URL(...).hostname normaliza a cauda decimal-pontuada pra hex — cobre essa forma também.
+      await expect(assertPublicUrl('http://[::ffff:7f00:1]/x')).rejects.toThrow(/não permitido/)
+      await expect(assertPublicUrl('http://[0:0:0:0:0:ffff:127.0.0.1]/x')).rejects.toThrow(/não permitido/)
+      expect(mockState.dnsLookup).not.toHaveBeenCalled()
+    })
+
+    it('bloqueia quando o DNS resolve pra um IPv4 mapeado em IPv6 privado', async () => {
+      mockState.dnsLookup.mockResolvedValue({ address: '::ffff:10.0.0.5' })
+      await expect(assertPublicUrl('https://interno.exemplo.com/x')).rejects.toThrow(/rede privada/)
+    })
+
+    it('continua permitindo IPv6 público legítimo', async () => {
+      mockState.dnsLookup.mockResolvedValue({ address: '2001:4860:4860::8888' })
+      await expect(assertPublicUrl('https://publico-v6.exemplo.com/x')).resolves.toBeUndefined()
+    })
+
     it('rejeita protocolos que não sejam http/https', async () => {
       await expect(assertPublicUrl('file:///etc/passwd')).rejects.toThrow(/http\/https/)
     })

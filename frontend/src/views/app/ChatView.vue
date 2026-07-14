@@ -511,7 +511,14 @@
                   </template>
                   <div v-else class="msg-text">{{ msg.text }}</div>
 
-                  <div class="msg-time">{{ msg.edited_at ? 'editado · ' : '' }}{{ formatTime(msg.created_at) }}</div>
+                  <div class="msg-time">
+                    <v-tooltip v-if="msg.send_status === 'failed'" :text="msg.send_error ? `Falha ao enviar: ${msg.send_error}` : 'Falha ao enviar pelo WhatsApp'" location="top">
+                      <template #activator="{ props: tipProps }">
+                        <v-icon v-bind="tipProps" icon="mdi-alert-circle-outline" size="13" color="error" class="msg-failed-icon" />
+                      </template>
+                    </v-tooltip>
+                    {{ msg.edited_at ? 'editado · ' : '' }}{{ formatTime(msg.created_at) }}
+                  </div>
                 </div>
               </div>
             </template>
@@ -2473,6 +2480,7 @@ onUnmounted(() => {
 .msg-role-badge { font-size:10px; color:#9FB0BC; margin-bottom:3px; }
 .msg-text { font-size:13px; line-height:1.55; white-space:pre-wrap; word-break:break-word; }
 .msg-time { font-size:10px; color:#6B7C88; margin-top:4px; text-align:right; }
+.msg-failed-icon { vertical-align:middle; margin-right:3px; cursor:default; }
 .msg-highlight .msg-bubble { outline: 2px solid rgba(99,102,241,0.5); outline-offset: 2px; }
 
 .msg-media-image { max-width: 260px; max-height: 260px; border-radius: 10px; display: block; cursor: pointer; object-fit: cover; }

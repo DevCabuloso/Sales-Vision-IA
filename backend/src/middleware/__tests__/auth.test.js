@@ -15,7 +15,7 @@ vi.mock('../../db/supabase.js', () => ({
   },
 }))
 
-const { requireAuth, requireOwner, requireTenant, invalidateTenantStatusCache } = await import('../auth.js')
+const { requireAuth, requireOwner, requireTenant, requirePermission, invalidateTenantStatusCache, invalidateUserCache } = await import('../auth.js')
 
 let supabaseMock
 const verifyToken = vi.fn()
@@ -107,7 +107,30 @@ describe('middleware/auth', () => {
       await requireAuth(req, res, next)
 
       expect(next).toHaveBeenCalled()
-      expect(req.user).toEqual({ id: 'user-valido', role: 'admin', tenantId: 't1', email: 'a@a.com', name: 'Ana' })
+      expect(req.user).toEqual({
+        id: 'user-valido', role: 'admin', tenantId: 't1', email: 'a@a.com', name: 'Ana',
+        isRestricted: false, permissions: null,
+      })
+    })
+
+    it('popula isRestricted e permissions quando o usuário é um operador restrito', async () => {
+      setSupabase({
+        users: [{
+          data: [{
+            id: 'user-restrito', tenant_id: 't1', email: 'r@r.com', name: 'Rê', role: 'agent', active: true,
+            is_restricted: true, permissions: { chat: true, broadcast: false },
+          }], error: null,
+        }],
+      })
+      verifyToken.mockReturnValue({ sub: 'user-restrito' })
+      const req = { headers: {}, cookies: { sdr_token: 'token-ok' } }
+      const res = makeRes()
+      const next = vi.fn()
+
+      await requireAuth(req, res, next)
+
+      expect(req.user.isRestricted).toBe(true)
+      expect(req.user.permissions).toEqual({ chat: true, broadcast: false })
     })
 
     it('prioriza o Bearer header sobre o cookie', async () => {
@@ -138,6 +161,71 @@ describe('middleware/auth', () => {
       const usersCalls = supabaseMock.calls.filter((c) => c.table === 'users')
       expect(supabaseMock.supabase.from).toHaveBeenCalledTimes(1)
       expect(usersCalls.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('requirePermission', () => {
+    it('chama next() quando o usuário não está restrito', () => {
+      const req = { user: { role: 'agent', isRestricted: false, permissions: { broadcast: false } } }
+      const res = makeRes()
+      const next = vi.fn()
+      requirePermission('broadcast')(req, res, next)
+      expect(next).toHaveBeenCalled()
+    })
+
+    it('chama next() para admin/owner mesmo marcados como restritos', () => {
+      const req = { user: { role: 'admin', isRestricted: true, permissions: {} } }
+      const res = makeRes()
+      const next = vi.fn()
+      requirePermission('broadcast')(req, res, next)
+      expect(next).toHaveBeenCalled()
+    })
+
+    it('retorna 403 quando o operador está restrito e não tem a permissão', () => {
+      const req = { user: { role: 'agent', isRestricted: true, permissions: { chat: true, broadcast: false } } }
+      const res = makeRes()
+      const next = vi.fn()
+      requirePermission('broadcast')(req, res, next)
+      expect(res.status).toHaveBeenCalledWith(403)
+      expect(next).not.toHaveBeenCalled()
+    })
+
+    it('chama next() quando o operador está restrito mas tem a permissão específica', () => {
+      const req = { user: { role: 'agent', isRestricted: true, permissions: { chat: true, broadcast: false } } }
+      const res = makeRes()
+      const next = vi.fn()
+      requirePermission('chat')(req, res, next)
+      expect(next).toHaveBeenCalled()
+    })
+
+    it('retorna 403 quando restrito e a permissão nem está definida no objeto', () => {
+      const req = { user: { role: 'agent', isRestricted: true, permissions: {} } }
+      const res = makeRes()
+      const next = vi.fn()
+      requirePermission('leads')(req, res, next)
+      expect(res.status).toHaveBeenCalledWith(403)
+    })
+  })
+
+  describe('invalidateUserCache', () => {
+    it('força nova consulta ao banco pro mesmo usuário depois de invalidar', async () => {
+      setSupabase({
+        users: [
+          { data: [{ id: 'user-x', tenant_id: 't1', email: 'x@x.com', role: 'agent', active: true, is_restricted: false }], error: null },
+          { data: [{ id: 'user-x', tenant_id: 't1', email: 'x@x.com', role: 'agent', active: true, is_restricted: true, permissions: { chat: false } }], error: null },
+        ],
+      })
+      verifyToken.mockReturnValue({ sub: 'user-x' })
+      const req = { headers: {}, cookies: { sdr_token: 'token-ok' } }
+
+      await requireAuth(req, makeRes(), vi.fn())
+      expect(req.user.isRestricted).toBe(false)
+
+      invalidateUserCache('user-x')
+
+      await requireAuth(req, makeRes(), vi.fn())
+      expect(req.user.isRestricted).toBe(true)
+      expect(supabaseMock.supabase.from).toHaveBeenCalledTimes(2)
     })
   })
 

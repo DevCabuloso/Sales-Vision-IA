@@ -1,13 +1,13 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
-import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { analyzeLead } from '../services/ai/analyze.js'
 import { logUsage } from '../services/usage.js'
 import { normalizePhone } from '../utils/phone.js'
 
 export const leadsRouter = Router()
-leadsRouter.use(requireAuth, requireTenant)
+leadsRouter.use(requireAuth, requireTenant, requirePermission('leads', 'kanban'))
 
 // ─── GET /api/leads ───
 leadsRouter.get('/', async (req, res) => {

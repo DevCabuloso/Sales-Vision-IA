@@ -3,11 +3,12 @@ import express from 'express'
 import request from 'supertest'
 import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 
-const mockState = vi.hoisted(() => ({ box: {}, chat: null }))
+const mockState = vi.hoisted(() => ({ box: {}, chat: null, permCalls: [] }))
 
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }; next() },
   requireTenant: (req, res, next) => next(),
+  requirePermission: (...keys) => { mockState.permCalls.push(keys); return (req, res, next) => next() },
 }))
 
 vi.mock('../../db/supabase.js', () => ({
@@ -43,6 +44,10 @@ describe('routes/templates', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockState.chat = vi.fn()
+  })
+
+  it('exige a permissão "templates" (enforcement de operador restrito) em toda a rota', () => {
+    expect(mockState.permCalls).toContainEqual(['templates'])
   })
 
   describe('categorias', () => {

@@ -35,34 +35,61 @@ notificationsRouter.get('/', async (req, res) => {
       return msg.role === 'lead' && age >= thresholdMs
     })
 
-    if (!unanswered.length) return res.json({ notifications: [] })
+    let notifications = []
+    if (unanswered.length) {
+      // Busca dados dos leads
+      const leadIds = unanswered.map(m => m.lead_id)
+      const leads = unwrap(
+        await supabase
+          .from('leads')
+          .select('id, name, phone')
+          .in('id', leadIds)
+          .eq('tenant_id', tenantId)
+      )
 
-    // Busca dados dos leads
-    const leadIds = unanswered.map(m => m.lead_id)
-    const leads = unwrap(
-      await supabase
-        .from('leads')
-        .select('id, name, phone')
-        .in('id', leadIds)
+      const leadMap = {}
+      for (const l of leads || []) leadMap[l.id] = l
+
+      notifications = unanswered
+        .map(msg => ({
+          lead_id:     msg.lead_id,
+          lead_name:   leadMap[msg.lead_id]?.name || null,
+          lead_phone:  leadMap[msg.lead_id]?.phone || '—',
+          last_message: (msg.text || '').slice(0, 120),
+          minutes_ago: Math.floor((now - new Date(msg.created_at).getTime()) / 60000),
+          created_at:  msg.created_at,
+        }))
+        .sort((a, b) => b.minutes_ago - a.minutes_ago)
+    }
+
+    // Avisos persistidos (ex: vencimento de mensalidade) direcionados a este
+    // usuário — diferente das "notificações" acima, que são recalculadas a
+    // cada request a partir de messages, sem tabela própria.
+    const alerts = unwrap(
+      await supabase.from('notifications')
+        .select('id, type, title, message, created_at')
         .eq('tenant_id', tenantId)
-    )
+        .eq('user_id', req.user.id)
+        .is('read_at', null)
+        .is('resolved_at', null)
+        .order('created_at', { ascending: false })
+    ) || []
 
-    const leadMap = {}
-    for (const l of leads || []) leadMap[l.id] = l
-
-    const notifications = unanswered
-      .map(msg => ({
-        lead_id:     msg.lead_id,
-        lead_name:   leadMap[msg.lead_id]?.name || null,
-        lead_phone:  leadMap[msg.lead_id]?.phone || '—',
-        last_message: (msg.text || '').slice(0, 120),
-        minutes_ago: Math.floor((now - new Date(msg.created_at).getTime()) / 60000),
-        created_at:  msg.created_at,
-      }))
-      .sort((a, b) => b.minutes_ago - a.minutes_ago)
-
-    res.json({ notifications })
+    res.json({ notifications, alerts })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+notificationsRouter.patch('/:id/read', async (req, res) => {
+  const rows = unwrap(
+    await supabase.from('notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .eq('tenant_id', req.user.tenantId)
+      .eq('user_id', req.user.id)
+      .select('id')
+  )
+  if (!rows.length) return res.status(404).json({ error: 'Notificação não encontrada.' })
+  res.json({ read: true })
 })

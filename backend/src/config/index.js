@@ -54,6 +54,10 @@ export const config = {
   openai: {
     apiKey: process.env.OPENAI_API_KEY,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    // Teto de segurança contra custo descontrolado (bug num fluxo, ou alguém
+    // mandando mensagens repetidas só pra gerar chamadas de IA) — 0 desativa
+    // o teto. Não é um limite de plano/cobrança, só uma rede de segurança.
+    dailyMessageCapPerTenant: parseInt(process.env.AI_DAILY_MESSAGE_CAP || '2000', 10),
   },
 
   meta: {

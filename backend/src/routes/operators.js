@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
-import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { requireAuth, requireTenant, invalidateUserCache } from '../middleware/auth.js'
 import { hashPassword } from '../services/auth.js'
 import { passwordSchema } from '../utils/passwordSchema.js'
 import { logUsage } from '../services/usage.js'
@@ -35,7 +35,7 @@ const schema = z.object({
 const SELECT_COLS = 'id, name, email, phone, role, active, is_restricted, permissions, last_login_at, created_at'
 
 // GET /api/operators
-operatorsRouter.get('/', async (req, res) => {
+operatorsRouter.get('/', requireAdmin, async (req, res) => {
   try {
     const users = unwrap(
       await supabase.from('users').select(SELECT_COLS)
@@ -50,7 +50,7 @@ operatorsRouter.get('/', async (req, res) => {
 })
 
 // GET /api/operators/dashboard
-operatorsRouter.get('/dashboard', async (req, res) => {
+operatorsRouter.get('/dashboard', requireAdmin, async (req, res) => {
   try {
     const users = unwrap(
       await supabase.from('users').select('id, name, email, role, active')
@@ -153,6 +153,9 @@ operatorsRouter.patch('/:id', requireAdmin, async (req, res) => {
         targetUserId: req.params.id,
         changes: sensitiveChange,
       })
+      // sem isso, requireAuth continuaria usando o req.user cacheado (role/
+      // permissions/is_restricted antigos) por até 30s após a mudança.
+      invalidateUserCache(req.params.id)
     }
 
     res.json({ operator: row })
@@ -187,6 +190,7 @@ operatorsRouter.delete('/:id', requireAdmin, async (req, res) => {
   try {
     await supabase.from('users').delete()
       .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).neq('role', 'owner')
+    invalidateUserCache(req.params.id)
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

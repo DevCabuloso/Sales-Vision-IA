@@ -3,11 +3,12 @@ import express from 'express'
 import request from 'supertest'
 import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 
-const mockState = vi.hoisted(() => ({ box: {}, user: null, sendText: null }))
+const mockState = vi.hoisted(() => ({ box: {}, user: null, sendText: null, permCalls: [] }))
 
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = mockState.user; next() },
   requireTenant: (req, res, next) => next(),
+  requirePermission: (...keys) => { mockState.permCalls.push(keys); return (req, res, next) => next() },
 }))
 
 vi.mock('../../db/supabase.js', () => ({
@@ -50,6 +51,10 @@ describe('routes/broadcast', () => {
     vi.clearAllMocks()
     mockState.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin', name: 'Ana' }
     mockState.sendText = vi.fn().mockResolvedValue({ id: 'wa-1' })
+  })
+
+  it('exige a permissão "broadcast" (enforcement de operador restrito) em toda a rota', () => {
+    expect(mockState.permCalls).toContainEqual(['broadcast'])
   })
 
   describe('POST /campaigns', () => {

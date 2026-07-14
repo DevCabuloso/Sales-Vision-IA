@@ -6,6 +6,8 @@ import { config } from '../config/index.js'
 import { supabase, unwrap } from '../db/supabase.js'
 import { meta, evolution } from '../services/whatsapp/index.js'
 import { handleInboundMessage, handleOutboundMessage } from '../services/orchestrator.js'
+import { timingSafeStringEqual } from '../utils/timingSafeCompare.js'
+import { matchTenantWebhookSecret, matchInstanceWebhookSecret } from '../utils/channelWebhookSecret.js'
 
 export const webhooksRouter = Router()
 
@@ -18,19 +20,6 @@ const hubVerifyQuerySchema = z.object({
   'hub.challenge':     z.string().optional(),
 })
 
-// Compara duas strings em tempo constante SEM depender de terem o mesmo
-// tamanho (diferente de crypto.timingSafeEqual puro, que lança se os buffers
-// tiverem tamanhos diferentes). Faz hash de cada lado para um digest de
-// tamanho fixo (32 bytes) antes de comparar — assim nem o timing do próprio
-// check de tamanho vaza informação sobre o quão perto o valor informado está
-// do secret esperado (o mesmo cuidado que já existe pra assinatura HMAC da
-// Meta acima, só que aqui os dois lados podem ter tamanhos arbitrários).
-function timingSafeStringEqual(a, b) {
-  const hashA = crypto.createHash('sha256').update(String(a ?? '')).digest()
-  const hashB = crypto.createHash('sha256').update(String(b ?? '')).digest()
-  return crypto.timingSafeEqual(hashA, hashB)
-}
-
 // Formato exato de um header X-Hub-Signature-256 válido (sha256=<64 hex>).
 // Validar isso ANTES de comparar com crypto.timingSafeEqual é obrigatório:
 // timingSafeEqual lança se os dois buffers não tiverem o mesmo tamanho, e um
@@ -40,17 +29,23 @@ function timingSafeStringEqual(a, b) {
 // processo Node inteiro. Rejeitar o formato aqui evita chegar nesse ponto.
 const metaSignatureSchema = z.string().regex(/^sha256=[0-9a-f]{64}$/)
 
-// Recalcula os contadores agregados da campanha a partir dos contatos (evita
-// race condition de incrementos concorrentes vindos de múltiplos webhooks).
+// Recalcula os contadores agregados da campanha (evita race condition de
+// incrementos concorrentes vindos de múltiplos webhooks). Usa COUNT com
+// head:true (2 queries leves que só devolvem um número) em vez de puxar o
+// `status` de TODOS os contatos da campanha a cada evento — antes, uma
+// campanha de 5.000 contatos, recebendo até 3 eventos de status por contato
+// (sent→delivered→read), podia gerar até ~75 milhões de leituras de linha só
+// pra manter esses dois contadores atualizados.
 async function recomputeBroadcastCounts(campaignId) {
-  const rows = unwrap(
-    await supabase.from('broadcast_contacts').select('status').eq('campaign_id', campaignId)
-  )
-  const delivered = rows.filter((r) => r.status === 'delivered' || r.status === 'read').length
-  const read = rows.filter((r) => r.status === 'read').length
+  const [deliveredRes, readRes] = await Promise.all([
+    supabase.from('broadcast_contacts').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', campaignId).in('status', ['delivered', 'read']),
+    supabase.from('broadcast_contacts').select('id', { count: 'exact', head: true })
+      .eq('campaign_id', campaignId).eq('status', 'read'),
+  ])
   await supabase.from('broadcast_campaigns').update({
-    delivered_count: delivered,
-    read_count: read,
+    delivered_count: deliveredRes.count ?? 0,
+    read_count: readRes.count ?? 0,
     updated_at: new Date().toISOString(),
   }).eq('id', campaignId)
 }
@@ -200,17 +195,27 @@ webhooksRouter.post('/meta',
 webhooksRouter.post('/evolution',
   express.json({ limit: '10mb' }),
   async (req, res) => {
-    // Mesma lógica de fail-closed do webhook da Meta acima: em produção, sem
-    // EVOLUTION_WEBHOOK_SECRET configurado, esta rota resolve o tenant só pelo
-    // nome da instância vindo do payload — sem a secret, qualquer requisição
-    // externa conseguiria injetar mensagens/leads falsos em qualquer tenant.
-    if (process.env.NODE_ENV === 'production' && !config.evolution.webhookSecret) {
-      console.error('[webhook evolution] EVOLUTION_WEBHOOK_SECRET ausente em produção — recusando requisição')
+    const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
+    // Segredo por-canal tem prioridade: se o canal dono desta instância já
+    // tem um webhook_secret próprio (ver channelWebhookSecret.js), só ele
+    // vale — não cai no fallback global, senão o segredo por-canal não
+    // protegeria nada contra alguém que só tenha a secret global antiga.
+    const instanceName = req.body?.instance || req.body?.instanceName || null
+    const perInstance = instanceName ? await matchInstanceWebhookSecret(instanceName, provided) : 'none-set'
+    if (perInstance === 'mismatch') {
+      console.warn('[webhook evolution] secret por-canal inválido')
       return res.sendStatus(403)
     }
-    if (config.evolution.webhookSecret) {
-      const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
-      if (!timingSafeStringEqual(provided, config.evolution.webhookSecret)) {
+    if (perInstance === 'none-set') {
+      // Mesma lógica de fail-closed do webhook da Meta acima: em produção, sem
+      // EVOLUTION_WEBHOOK_SECRET configurado, esta rota resolve o tenant só pelo
+      // nome da instância vindo do payload — sem a secret, qualquer requisição
+      // externa conseguiria injetar mensagens/leads falsos em qualquer tenant.
+      if (process.env.NODE_ENV === 'production' && !config.evolution.webhookSecret) {
+        console.error('[webhook evolution] EVOLUTION_WEBHOOK_SECRET ausente em produção — recusando requisição')
+        return res.sendStatus(403)
+      }
+      if (config.evolution.webhookSecret && !timingSafeStringEqual(provided, config.evolution.webhookSecret)) {
         console.warn('[webhook evolution] secret inválido')
         return res.sendStatus(403)
       }
@@ -277,15 +282,24 @@ webhooksRouter.post('/evolution',
 webhooksRouter.post('/evolution/:tenantId',
   express.json({ limit: '10mb' }),
   async (req, res) => {
-    // Mesma lógica de fail-closed das outras rotas de webhook acima.
-    if (process.env.NODE_ENV === 'production' && !config.evolution.webhookSecret) {
-      console.error('[webhook evolution] EVOLUTION_WEBHOOK_SECRET ausente em produção — recusando requisição')
+    const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
+    // Segredo por-tenant (ver channelWebhookSecret.js) tem prioridade sobre o
+    // EVOLUTION_WEBHOOK_SECRET global — sem isso, quem detivesse a secret
+    // global forjava eventos pra QUALQUER tenant só trocando o :tenantId da
+    // URL. Uma vez que o tenant tem um segredo próprio, o fallback global
+    // para de valer pra ele (senão o segredo por-tenant não protegeria nada).
+    const perTenant = await matchTenantWebhookSecret(req.params.tenantId, provided)
+    if (perTenant === 'mismatch') {
+      console.warn(`[webhook evolution] secret por-tenant inválido para tenant=${req.params.tenantId}`)
       return res.sendStatus(403)
     }
-    // Verificação do secret da Evolution via header apikey
-    if (config.evolution.webhookSecret) {
-      const provided = req.headers['apikey'] || req.headers['authorization']?.replace('Bearer ', '')
-      if (!timingSafeStringEqual(provided, config.evolution.webhookSecret)) {
+    if (perTenant === 'none-set') {
+      // Mesma lógica de fail-closed das outras rotas de webhook acima.
+      if (process.env.NODE_ENV === 'production' && !config.evolution.webhookSecret) {
+        console.error('[webhook evolution] EVOLUTION_WEBHOOK_SECRET ausente em produção — recusando requisição')
+        return res.sendStatus(403)
+      }
+      if (config.evolution.webhookSecret && !timingSafeStringEqual(provided, config.evolution.webhookSecret)) {
         console.warn(`[webhook evolution] secret inválido para tenant=${req.params.tenantId}`)
         return res.sendStatus(403)
       }

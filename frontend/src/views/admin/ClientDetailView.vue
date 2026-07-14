@@ -212,6 +212,16 @@
             <v-col cols="6">
               <v-text-field v-model.number="editForm.max_leads" label="Limite de leads" type="number" />
             </v-col>
+            <v-col cols="12">
+              <v-select
+                v-model="editForm.billing_notify_user_id"
+                :items="notifyUserOptions"
+                label="Notificar sobre vencimento"
+                hint="Quem recebe o aviso no sino quando a mensalidade está próxima de vencer"
+                persistent-hint
+                clearable
+              />
+            </v-col>
           </v-row>
           <v-alert v-if="editError" type="error" variant="tonal" density="compact" :text="editError" class="mt-2" />
         </v-card-text>
@@ -357,8 +367,13 @@ const integrations = ref([])
 const features = reactive({})
 
 const editClientDialog = ref(false)
-const editForm = reactive({ name: '', plan: '', max_leads: 1000 })
+const editForm = reactive({ name: '', plan: '', max_leads: 1000, billing_notify_user_id: null })
 const editError = ref('')
+const notifyUserOptions = computed(() =>
+  users.value
+    .filter((u) => ['admin', 'agent'].includes(u.role))
+    .map((u) => ({ title: `${u.name || u.email} (${roleLabel(u.role)})`, value: u.id }))
+)
 
 const renewDialog = ref(false)
 const renewDate = ref('')
@@ -461,6 +476,7 @@ function openEditClient() {
   editForm.name = client.value.name
   editForm.plan = client.value.plan
   editForm.max_leads = client.value.max_leads ?? 1000
+  editForm.billing_notify_user_id = client.value.billing_notify_user_id ?? null
   editError.value = ''
   editClientDialog.value = true
 }
@@ -469,6 +485,7 @@ async function saveEditClient() {
   editError.value = ''
   const check = validateForm(updateClientSchema, {
     name: editForm.name, plan: editForm.plan, max_leads: editForm.max_leads,
+    billing_notify_user_id: editForm.billing_notify_user_id || null,
   })
   if (!check.success) { editError.value = check.error; return }
   saving.value = true

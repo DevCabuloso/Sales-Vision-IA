@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 
-const mockState = vi.hoisted(() => ({ get: null }))
+const mockState = vi.hoisted(() => ({ get: null, patch: null }))
 
 vi.mock('@/services/api', () => ({
-  http: { get: (...a) => mockState.get(...a) },
+  http: { get: (...a) => mockState.get(...a), patch: (...a) => mockState.patch(...a) },
 }))
 
 const { useNotificationsStore } = await import('../notifications.js')
@@ -14,6 +14,7 @@ describe('stores/notifications.js', () => {
     setActivePinia(createPinia())
     localStorage.clear()
     mockState.get = vi.fn().mockResolvedValue({ data: { notifications: [] } })
+    mockState.patch = vi.fn().mockResolvedValue({ data: { read: true } })
   })
 
   afterEach(() => {
@@ -86,6 +87,32 @@ describe('stores/notifications.js', () => {
     await vi.advanceTimersByTimeAsync(2000)
     expect(mockState.get).toHaveBeenCalledTimes(4)
     store.stopPolling()
+  })
+
+  it('fetch() preenche alerts e soma no count', async () => {
+    mockState.get.mockResolvedValue({ data: { notifications: [], alerts: [{ id: 'a1', title: 'Vencimento', message: 'Vence em 3 dias.' }] } })
+    const store = useNotificationsStore()
+    await store.fetch()
+    expect(store.alerts).toHaveLength(1)
+    expect(store.count).toBe(1)
+  })
+
+  it('dismissAlert(id) remove localmente e chama PATCH /notifications/:id/read', async () => {
+    mockState.get.mockResolvedValue({ data: { notifications: [], alerts: [{ id: 'a1', title: 'Vencimento' }] } })
+    const store = useNotificationsStore()
+    await store.fetch()
+    await store.dismissAlert('a1')
+    expect(store.alerts).toHaveLength(0)
+    expect(mockState.patch).toHaveBeenCalledWith('/notifications/a1/read')
+  })
+
+  it('dismissAlert(id) não quebra quando o PATCH falha', async () => {
+    mockState.get.mockResolvedValue({ data: { notifications: [], alerts: [{ id: 'a1' }] } })
+    mockState.patch.mockRejectedValue(new Error('falhou'))
+    const store = useNotificationsStore()
+    await store.fetch()
+    await expect(store.dismissAlert('a1')).resolves.toBeUndefined()
+    expect(store.alerts).toHaveLength(0)
   })
 
   it('stopPolling() interrompe o polling', async () => {

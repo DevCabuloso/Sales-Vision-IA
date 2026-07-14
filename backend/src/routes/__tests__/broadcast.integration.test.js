@@ -12,6 +12,7 @@ const mockState = vi.hoisted(() => ({ box: {}, user: null, sendText: null }))
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = mockState.user; next() },
   requireTenant: (req, res, next) => next(),
+  requirePermission: () => (req, res, next) => next(),
 }))
 
 vi.mock('../../db/supabase.js', () => ({
@@ -94,7 +95,8 @@ describe('broadcast + webhooks (integração: campanha -> envio -> ACK fecha o c
         { data: [{ id: 'contact-int-1', phone: '11988887777', name: 'Lead Um' }], error: null }, // processBroadcast: contatos pendentes
         { data: [{}], error: null }, // processBroadcast: marca "sent" com wa_message_id
         { data: [{ campaign_id: 'camp-int-1' }], error: null }, // webhook ACK: update casando wa_message_id -> campaign_id
-        { data: [{ status: 'delivered' }], error: null }, // recomputeBroadcastCounts: status atual dos contatos
+        { data: null, error: null, count: 1 }, // recomputeBroadcastCounts: COUNT delivered+read
+        { data: null, error: null, count: 0 }, // recomputeBroadcastCounts: COUNT read
       ],
       channels: [
         { data: [{ tenant_id: 'tenant-bcast-1' }], error: null }, // resolveEvolutionTenant pela instância

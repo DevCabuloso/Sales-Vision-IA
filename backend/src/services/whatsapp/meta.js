@@ -1,6 +1,13 @@
 import { config } from '../../config/index.js'
 import { getCredentials } from '../integrations.js'
 
+// Timeout defensivo — a Graph API da Meta é confiável, mas sem limite explícito
+// uma instabilidade pontual prende a requisição por tempo indefinido.
+const META_TIMEOUT_MS = 10_000
+function withTimeout() {
+  return AbortSignal.timeout(META_TIMEOUT_MS)
+}
+
 // Credenciais por-tenant esperadas em integrations(provider='meta_whatsapp'):
 //   credentials: { accessToken }
 //   meta:        { phoneNumberId, wabaId }
@@ -26,6 +33,7 @@ export async function sendText(tenantId, to, body, { quotedWaId } = {}) {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal: withTimeout(),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error?.message || `Meta API erro ${res.status}`)
@@ -44,6 +52,7 @@ export async function sendLocation(tenantId, to, { latitude, longitude, name, ad
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal: withTimeout(),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error?.message || `Meta API erro ${res.status}`)
@@ -66,6 +75,7 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}` },
     body: form,
+    signal: withTimeout(),
   })
   const uploadData = await uploadRes.json().catch(() => ({}))
   if (!uploadRes.ok) {
@@ -96,6 +106,7 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(mediaMsgPayload),
+    signal: withTimeout(),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error?.message || `Meta API erro ${res.status}`)
@@ -112,11 +123,12 @@ export async function downloadMedia(tenantId, mediaId) {
 
   const infoRes = await fetch(`https://graph.facebook.com/${config.meta.graphVersion}/${mediaId}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: withTimeout(),
   })
   const info = await infoRes.json().catch(() => ({}))
   if (!infoRes.ok || !info.url) throw new Error(info.error?.message || `Meta media info erro ${infoRes.status}`)
 
-  const fileRes = await fetch(info.url, { headers: { Authorization: `Bearer ${accessToken}` } })
+  const fileRes = await fetch(info.url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: withTimeout() })
   if (!fileRes.ok) throw new Error(`Falha ao baixar mídia da Meta (${fileRes.status})`)
 
   const arrayBuf = await fileRes.arrayBuffer()

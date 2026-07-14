@@ -230,6 +230,24 @@ describe('routes/billing', () => {
       expect(updateCalls.length).toBe(0)
     })
 
+    it('não duplica o processamento quando perde a corrida do claim atômico (duas entregas quase simultâneas do mesmo webhook)', async () => {
+      setSupabase({
+        checkout_orders: [
+          { data: [{ id: 'o1', order_nsu: 'order-1', webhook_token: 'token-correto', amount_cents: 49700, status: 'pending', tenant_id: 'tenant-1', user_id: 'user-1' }], error: null },
+          { data: [], error: null }, // UPDATE ... WHERE status='pending' não afetou nenhuma linha (a outra entrega já confirmou)
+        ],
+      })
+      const app = buildApp()
+      const res = await request(app)
+        .post('/api/billing/webhook?token=token-correto')
+        .send({ order_nsu: 'order-1', paid_amount: 49700 })
+
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ ok: true })
+      const tenantUpdate = supabaseMock.calls.find((c) => c.table === 'tenants' && c.method === 'update')
+      expect(tenantUpdate).toBeUndefined() // não ativa o trial de novo — quem ganhou a corrida já fez isso
+    })
+
     it('confirma o pagamento e ativa o trial quando token e valor conferem', async () => {
       setSupabase({
         checkout_orders: [

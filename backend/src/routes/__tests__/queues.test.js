@@ -67,7 +67,10 @@ describe('routes/queues', () => {
   })
 
   it('POST / cria a fila e associa os operadores informados', async () => {
-    setSupabase({ queues: [{ data: { id: 'q1', name: 'Suporte', color: '#6366F1' }, error: null }] })
+    setSupabase({
+      users: [{ data: [{ id: 'u1' }, { id: 'u2' }], error: null }],
+      queues: [{ data: { id: 'q1', name: 'Suporte', color: '#6366F1' }, error: null }],
+    })
     const app = buildApp()
     const res = await request(app).post('/api/queues').send({ name: 'Suporte', operator_ids: ['u1', 'u2'] })
     expect(res.status).toBe(201)
@@ -75,8 +78,17 @@ describe('routes/queues', () => {
     expect(opInsert.args[0]).toEqual([{ queue_id: 'q1', user_id: 'u1' }, { queue_id: 'q1', user_id: 'u2' }])
   })
 
+  it('POST / rejeita operator_ids que não pertençam a este tenant (isolamento entre tenants)', async () => {
+    setSupabase({ users: [{ data: [{ id: 'u1' }], error: null }] }) // u2 não pertence ao tenant-1
+    const app = buildApp()
+    const res = await request(app).post('/api/queues').send({ name: 'Suporte', operator_ids: ['u1', 'u2'] })
+    expect(res.status).toBe(400)
+    expect(insertCallsFor('queues')).toHaveLength(0)
+  })
+
   it('PATCH /:id substitui os operadores quando operator_ids é enviado', async () => {
     setSupabase({
+      users: [{ data: [{ id: 'u2' }], error: null }],
       queues: [{ data: { id: 'q1', name: 'Suporte' }, error: null }],
       queue_operators: [{ data: [{ users: { id: 'u2', name: 'Bia', email: 'bia@ex.com' } }], error: null }],
     })
@@ -85,6 +97,13 @@ describe('routes/queues', () => {
     expect(res.status).toBe(200)
     expect(deleteCallsFor('queue_operators').length).toBe(1)
     expect(res.body.queue.operators).toEqual([{ id: 'u2', name: 'Bia', email: 'bia@ex.com' }])
+  })
+
+  it('PATCH /:id rejeita operator_ids de outro tenant sem tocar a fila', async () => {
+    setSupabase({ users: [{ data: [], error: null }] })
+    const app = buildApp()
+    const res = await request(app).patch('/api/queues/q1').send({ operator_ids: ['u-de-outro-tenant'] })
+    expect(res.status).toBe(400)
   })
 
   it('DELETE /:id remove a fila', async () => {

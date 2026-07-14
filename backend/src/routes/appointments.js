@@ -1,12 +1,12 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
-import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { createEvent, cancelEvent, listEvents, updateEvent } from '../services/googleCalendar.js'
 import { logUsage } from '../services/usage.js'
 
 export const appointmentsRouter = Router()
-appointmentsRouter.use(requireAuth, requireTenant)
+appointmentsRouter.use(requireAuth, requireTenant, requirePermission('agenda'))
 
 // ─── GET /api/appointments ───
 appointmentsRouter.get('/', async (req, res) => {

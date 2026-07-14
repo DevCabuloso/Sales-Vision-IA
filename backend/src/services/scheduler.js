@@ -4,6 +4,7 @@ import { markSentByPlatform } from './orchestrator.js'
 import { logUsage } from './usage.js'
 import { processBroadcast } from '../routes/broadcast.js'
 import { safeFetch } from '../utils/ssrfGuard.js'
+import { createBillingReminderNotification } from './billingNotifications.js'
 
 const POLL_MS = 20_000
 
@@ -111,8 +112,13 @@ async function runDueFollowupMessages() {
         markSentByPlatform(item.tenant_id, lead.phone, `[${mediaType}]`)
         // safeFetch: media_url é uma URL livre digitada pelo usuário ao criar o
         // passo de follow-up (z.string().url() em followups.js) — sem essa
-        // proteção seria SSRF trivial contra rede interna a cada disparo.
-        const resp = await safeFetch(item.media_url)
+        // proteção seria SSRF trivial contra rede interna a cada disparo. O
+        // timeout é igualmente essencial aqui: o scheduler processa os due items
+        // sequencialmente sob um mutex único (`running`) — sem timeout, um host
+        // lento/travado numa media_url mal configurada por UM tenant prende o
+        // ciclo inteiro (campanhas, mensagens agendadas, lembretes de vencimento
+        // de TODOS os tenants) até o fetch resolver ou expirar.
+        const resp = await safeFetch(item.media_url, { signal: AbortSignal.timeout(10_000) })
         const buffer = Buffer.from(await resp.arrayBuffer())
         await sendMedia(item.tenant_id, lead.phone, {
           buffer, mimetype: item.media_mimetype, filename: item.media_filename, caption: item.text,
@@ -140,6 +146,66 @@ async function runDueFollowupMessages() {
   }
 }
 
+// Horário/timezone fixos em America/Sao_Paulo (mesmo padrão de
+// followups.js/business-hours.js) — usar Intl em vez de getHours()/
+// getDate() evita depender do timezone do SO onde o processo Node roda.
+const REMINDER_TZ = 'America/Sao_Paulo'
+
+function ymdInTimezone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date)
+  const get = (t) => parts.find((p) => p.type === t).value
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+function hmInTimezone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(date)
+  const get = (t) => parts.find((p) => p.type === t).value
+  return `${get('hour')}:${get('minute')}`
+}
+
+// Aviso de vencimento de mensalidade: dispara uma vez por dia, no horário
+// configurado em platform_settings, pros tenants com billing_notify_user_id
+// definido cujo next_billing_at cai exatamente N dias à frente de hoje.
+// O tick roda a cada 20s, então o guard de "já criei hoje" (dentro de
+// createBillingReminderNotification) evita duplicar o aviso nos ~3 ticks que
+// caem dentro do mesmo minuto configurado.
+async function runDueBillingReminders() {
+  const settingsRows = unwrap(
+    await supabase.from('platform_settings')
+      .select('billing_reminder_days_before, billing_reminder_time')
+      .eq('id', 1).limit(1)
+  ) || []
+  if (!settingsRows.length) return
+  const { billing_reminder_days_before: daysBefore, billing_reminder_time: timeStr } = settingsRows[0]
+
+  const now = new Date()
+  if (hmInTimezone(now, REMINDER_TZ) !== (timeStr || '09:00')) return
+
+  const targetDateStr = ymdInTimezone(new Date(now.getTime() + daysBefore * 86400000), REMINDER_TZ)
+
+  // .limit(): essa query roda a cada tick (20s) — sem limite, cresce sem
+  // paginação conforme a base de tenants aumenta. 500 é bem acima de qualquer
+  // volume atual e revisitado se a base crescer além disso.
+  const tenants = unwrap(
+    await supabase.from('tenants')
+      .select('id, name, next_billing_at, billing_notify_user_id')
+      .not('billing_notify_user_id', 'is', null)
+      .not('next_billing_at', 'is', null)
+      .limit(500)
+  ) || []
+
+  for (const t of tenants) {
+    if (ymdInTimezone(new Date(t.next_billing_at), REMINDER_TZ) !== targetDateStr) continue
+
+    try {
+      const message = `A mensalidade de ${t.name} vence em ${daysBefore} dia${daysBefore === 1 ? '' : 's'}.`
+      await createBillingReminderNotification(t, message)
+    } catch (e) {
+      console.error('[scheduler] falha ao criar aviso de vencimento:', e.message)
+    }
+  }
+}
+
 let running = false
 async function tick() {
   if (running) return
@@ -148,6 +214,7 @@ async function tick() {
     await runDueBroadcastCampaigns()
     await runDueScheduledMessages()
     await runDueFollowupMessages()
+    await runDueBillingReminders()
   } catch (e) {
     console.error('[scheduler] erro no ciclo:', e.message)
   } finally {

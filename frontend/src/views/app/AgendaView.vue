@@ -268,8 +268,14 @@ async function sync() {
 
 async function cancel(a) {
   cancelling.value = a.id
-  try { await api.cancelAppointment(a.id); await load() }
-  catch (e) { console.warn(e.message) } finally { cancelling.value = null }
+  try {
+    await api.cancelAppointment(a.id)
+    await load()
+  } catch (e) {
+    notify(e?.message || 'Erro ao cancelar o agendamento.', 'error')
+  } finally {
+    cancelling.value = null
+  }
 }
 
 onMounted(async () => {

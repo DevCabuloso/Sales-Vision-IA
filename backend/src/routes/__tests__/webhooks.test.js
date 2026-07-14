@@ -193,7 +193,11 @@ describe('routes/webhooks', () => {
     it('atualiza o status de entrega da campanha quando recebe evento de status "delivered"', async () => {
       setSupabase({
         integrations: [{ data: [{ tenant_id: 'tenant-1', meta: { phoneNumberId: 'phone-1' } }], error: null }],
-        broadcast_contacts: [{ data: [{ campaign_id: 'camp-1' }], error: null }, { data: [{ status: 'delivered' }], error: null }],
+        broadcast_contacts: [
+          { data: [{ campaign_id: 'camp-1' }], error: null }, // update...select('campaign_id')
+          { data: null, error: null, count: 1 },              // COUNT delivered+read
+          { data: null, error: null, count: 0 },               // COUNT read
+        ],
       })
       mockState.metaParseWebhookStatuses.mockReturnValue([{ messageId: 'wamid-1', recipientId: '5511988887777', status: 'delivered', phoneNumberId: 'phone-1' }])
 
@@ -285,6 +289,35 @@ describe('routes/webhooks', () => {
       expect(mockState.handleInboundMessage).toHaveBeenCalled()
     })
 
+    it('prioriza o segredo por-canal: aceita mesmo com secret global vazio, quando o canal da instância tem o seu próprio', async () => {
+      config.evolution.webhookSecret = ''
+      setSupabase({ channels: [{ data: [{ webhook_secret: 'segredo-do-canal' }], error: null }, { data: [{ tenant_id: 'tenant-1' }], error: null }] })
+      mockState.evolutionParseWebhook.mockReturnValue({
+        from: '5511988887777', text: 'Oi', instanceName: 'inst-1', fromMe: false, isGroup: false,
+      })
+
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution')
+        .set('apikey', 'segredo-do-canal')
+        .send({ event: 'messages.upsert', instance: 'inst-1' })
+      expect(res.status).toBe(200)
+      await flush()
+      expect(mockState.handleInboundMessage).toHaveBeenCalled()
+
+      config.evolution.webhookSecret = 'evo-webhook-secret'
+    })
+
+    it('rejeita quando a instância tem segredo próprio e o header não bate, mesmo enviando o secret global antigo', async () => {
+      config.evolution.webhookSecret = 'segredo-global-antigo'
+      setSupabase({ channels: [{ data: [{ webhook_secret: 'segredo-novo-do-canal' }], error: null }] })
+
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution')
+        .set('apikey', 'segredo-global-antigo')
+        .send({ event: 'messages.upsert', instance: 'inst-1' })
+      expect(res.status).toBe(403)
+    })
+
     it('resolve o tenant pela instância e chama handleInboundMessage para mensagem recebida', async () => {
       setSupabase({ channels: [{ data: [{ tenant_id: 'tenant-1' }], error: null }] })
       mockState.evolutionParseWebhook.mockReturnValue({
@@ -370,6 +403,31 @@ describe('routes/webhooks', () => {
       config.evolution.webhookSecret = 'segredo-evo'
       const app = buildApp()
       const res = await request(app).post('/webhooks/evolution/tenant-1').set('apikey', 'errado').send({ event: 'messages.upsert' })
+      expect(res.status).toBe(403)
+    })
+
+    it('aceita com o segredo por-tenant mesmo sem EVOLUTION_WEBHOOK_SECRET global configurado', async () => {
+      config.evolution.webhookSecret = ''
+      setSupabase({ channels: [{ data: [{ webhook_secret: 'segredo-do-tenant' }], error: null }] })
+      mockState.evolutionParseWebhook.mockReturnValue({ from: '5511988887777', text: 'Oi', instanceName: 'inst-x', fromMe: false })
+
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution/tenant-explicito').set('apikey', 'segredo-do-tenant').send({ event: 'messages.upsert' })
+      expect(res.status).toBe(200)
+      await flush()
+      expect(mockState.handleInboundMessage).toHaveBeenCalled()
+
+      config.evolution.webhookSecret = 'evo-webhook-secret'
+    })
+
+    it('rejeita com 403 quando o tenant tem segredo próprio e o header não bate, MESMO com o secret global certo (não cai no fallback)', async () => {
+      config.evolution.webhookSecret = 'segredo-global-antigo'
+      setSupabase({ channels: [{ data: [{ webhook_secret: 'segredo-novo-do-tenant' }], error: null }] })
+
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/evolution/tenant-explicito')
+        .set('apikey', 'segredo-global-antigo') // secret global antigo, não vale mais pra esse tenant
+        .send({ event: 'messages.upsert' })
       expect(res.status).toBe(403)
     })
 

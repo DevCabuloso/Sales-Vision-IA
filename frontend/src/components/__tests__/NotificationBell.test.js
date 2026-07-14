@@ -3,16 +3,18 @@ import { mount } from '@vue/test-utils'
 import { ref, reactive, computed, nextTick } from 'vue'
 import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
 
-const mockState = vi.hoisted(() => ({ items: null, dismiss: null, dismissAll: null, push: null }))
+const mockState = vi.hoisted(() => ({ items: null, alerts: null, dismiss: null, dismissAll: null, dismissAlert: null, push: null }))
 
 // precisa ser reactive() (não um objeto plano) para que storeToRefs() consiga
 // desembrulhar os computed refs corretamente, como faria uma store Pinia real
 vi.mock('@/stores/notifications', () => ({
   useNotificationsStore: () => reactive({
     visible: computed(() => mockState.items.value),
-    count: computed(() => mockState.items.value.length),
+    alerts: computed(() => mockState.alerts.value),
+    count: computed(() => mockState.items.value.length + mockState.alerts.value.length),
     dismiss: (...a) => mockState.dismiss(...a),
     dismissAll: (...a) => mockState.dismissAll(...a),
+    dismissAlert: (...a) => mockState.dismissAlert(...a),
   }),
 }))
 
@@ -26,8 +28,10 @@ const NotificationBell = (await import('../NotificationBell.vue')).default
 describe('NotificationBell', () => {
   beforeEach(() => {
     mockState.items = ref([])
+    mockState.alerts = ref([])
     mockState.dismiss = vi.fn((id) => { mockState.items.value = mockState.items.value.filter((n) => n.lead_id !== id) })
     mockState.dismissAll = vi.fn(() => { mockState.items.value = [] })
+    mockState.dismissAlert = vi.fn((id) => { mockState.alerts.value = mockState.alerts.value.filter((a) => a.id !== id) })
     mockState.push = vi.fn()
   })
 
@@ -76,6 +80,32 @@ describe('NotificationBell', () => {
     await wrapper.find('.bell-btn').trigger('click')
     await wrapper.find('.mark-all-btn').trigger('click')
     expect(mockState.dismissAll).toHaveBeenCalled()
+  })
+
+  it('lista os avisos de vencimento (alerts) junto com as notificações de lead', async () => {
+    mockState.alerts.value = [{ id: 'a1', title: 'Mensalidade próxima do vencimento', message: 'Vence em 3 dias.' }]
+    const wrapper = mount(NotificationBell, pluginOptions())
+    await wrapper.find('.bell-btn').trigger('click')
+
+    expect(wrapper.text()).toContain('Mensalidade próxima do vencimento')
+    expect(wrapper.text()).toContain('Vence em 3 dias.')
+  })
+
+  it('dispensa um aviso de vencimento individualmente', async () => {
+    mockState.alerts.value = [{ id: 'a1', title: 'Vencimento', message: 'Vence em 3 dias.' }]
+    const wrapper = mount(NotificationBell, pluginOptions())
+    await wrapper.find('.bell-btn').trigger('click')
+
+    await wrapper.find('.notif-dismiss').trigger('click')
+    expect(mockState.dismissAlert).toHaveBeenCalledWith('a1')
+  })
+
+  it('badge soma leads sem resposta e avisos de vencimento', async () => {
+    mockState.items.value = [{ lead_id: 'l1', minutes_ago: 40, last_message: 'oi' }]
+    mockState.alerts.value = [{ id: 'a1', title: 'Vencimento', message: 'x' }]
+    const wrapper = mount(NotificationBell, pluginOptions())
+    await nextTick()
+    expect(wrapper.find('.bell-badge').text()).toBe('2')
   })
 
   it('navega para a conversa do lead ao clicar na notificação e fecha o painel', async () => {

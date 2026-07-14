@@ -72,6 +72,42 @@ describe('layouts/AppLayout.vue (smoke)', () => {
     wrapper.unmount()
   })
 
+  it('esconde itens de navegação sem permissão quando o operador está restrito', async () => {
+    mockState.auth.user.role = 'agent'
+    mockState.auth.user.is_restricted = true
+    mockState.auth.user.permissions = { chat: true, kanban: false, contatos: false, leads: false, agenda: false, templates: false, broadcast: false }
+    const wrapper = mountLayout()
+    await flushPromises()
+    expect(wrapper.text()).toContain('chat')
+    expect(wrapper.text()).not.toContain('kanban')
+    expect(wrapper.text()).not.toContain('contatos')
+    expect(wrapper.text()).not.toContain('leads')
+    expect(wrapper.text()).not.toContain('agenda')
+    expect(wrapper.text()).not.toContain('templates')
+    expect(wrapper.text()).not.toContain('broadcast')
+    wrapper.unmount()
+  })
+
+  it('não restringe a navegação quando is_restricted é false, mesmo com permissions restritivas', async () => {
+    mockState.auth.user.role = 'agent'
+    mockState.auth.user.is_restricted = false
+    mockState.auth.user.permissions = { chat: false, kanban: false }
+    const wrapper = mountLayout()
+    await flushPromises()
+    expect(wrapper.text()).toContain('kanban')
+    wrapper.unmount()
+  })
+
+  it('não restringe a navegação de um admin mesmo se is_restricted vier true por engano', async () => {
+    mockState.auth.user.role = 'admin'
+    mockState.auth.user.is_restricted = true
+    mockState.auth.user.permissions = { chat: false, kanban: false }
+    const wrapper = mountLayout()
+    await flushPromises()
+    expect(wrapper.text()).toContain('kanban')
+    wrapper.unmount()
+  })
+
   it('mostra a seção SISTEMA (navSystem) para role admin/owner', async () => {
     const wrapper = mountLayout()
     await flushPromises()

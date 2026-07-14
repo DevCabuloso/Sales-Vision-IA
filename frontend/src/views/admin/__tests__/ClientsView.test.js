@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
 
-const mockState = vi.hoisted(() => ({ adminClients: null, adminCreateClient: null, adminUpdateStatus: null, adminRenewClient: null }))
+const mockState = vi.hoisted(() => ({ adminClients: null, adminCreateClient: null, adminUpdateStatus: null, adminRenewClient: null, adminSendBillingAlert: null }))
 
 vi.mock('@/services/api', () => ({
   api: {
@@ -10,6 +10,7 @@ vi.mock('@/services/api', () => ({
     adminCreateClient: (...a) => mockState.adminCreateClient(...a),
     adminUpdateStatus: (...a) => mockState.adminUpdateStatus(...a),
     adminRenewClient: (...a) => mockState.adminRenewClient(...a),
+    adminSendBillingAlert: (...a) => mockState.adminSendBillingAlert(...a),
     adminDeleteClient: vi.fn(),
   },
 }))
@@ -22,6 +23,7 @@ describe('ClientsView', () => {
     mockState.adminCreateClient = vi.fn()
     mockState.adminUpdateStatus = vi.fn().mockResolvedValue({})
     mockState.adminRenewClient = vi.fn().mockResolvedValue({})
+    mockState.adminSendBillingAlert = vi.fn().mockResolvedValue({ notified: 0, total: 0, withoutRecipient: [] })
   })
 
   it('carrega e lista os clientes', async () => {
@@ -69,6 +71,47 @@ describe('ClientsView', () => {
     await flushPromises()
 
     expect(mockState.adminRenewClient).toHaveBeenCalledWith('t1', { days: 30 })
+    wrapper.unmount()
+  })
+
+  it('emite alerta de vencimento e mostra quantos clientes foram notificados', async () => {
+    mockState.adminSendBillingAlert.mockResolvedValue({ notified: 2, total: 2, withoutRecipient: [] })
+    const wrapper = mount(ClientsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const alertBtn = wrapper.findAll('button').find((b) => b.text().includes('Emitir Alerta'))
+    await alertBtn.trigger('click')
+    await flushPromises()
+
+    expect(mockState.adminSendBillingAlert).toHaveBeenCalled()
+    // o v-snackbar é teleportado para document.body
+    expect(document.body.textContent).toContain('Alerta enviado para 2 clientes.')
+    wrapper.unmount()
+  })
+
+  it('avisa quando nenhum cliente está próximo do vencimento', async () => {
+    mockState.adminSendBillingAlert.mockResolvedValue({ notified: 0, total: 0, withoutRecipient: [] })
+    const wrapper = mount(ClientsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const alertBtn = wrapper.findAll('button').find((b) => b.text().includes('Emitir Alerta'))
+    await alertBtn.trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Nenhum cliente com mensalidade próxima do vencimento no momento.')
+    wrapper.unmount()
+  })
+
+  it('avisa quando há cliente vencendo mas sem destinatário configurado', async () => {
+    mockState.adminSendBillingAlert.mockResolvedValue({ notified: 0, total: 1, withoutRecipient: ['Interprise'] })
+    const wrapper = mount(ClientsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const alertBtn = wrapper.findAll('button').find((b) => b.text().includes('Emitir Alerta'))
+    await alertBtn.trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('1 cliente vencendo sem destinatário configurado: Interprise.')
     wrapper.unmount()
   })
 

@@ -43,6 +43,23 @@ describe('AgendaView', () => {
     expect(wrapper.text()).toContain('Ana')
   })
 
+  it('mostra um toast de erro quando o cancelamento do agendamento falha', async () => {
+    const today = new Date().toISOString()
+    mockState.listAppointments.mockResolvedValue([
+      { id: 'a1', lead_name: 'Ana', title: 'Demo', provider: 'google', start_time: today, end_time: today, status: 'scheduled' },
+    ])
+    mockState.cancelAppointment.mockRejectedValue(new Error('Falha ao cancelar no Google Calendar.'))
+    const wrapper = mount(AgendaView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const cancelBtn = wrapper.findAll('button').find((b) => b.text().includes('Cancelar'))
+    await cancelBtn.trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Falha ao cancelar no Google Calendar.')
+    wrapper.unmount()
+  })
+
   it('exibe o aviso retornado pela sincronização', async () => {
     mockState.syncAppointments.mockResolvedValue({ synced: 0, warning: 'Google Calendar não conectado. Reconecte em Integrações.' })
     const wrapper = mount(AgendaView, { attachTo: document.body, ...pluginOptions() })

@@ -100,6 +100,26 @@ describe('whatsapp/evolution', () => {
       expect(fetchMock).not.toHaveBeenCalled()
     })
 
+    it('bloqueia SSRF via redirect quando o baseUrl por-tenant é público mas redireciona pra rede interna', async () => {
+      setSupabase({ channels: [{ data: [], error: null }] })
+      mockState.getCredentials.mockResolvedValue({ credentials: { apiKey: 'tenant-key' }, meta: { baseUrl: 'https://evo-tenant.com', instance: 'inst-tenant' } })
+      const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+        status: 302, headers: { get: () => 'http://169.254.169.254/latest/meta-data' },
+      })
+
+      await expect(evolution.sendText('tenant-2', '5511988887777', 'Oi!')).rejects.toThrow(/não permitido/)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('envia com sinal de timeout anexado (canal global e fallback por-tenant)', async () => {
+      setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
+      const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ key: {} }) })
+
+      await evolution.sendText('tenant-1', '5511988887777', 'Oi!')
+
+      expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+    })
+
     it('inclui o objeto "quoted" no payload quando há contexto de citação', async () => {
       setSupabase({ channels: [{ data: [{ instance_name: 'inst-1' }], error: null }] })
       const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ key: {} }) })

@@ -6,12 +6,13 @@ import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 const mockState = vi.hoisted(() => ({
   box: {}, user: null, logUsage: null, uploadChatMedia: null, getTenantTimezone: null,
   sendText: null, sendMedia: null, sendLocation: null, editMessage: null, deleteMessage: null,
-  markSentByPlatform: null,
+  markSentByPlatform: null, permCalls: [],
 }))
 
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = mockState.user; next() },
   requireTenant: (req, res, next) => next(),
+  requirePermission: (...keys) => { mockState.permCalls.push(keys); return (req, res, next) => next() },
 }))
 
 vi.mock('../../db/supabase.js', () => ({
@@ -78,6 +79,10 @@ describe('routes/chat', () => {
     mockState.editMessage = vi.fn().mockResolvedValue({ ok: true })
     mockState.deleteMessage = vi.fn().mockResolvedValue({ ok: true })
     mockState.markSentByPlatform = vi.fn()
+  })
+
+  it('exige a permissão "chat" (enforcement de operador restrito) em toda a rota', () => {
+    expect(mockState.permCalls).toContainEqual(['chat'])
   })
 
   describe('GET / (listar conversas)', () => {
@@ -198,9 +203,26 @@ describe('routes/chat', () => {
       expect(res.status).toBe(201)
       expect(mockState.markSentByPlatform).toHaveBeenCalledWith('tenant-1', '5511988887777', 'Olá!')
       expect(mockState.sendText).toHaveBeenCalledWith('tenant-1', '5511988887777', 'Olá!', expect.any(Object))
-      const waUpdate = updateCallsFor('messages').find((c) => c.args[0]?.wa_message_id === 'wa-1')
-      expect(waUpdate).toBeTruthy()
+      // envia ANTES de persistir — o wa_message_id/send_status já vêm no próprio insert, sem update posterior
+      const insertCall = insertCallsFor('messages').find((c) => c.args[0]?.wa_message_id === 'wa-1')
+      expect(insertCall).toBeTruthy()
+      expect(insertCall.args[0].send_status).toBe('sent')
+      expect(updateCallsFor('messages')).toHaveLength(0)
       expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'message_sent', { by: 'agent' })
+    })
+
+    it('persiste a mensagem com send_status "failed" quando o envio ao WhatsApp falha (sem sumir com o texto digitado)', async () => {
+      setSupabase({
+        leads: [{ data: [{ id: 'lead-1', phone: '5511988887777', human_takeover: true, conversation_status: 'open' }], error: null }],
+        messages: [{ data: { id: 11, text: 'Olá!', send_status: 'failed' }, error: null }],
+      })
+      mockState.sendText.mockRejectedValue(new Error('Evolution indisponível'))
+      const app = buildApp()
+      const res = await request(app).post('/api/chat/lead-1/messages').send({ text: 'Olá!' })
+
+      expect(res.status).toBe(201)
+      const insertCall = insertCallsFor('messages')[0]
+      expect(insertCall.args[0]).toMatchObject({ send_status: 'failed', send_error: 'Evolution indisponível', wa_message_id: null })
     })
 
     it('não tenta enviar via WhatsApp quando o lead não tem telefone', async () => {
@@ -289,6 +311,12 @@ describe('routes/chat', () => {
   })
 
   describe('POST /:leadId/transfer', () => {
+    it('rejeita quando human_takeover não é booleano', async () => {
+      const app = buildApp()
+      const res = await request(app).post('/api/chat/lead-1/transfer').send({ human_takeover: 'sim' })
+      expect(res.status).toBe(400)
+    })
+
     it('transfere para humano: atualiza lead, loga uso e encerra sessão de fluxo ativa', async () => {
       setSupabase({ leads: [{ data: { id: 'lead-1', human_takeover: true }, error: null }] })
       const app = buildApp()
@@ -577,8 +605,9 @@ describe('routes/chat', () => {
 
       expect(res.status).toBe(201)
       expect(mockState.sendLocation).toHaveBeenCalledWith('tenant-1', '5511988887777', { latitude: -25.4, longitude: -49.2 })
-      const waUpdate = updateCallsFor('messages').find((c) => c.args[0]?.wa_message_id === 'wa-3')
-      expect(waUpdate).toBeTruthy()
+      const insertCall = insertCallsFor('messages').find((c) => c.args[0]?.wa_message_id === 'wa-3')
+      expect(insertCall).toBeTruthy()
+      expect(insertCall.args[0].send_status).toBe('sent')
     })
   })
 

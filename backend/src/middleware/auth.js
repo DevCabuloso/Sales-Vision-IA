@@ -42,7 +42,7 @@ export async function requireAuth(req, res, next) {
     if (!u) {
       const rows = unwrap(
         await supabase.from('users')
-          .select('id, tenant_id, email, name, role, active')
+          .select('id, tenant_id, email, name, role, active, is_restricted, permissions')
           .eq('id', payload.sub)
           .limit(1)
       )
@@ -53,10 +53,38 @@ export async function requireAuth(req, res, next) {
     if (!u || !u.active) {
       return res.status(401).json({ error: 'Usuário inválido ou inativo.' })
     }
-    req.user = { id: u.id, role: u.role, tenantId: u.tenant_id, email: u.email, name: u.name || u.email }
+    req.user = {
+      id: u.id, role: u.role, tenantId: u.tenant_id, email: u.email, name: u.name || u.email,
+      isRestricted: !!u.is_restricted, permissions: u.permissions || null,
+    }
     next()
   } catch {
     return res.status(401).json({ error: 'Token inválido ou expirado.' })
+  }
+}
+
+// Chamado por operators.js quando role/permissions/is_restricted/active mudam —
+// sem isso, o cache de 30s (USER_CACHE_TTL_MS) deixaria um operador recém
+// restringido continuar com acesso total por até 30s.
+export function invalidateUserCache(userId) {
+  userCache.delete(userId)
+}
+
+/**
+ * Bloqueia o acesso a uma área da plataforma (chat/kanban/contatos/leads/
+ * agenda/templates/broadcast) quando o operador está marcado como restrito
+ * (`is_restricted`) e não tem a permissão correspondente. Donos e admins do
+ * tenant nunca são restringíveis por essa checagem — a restrição é uma
+ * ferramenta do admin para limitar agentes, não algo que se autoaplica.
+ * Aceita mais de uma chave (ex.: 'leads', 'kanban') quando a mesma rota
+ * atende mais de uma tela do frontend — basta ter uma delas liberada.
+ */
+export function requirePermission(...keys) {
+  return (req, res, next) => {
+    if (!req.user?.isRestricted) return next()
+    if (req.user.role === 'owner' || req.user.role === 'admin') return next()
+    if (keys.some((key) => req.user.permissions?.[key] === true)) return next()
+    return res.status(403).json({ error: 'Você não tem permissão para acessar esta área.' })
   }
 }
 

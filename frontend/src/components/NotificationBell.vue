@@ -14,19 +14,35 @@
         <!-- Header do painel -->
         <div class="panel-header">
           <span class="panel-title">Notificações</span>
-          <button v-if="count > 0" class="mark-all-btn" @click="dismissAll">
+          <button v-if="count > 0" class="mark-all-btn" @click="clearAll">
             Limpar tudo
           </button>
         </div>
 
         <!-- Lista vazia -->
-        <div v-if="!visible.length" class="panel-empty">
+        <div v-if="!visible.length && !alerts.length" class="panel-empty">
           <v-icon icon="mdi-bell-check-outline" size="36" style="opacity:.25" />
           <p class="text-caption mt-2" style="color:#6B7C88">Tudo em dia! Nenhum lead sem resposta.</p>
         </div>
 
         <!-- Lista de notificações -->
         <div v-else class="panel-list">
+          <div
+            v-for="a in alerts"
+            :key="a.id"
+            class="notif-item"
+          >
+            <div class="notif-avatar notif-avatar--alert">
+              <v-icon icon="mdi-cash-clock" size="16" />
+            </div>
+            <div class="notif-body">
+              <div class="notif-name">{{ a.title }}</div>
+              <div class="notif-msg">{{ a.message }}</div>
+            </div>
+            <button class="notif-dismiss" title="Dispensar" @click.stop="dismissAlert(a.id)">
+              <v-icon icon="mdi-close" size="14" />
+            </button>
+          </div>
           <div
             v-for="n in visible"
             :key="n.lead_id"
@@ -69,12 +85,17 @@ import { storeToRefs } from 'pinia'
 
 const router = useRouter()
 const store  = useNotificationsStore()
-const { visible, count } = storeToRefs(store)
-const { dismiss, dismissAll } = store
+const { visible, alerts, count } = storeToRefs(store)
+const { dismiss, dismissAll, dismissAlert } = store
 
 const open = ref(false)
 
 function toggle() { open.value = !open.value }
+
+function clearAll() {
+  dismissAll()
+  for (const a of [...alerts.value]) dismissAlert(a.id)
+}
 
 function goToLead(n) {
   open.value = false
@@ -185,6 +206,11 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   display: flex; align-items: center; justify-content: center;
   color: #F87171;
   margin-top: 2px;
+}
+.notif-avatar--alert {
+  background: rgba(245,158,11,0.12);
+  border-color: rgba(245,158,11,0.2);
+  color: #FBB040;
 }
 
 .notif-body { flex: 1; min-width: 0; }

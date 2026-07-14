@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { config } from '../config/index.js'
 import { supabase, unwrap } from '../db/supabase.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { getOrCreateChannelWebhookSecret } from '../utils/channelWebhookSecret.js'
 
 export const channelsRouter = Router()
 
@@ -12,6 +13,7 @@ function evoFetch(path, options = {}) {
   return fetch(`${apiUrl.replace(/\/$/, '')}${path}`, {
     ...options,
     headers: { apikey: apiKey, 'Content-Type': 'application/json', ...options.headers },
+    signal: AbortSignal.timeout(10_000),
   })
 }
 
@@ -158,8 +160,16 @@ channelsRouter.get('/:id/status', requireAuth, requireTenant, async (req, res) =
 })
 
 // PATCH /api/channels/:id/settings — salvar configurações completas
+const settingsSchema = z.object({
+  name:              z.string().max(60).optional().nullable(),
+  goodbye_message:   z.string().max(1000).optional().nullable(),
+  assigned_user_id:  z.string().optional().nullable(),
+  assigned_queue_id: z.string().optional().nullable(),
+})
 channelsRouter.patch('/:id/settings', requireAuth, requireTenant, async (req, res) => {
-  const { name, goodbye_message, assigned_user_id, assigned_queue_id } = req.body || {}
+  const parsed = settingsSchema.safeParse(req.body || {})
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  const { name, goodbye_message, assigned_user_id, assigned_queue_id } = parsed.data
   try {
     const update = { updated_at: new Date().toISOString() }
     if (name              !== undefined) update.name               = name?.trim() || null
@@ -180,8 +190,9 @@ channelsRouter.patch('/:id/settings', requireAuth, requireTenant, async (req, re
 
 // PATCH /api/channels/:id — renomear canal
 channelsRouter.patch('/:id', requireAuth, requireTenant, async (req, res) => {
-  const { name } = req.body || {}
-  if (!name?.trim()) return res.status(400).json({ error: 'Nome obrigatório.' })
+  const parsed = createSchema.safeParse(req.body || {})
+  if (!parsed.success) return res.status(400).json({ error: 'Nome obrigatório.' })
+  const { name } = parsed.data
   try {
     const rows = unwrap(
       await supabase.from('channels')
@@ -223,6 +234,7 @@ channelsRouter.post('/:id/close-tickets', requireAuth, requireTenant, async (req
     let q = supabase.from('leads')
       .update({ conversation_status: 'resolved', human_takeover: false, assigned_to: null, updated_at: new Date().toISOString() })
       .eq('tenant_id', req.user.tenantId)
+      .eq('channel_id', req.params.id)
     if (status !== 'all') q = q.eq('conversation_status', status)
     else q = q.in('conversation_status', ['open', 'pending'])
     const { count } = await q.select('id', { count: 'exact', head: true })
@@ -243,9 +255,12 @@ channelsRouter.post('/:id/revalidate-webhook', requireAuth, requireTenant, async
     if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
 
     const webhookUrl = `${config.backendUrl}/webhooks/evolution/${req.user.tenantId}`
+    // Segredo próprio deste canal (gerado na hora se ainda não existir) — a
+    // Evolution passa a mandar ESSE valor no header, e routes/webhooks.js
+    // passa a exigir ele em vez do EVOLUTION_WEBHOOK_SECRET global compartilhado
+    // entre todos os tenants (ver utils/channelWebhookSecret.js).
+    const webhookSecret = await getOrCreateChannelWebhookSecret(req.params.id)
     // Evolution API v2 espera body aninhado em { webhook: { ... } } com camelCase.
-    // O header carrega o EVOLUTION_WEBHOOK_SECRET — sem ele, a Evolution chama o
-    // webhook sem nenhuma credencial e a validação em routes/webhooks.js rejeita tudo.
     const r = await evoFetch(`/webhook/set/${rows[0].instance_name}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -254,7 +269,7 @@ channelsRouter.post('/:id/revalidate-webhook', requireAuth, requireTenant, async
           url: webhookUrl,
           webhookByEvents: false,
           webhookBase64: true,
-          headers: config.evolution.webhookSecret ? { apikey: config.evolution.webhookSecret } : null,
+          headers: { apikey: webhookSecret },
           events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'MESSAGES_UPDATE', 'SEND_MESSAGE'],
         },
       }),

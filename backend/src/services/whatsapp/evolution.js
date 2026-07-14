@@ -1,8 +1,17 @@
 import { getCredentials } from '../integrations.js'
 import { config } from '../../config/index.js'
 import { supabase, unwrap } from '../../db/supabase.js'
-import { assertPublicUrl } from '../../utils/ssrfGuard.js'
+import { safeFetch } from '../../utils/ssrfGuard.js'
 import { ttlGet } from '../../utils/ttlCache.js'
+
+// Timeout defensivo pra toda chamada de saída à Evolution API — sem isso, uma
+// instância travada/lenta prende a requisição (e, no caso do scheduler, o
+// ciclo inteiro de follow-ups/campanhas de TODOS os tenants) por tempo
+// indefinido.
+const EVOLUTION_TIMEOUT_MS = 10_000
+function withTimeout() {
+  return AbortSignal.timeout(EVOLUTION_TIMEOUT_MS)
+}
 
 /** Busca o primeiro canal conectado do tenant na tabela channels. TTL curto (15s):
  *  status de canal pode mudar em tempo real (conectar/desconectar), mas sem
@@ -55,6 +64,7 @@ export async function sendText(tenantId, to, body, { quotedWaId, quotedFromMe, q
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
       body: JSON.stringify({ number: to, text: body, ...(quoted ? { quoted } : {}) }),
+      signal: withTimeout(),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
@@ -70,14 +80,16 @@ export async function sendText(tenantId, to, body, { quotedWaId, quotedFromMe, q
     throw new Error('Credenciais Evolution incompletas (apiKey/baseUrl/instance).')
   }
   // baseUrl é digitado pelo tenant em POST /api/integrations/evolution/connect —
-  // sem essa checagem, um tenant malicioso apontaria pra rede interna do próprio
-  // servidor (backend e evolution-api rodam na mesma máquina em produção).
-  await assertPublicUrl(baseUrl)
+  // safeFetch() valida a URL E cada hop de redirect contra rede privada/loopback
+  // (um fetch() simples segue redirects automaticamente, então validar só a URL
+  // original com assertPublicUrl não bastava: um host público controlado pelo
+  // tenant podia responder 302 pra um IP interno e contornar a checagem).
   const url = `${baseUrl.replace(/\/$/, '')}/message/sendText/${instance}`
-  const res = await fetch(url, {
+  const res = await safeFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: apiKey },
     body: JSON.stringify({ number: to, text: body, ...(quoted ? { quoted } : {}) }),
+    signal: withTimeout(),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
@@ -107,6 +119,7 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
       body: JSON.stringify({ number: to, audio: base64, ...(quoted ? { quoted } : {}) }),
+      signal: withTimeout(),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
@@ -119,6 +132,7 @@ export async function sendMedia(tenantId, to, { buffer, mimetype, filename, capt
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
     body: JSON.stringify(payload),
+    signal: withTimeout(),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
@@ -136,6 +150,7 @@ export async function sendLocation(tenantId, to, { latitude, longitude, name, ad
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
     body: JSON.stringify({ number: to, latitude, longitude, name, address, ...(quoted ? { quoted } : {}) }),
+    signal: withTimeout(),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
@@ -160,6 +175,7 @@ export async function editMessage(tenantId, { waMessageId, remoteJid, newText })
       key: { remoteJid, fromMe: true, id: waMessageId },
       text: newText,
     }),
+    signal: withTimeout(),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
@@ -176,6 +192,7 @@ export async function deleteMessage(tenantId, { waMessageId, remoteJid }) {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json', apikey: config.evolution.apiKey },
     body: JSON.stringify({ id: waMessageId, remoteJid, fromMe: true }),
+    signal: withTimeout(),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(evoErrorMessage(data, res.status))
@@ -377,7 +394,7 @@ export async function getGroupSubject(instanceName, groupJid) {
   if (!config.evolution.apiUrl || !instanceName || !groupJid) return null
   try {
     const url = `${config.evolution.apiUrl.replace(/\/$/, '')}/group/findGroupInfos/${instanceName}?groupJid=${encodeURIComponent(groupJid)}&getParticipants=false`
-    const res = await fetch(url, { headers: { apikey: config.evolution.apiKey } })
+    const res = await fetch(url, { headers: { apikey: config.evolution.apiKey }, signal: withTimeout() })
     if (!res.ok) return null
     const data = await res.json().catch(() => null)
     return data?.subject || null

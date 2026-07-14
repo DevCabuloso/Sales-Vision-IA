@@ -1,11 +1,11 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
-import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { normalizePhone } from '../utils/phone.js'
 
 export const broadcastRouter = Router()
-broadcastRouter.use(requireAuth, requireTenant)
+broadcastRouter.use(requireAuth, requireTenant, requirePermission('broadcast'))
 
 const campaignBaseSchema = z.object({
   name:         z.string().min(1).max(200),

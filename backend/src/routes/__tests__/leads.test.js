@@ -3,11 +3,12 @@ import express from 'express'
 import request from 'supertest'
 import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 
-const mockState = vi.hoisted(() => ({ box: {}, analyzeLead: null, logUsage: null }))
+const mockState = vi.hoisted(() => ({ box: {}, analyzeLead: null, logUsage: null, permCalls: [] }))
 
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }; next() },
   requireTenant: (req, res, next) => next(),
+  requirePermission: (...keys) => { mockState.permCalls.push(keys); return (req, res, next) => next() },
 }))
 
 vi.mock('../../db/supabase.js', () => ({
@@ -49,6 +50,10 @@ describe('routes/leads', () => {
     vi.clearAllMocks()
     mockState.analyzeLead = vi.fn()
     mockState.logUsage = vi.fn().mockResolvedValue(undefined)
+  })
+
+  it('exige a permissão "leads" ou "kanban" (enforcement de operador restrito) em toda a rota', () => {
+    expect(mockState.permCalls).toContainEqual(['leads', 'kanban'])
   })
 
   describe('GET /', () => {

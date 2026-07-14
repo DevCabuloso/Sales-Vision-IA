@@ -131,6 +131,29 @@ describe('ClientDetailView', () => {
     wrapper.unmount()
   })
 
+  it('permite designar o destinatário do aviso de vencimento ao editar o cliente', async () => {
+    mockState.adminClient.mockResolvedValue({
+      client: { id: 'tenant-1', name: 'Empresa Ana', slug: 'empresa-ana', status: 'active', plan: 'pro', feat_broadcast: true, billing_notify_user_id: null },
+      users: [{ id: 'u1', name: 'Bia', email: 'bia@ex.com', role: 'agent', active: true }],
+      integrations: [],
+    })
+    const wrapper = mount(ClientDetailView, { attachTo: document.body, props: { id: 'tenant-1' }, ...pluginOptions() })
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text().includes('Editar'))
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Notificar sobre vencimento')
+
+    const salvarBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Salvar')
+    salvarBtn?.click()
+    await flushPromises()
+
+    expect(mockState.adminUpdateClient).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ billing_notify_user_id: null }))
+    wrapper.unmount()
+  })
+
   it('salva a edição do cliente com dados válidos', async () => {
     const wrapper = mount(ClientDetailView, { attachTo: document.body, props: { id: 'tenant-1' }, ...pluginOptions() })
     await flushPromises()

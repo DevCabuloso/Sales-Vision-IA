@@ -8,6 +8,7 @@ const mockState = vi.hoisted(() => ({ box: {}, user: null, hashPassword: null, l
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = mockState.user; next() },
   requireTenant: (req, res, next) => next(),
+  invalidateUserCache: (...args) => mockState.invalidateUserCache?.(...args),
 }))
 
 vi.mock('../../db/supabase.js', () => ({
@@ -56,6 +57,20 @@ describe('routes/operators', () => {
     const app = buildApp()
     const res = await request(app).get('/api/operators')
     expect(res.body.operators).toHaveLength(1)
+  })
+
+  it('GET / retorna 403 pra um agente comum (não vaza dados dos colegas)', async () => {
+    mockState.user = { id: 'user-1', tenantId: 'tenant-1', role: 'agent' }
+    const app = buildApp()
+    const res = await request(app).get('/api/operators')
+    expect(res.status).toBe(403)
+  })
+
+  it('GET /dashboard retorna 403 pra um agente comum', async () => {
+    mockState.user = { id: 'user-1', tenantId: 'tenant-1', role: 'agent' }
+    const app = buildApp()
+    const res = await request(app).get('/api/operators/dashboard')
+    expect(res.status).toBe(403)
   })
 
   it('GET /dashboard agrega métricas de uso por operador', async () => {
@@ -145,6 +160,22 @@ describe('routes/operators', () => {
       })
     })
 
+    it('invalida o cache de req.user do operador quando role/permissions/is_restricted/active mudam', async () => {
+      mockState.invalidateUserCache = vi.fn()
+      setSupabase({ users: [{ data: { id: 'u1', role: 'agent' }, error: null }] })
+      const app = buildApp()
+      await request(app).patch('/api/operators/u1').send({ is_restricted: true, permissions: { chat: false } })
+      expect(mockState.invalidateUserCache).toHaveBeenCalledWith('u1')
+    })
+
+    it('não invalida o cache quando só campos não sensíveis mudam', async () => {
+      mockState.invalidateUserCache = vi.fn()
+      setSupabase({ users: [{ data: { id: 'u1', role: 'agent' }, error: null }] })
+      const app = buildApp()
+      await request(app).patch('/api/operators/u1').send({ phone: '11999999999' })
+      expect(mockState.invalidateUserCache).not.toHaveBeenCalled()
+    })
+
     it('não registra evento de auditoria quando só campos não sensíveis mudam (ex.: nome)', async () => {
       setSupabase({ users: [{ data: { id: 'u1', name: 'Novo' }, error: null }] })
       const app = buildApp()
@@ -183,6 +214,14 @@ describe('routes/operators', () => {
       const app = buildApp()
       const res = await request(app).delete('/api/operators/u2')
       expect(res.status).toBe(200)
+    })
+
+    it('invalida o cache de req.user do operador excluído', async () => {
+      mockState.invalidateUserCache = vi.fn()
+      setSupabase({})
+      const app = buildApp()
+      await request(app).delete('/api/operators/u2')
+      expect(mockState.invalidateUserCache).toHaveBeenCalledWith('u2')
     })
   })
 })

@@ -206,15 +206,24 @@ billingRouter.post('/webhook', async (req, res) => {
     }
 
     const paidAt = new Date().toISOString()
-    unwrap(
+    // .eq('status', 'pending') torna isso um "claim" atômico (mesmo padrão do
+    // scheduler.js) — sem ele, duas entregas quase simultâneas do mesmo
+    // webhook (retry de rede da InfinitePay) passavam ambas pela checagem
+    // `order.status === 'paid'` acima antes de qualquer UPDATE confirmar,
+    // duplicando o registro em usage_events.
+    const claimed = unwrap(
       await supabase.from('checkout_orders').update({
         status: 'paid',
         paid_at: paidAt,
         transaction_nsu: transaction_nsu || null,
         receipt_url: receipt_url || null,
         infinitepay_slug: invoice_slug || order.infinitepay_slug,
-      }).eq('id', order.id)
+      }).eq('id', order.id).eq('status', 'pending').select('id')
     )
+    if (!claimed?.length) {
+      // outra entrega concorrente do mesmo webhook já processou este pedido
+      return res.json({ ok: true })
+    }
 
     const trialEndsAt = new Date(Date.now() + config.billing.trialDays * 24 * 60 * 60 * 1000).toISOString()
     unwrap(

@@ -54,4 +54,34 @@ describe('ttlCache', () => {
     expect(r2).toBe('v2')
     expect(fn).toHaveBeenCalledTimes(2)
   })
+
+  it('faz eviction das entradas mais antigas quando passa do limite de tamanho (evita crescimento sem limite)', async () => {
+    // MAX_ENTRIES = 5000 (não exportado) — preenche além disso e confirma que
+    // as primeiras chaves inseridas (as mais antigas) foram removidas, mas as
+    // mais recentes continuam servidas do cache sem rechamar fn().
+    for (let i = 0; i < 5010; i++) {
+      await ttlGet(`bulk-${i}`, 300, () => Promise.resolve(i))
+    }
+
+    const fnOld = vi.fn().mockResolvedValue('recalculado')
+    await ttlGet('bulk-0', 300, fnOld)
+    expect(fnOld).toHaveBeenCalledTimes(1) // foi evictado, precisou recalcular
+
+    const fnRecent = vi.fn().mockResolvedValue('nao-deveria-rodar')
+    await ttlGet('bulk-5009', 300, fnRecent)
+    expect(fnRecent).not.toHaveBeenCalled() // ainda em cache
+  })
+
+  it('prioriza remover entradas já expiradas antes de remover entradas válidas mais antigas', async () => {
+    await ttlGet('expira-logo', 5, () => Promise.resolve('x'))
+    vi.advanceTimersByTime(5_001) // expira essa chave, mas ela continua ocupando espaço no Map
+
+    for (let i = 0; i < 5010; i++) {
+      await ttlGet(`bulk2-${i}`, 300, () => Promise.resolve(i))
+    }
+
+    const fnRecent = vi.fn().mockResolvedValue('nao-deveria-rodar')
+    await ttlGet('bulk2-5009', 300, fnRecent)
+    expect(fnRecent).not.toHaveBeenCalled() // a chave expirada foi limpa primeiro, preservando as válidas recentes
+  })
 })

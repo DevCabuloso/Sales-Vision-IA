@@ -6,6 +6,8 @@ import { hashPassword } from '../services/auth.js'
 import { requireAuth, requireOwner, invalidateTenantStatusCache } from '../middleware/auth.js'
 import { config } from '../config/index.js'
 import { passwordSchema } from '../utils/passwordSchema.js'
+import { createBillingReminderNotification } from '../services/billingNotifications.js'
+import { logUsage } from '../services/usage.js'
 
 export const adminRouter = Router()
 adminRouter.use(requireAuth, requireOwner)
@@ -174,7 +176,66 @@ adminRouter.patch('/clients/:id/renew', async (req, res) => {
       .eq('id', req.params.id).select()
   )
   if (!rows.length) return res.status(404).json({ error: 'Cliente não encontrado.' })
+
+  // Renovar resolve qualquer aviso de vencimento pendente daquele tenant —
+  // a pessoa designada não precisa dispensar manualmente (decisão do usuário).
+  await supabase.from('notifications')
+    .update({ resolved_at: new Date().toISOString() })
+    .eq('tenant_id', req.params.id).eq('type', 'billing_reminder').is('resolved_at', null)
+
   res.json({ client: rows[0] })
+})
+
+// "Emitir Alerta": disparo manual, sob demanda, do mesmo aviso de vencimento
+// que o scheduler cria automaticamente (ver runDueBillingReminders em
+// scheduler.js) — usa o mesmo limiar de dias configurado em platform_settings,
+// mas dispara na hora em vez de esperar o horário programado. Reaproveita
+// createBillingReminderNotification, que já evita duplicar se o tenant já
+// recebeu um aviso não resolvido hoje.
+adminRouter.post('/clients/billing-alert', async (req, res) => {
+  const settingsRows = unwrap(
+    await supabase.from('platform_settings').select('billing_reminder_days_before').eq('id', 1).limit(1)
+  ) || []
+  const daysBefore = settingsRows[0]?.billing_reminder_days_before ?? 3
+  const cutoff = new Date(Date.now() + daysBefore * 24 * 60 * 60 * 1000).toISOString()
+
+  // Busca todo mundo dentro do limiar independente de ter destinatário —
+  // quem não tem (billing_notify_user_id null) é reportado à parte em vez de
+  // simplesmente desaparecer da contagem, senão "0 notificados" fica
+  // indistinguível de "ninguém está vencendo" quando na verdade tem cliente
+  // vencendo mas ninguém foi designado pra receber o aviso (ver
+  // ClientDetailView.vue > Editar cliente > "Notificar sobre vencimento").
+  const tenants = unwrap(
+    await supabase.from('tenants')
+      .select('id, name, next_billing_at, billing_notify_user_id')
+      .not('next_billing_at', 'is', null)
+      .lte('next_billing_at', cutoff)
+  ) || []
+
+  let notified = 0
+  const withoutRecipient = []
+  for (const t of tenants) {
+    if (!t.billing_notify_user_id) {
+      withoutRecipient.push(t.name)
+      continue
+    }
+
+    const daysLeft = Math.ceil((new Date(t.next_billing_at).getTime() - Date.now()) / (24 * 60 * 60 * 1000))
+    const message = daysLeft < 0
+      ? `A mensalidade de ${t.name} está vencida há ${Math.abs(daysLeft)} dia${Math.abs(daysLeft) === 1 ? '' : 's'}.`
+      : daysLeft === 0
+        ? `A mensalidade de ${t.name} vence hoje.`
+        : `A mensalidade de ${t.name} vence em ${daysLeft} dia${daysLeft === 1 ? '' : 's'}.`
+
+    try {
+      const sent = await createBillingReminderNotification(t, message)
+      if (sent) notified++
+    } catch (e) {
+      console.error('[admin] falha ao emitir alerta de vencimento:', e.message)
+    }
+  }
+
+  res.json({ notified, total: tenants.length, withoutRecipient })
 })
 
 adminRouter.patch('/clients/:id', async (req, res) => {
@@ -182,6 +243,7 @@ adminRouter.patch('/clients/:id', async (req, res) => {
     name: z.string().min(2).optional(),
     plan: z.enum(['trial', 'starter', 'pro', 'enterprise']).optional(),
     max_leads: z.number().int().positive().optional(),
+    billing_notify_user_id: z.string().uuid().nullable().optional(),
   }).partial()
   const parsed = schema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Dados inválidos.' })
@@ -385,9 +447,13 @@ adminRouter.delete('/owners/:id', async (req, res) => {
 
 const TENANT_FEATURE_COLUMNS = 'name, slug, feat_meta_api, feat_evolution_api, feat_hybrid, feat_google_cal, feat_broadcast, feat_kanban, feat_agenda, feat_contacts, feat_ia_config, feat_operators, feat_custom_apis'
 
-function buildImpersonationPayload(tenant, tenantId, targetUser) {
+// impersonatedBy: o próprio JWT carrega quem iniciou a impersonação — sem
+// isso, o token gerado era indistinguível de um login normal, e não havia
+// como saber depois (nem sequer no próprio token) que se tratou de uma sessão
+// de impersonação nem quem a começou.
+function buildImpersonationPayload(tenant, tenantId, targetUser, actorId) {
   const token = jwt.sign(
-    { sub: targetUser.id, role: targetUser.role, tenantId },
+    { sub: targetUser.id, role: targetUser.role, tenantId, impersonatedBy: actorId },
     config.jwt.secret,
     { expiresIn: '1h' }
   )
@@ -440,7 +506,10 @@ adminRouter.post('/clients/:id/impersonate', async (req, res) => {
   )
   if (!admins.length) return res.status(404).json({ error: 'Nenhum administrador ativo encontrado para este cliente.' })
 
-  res.json(buildImpersonationPayload(tenant, tenantId, admins[0]))
+  await logUsage(tenantId, req.user.id, 'impersonation_started', {
+    targetUserId: admins[0].id, targetUserEmail: admins[0].email, via: 'clients/:id/impersonate',
+  })
+  res.json(buildImpersonationPayload(tenant, tenantId, admins[0], req.user.id))
 })
 
 adminRouter.post('/users/:id/impersonate', async (req, res) => {
@@ -459,7 +528,10 @@ adminRouter.post('/users/:id/impersonate', async (req, res) => {
   )
   if (!tenants.length) return res.status(404).json({ error: 'Cliente não encontrado.' })
 
-  res.json(buildImpersonationPayload(tenants[0], targetUser.tenant_id, targetUser))
+  await logUsage(targetUser.tenant_id, req.user.id, 'impersonation_started', {
+    targetUserId: targetUser.id, targetUserEmail: targetUser.email, via: 'users/:id/impersonate',
+  })
+  res.json(buildImpersonationPayload(tenants[0], targetUser.tenant_id, targetUser, req.user.id))
 })
 
 // ── Monitoramento ─────────────────────────────────────────────────────────────
@@ -528,6 +600,11 @@ adminRouter.get('/monitoring', async (req, res) => {
 // ── Configurações ─────────────────────────────────────────────────────────────
 
 adminRouter.get('/settings', async (req, res) => {
+  const rows = unwrap(
+    await supabase.from('platform_settings')
+      .select('billing_reminder_days_before, billing_reminder_time')
+      .eq('id', 1).limit(1)
+  ) || []
   res.json({
     settings: {
       env: config.env,
@@ -549,8 +626,27 @@ adminRouter.get('/settings', async (req, res) => {
       supabase: {
         configured: !!(config.supabase.url && config.supabase.serviceKey),
       },
+      billing: rows[0] || { billing_reminder_days_before: 3, billing_reminder_time: '09:00' },
     },
   })
+})
+
+const platformSettingsSchema = z.object({
+  billing_reminder_days_before: z.number().int().min(0).max(30),
+  billing_reminder_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Horário inválido, use HH:MM.'),
+})
+
+adminRouter.put('/settings', async (req, res) => {
+  const parsed = platformSettingsSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message })
+  }
+  const rows = unwrap(
+    await supabase.from('platform_settings')
+      .update({ ...parsed.data, updated_at: new Date().toISOString() })
+      .eq('id', 1).select('billing_reminder_days_before, billing_reminder_time')
+  ) || []
+  res.json({ billing: rows[0] || parsed.data })
 })
 
 // ── Overview ──────────────────────────────────────────────────────────────────

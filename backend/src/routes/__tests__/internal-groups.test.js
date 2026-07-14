@@ -68,7 +68,10 @@ describe('routes/internal-groups', () => {
     })
 
     it('cria o grupo e inclui o criador entre os membros', async () => {
-      setSupabase({ internal_groups: [{ data: { id: 'g1', name: 'Financeiro' }, error: null }] })
+      setSupabase({
+        users: [{ data: [{ id: 'user-2' }], error: null }],
+        internal_groups: [{ data: { id: 'g1', name: 'Financeiro' }, error: null }],
+      })
       const app = buildApp()
       const res = await request(app).post('/api/internal-groups').send({ name: 'Financeiro', member_ids: ['user-2'] })
 
@@ -88,11 +91,29 @@ describe('routes/internal-groups', () => {
       const res = await request(app).post('/api/internal-groups').send({ name: 'X', member_ids: 'user-2' })
       expect(res.status).toBe(400)
     })
+
+    it('rejeita member_ids que não pertençam a este tenant (isolamento entre tenants)', async () => {
+      setSupabase({ users: [{ data: [], error: null }] }) // nenhum dos ids pertence ao tenant-1
+      const app = buildApp()
+      const res = await request(app).post('/api/internal-groups').send({ name: 'X', member_ids: ['user-de-outro-tenant'] })
+      expect(res.status).toBe(400)
+      expect(insertCallsFor('internal_groups')).toHaveLength(0)
+    })
   })
 
   describe('GET /:id/messages', () => {
+    it('retorna 404 quando o grupo não existe (ou não é deste tenant)', async () => {
+      setSupabase({ internal_groups: [{ data: [], error: null }] })
+      const app = buildApp()
+      const res = await request(app).get('/api/internal-groups/g1/messages')
+      expect(res.status).toBe(404)
+    })
+
     it('retorna 403 quando o usuário não é membro do grupo', async () => {
-      setSupabase({ internal_group_members: [{ data: [], error: null }] })
+      setSupabase({
+        internal_groups: [{ data: [{ id: 'g1', created_by: 'user-2' }], error: null }],
+        internal_group_members: [{ data: [], error: null }],
+      })
       const app = buildApp()
       const res = await request(app).get('/api/internal-groups/g1/messages')
       expect(res.status).toBe(403)
@@ -100,6 +121,7 @@ describe('routes/internal-groups', () => {
 
     it('retorna as mensagens em ordem cronológica (mais antiga primeiro) por padrão', async () => {
       setSupabase({
+        internal_groups: [{ data: [{ id: 'g1', created_by: 'user-1' }], error: null }],
         internal_group_members: [{ data: [{ group_id: 'g1' }], error: null }],
         internal_messages: [{ data: [{ id: 3 }, { id: 2 }, { id: 1 }], error: null }],
       })
@@ -117,7 +139,10 @@ describe('routes/internal-groups', () => {
     })
 
     it('retorna 403 quando o usuário não é membro', async () => {
-      setSupabase({ internal_group_members: [{ data: [], error: null }] })
+      setSupabase({
+        internal_groups: [{ data: [{ id: 'g1', created_by: 'user-2' }], error: null }],
+        internal_group_members: [{ data: [], error: null }],
+      })
       const app = buildApp()
       const res = await request(app).post('/api/internal-groups/g1/messages').send({ text: 'oi' })
       expect(res.status).toBe(403)
@@ -125,6 +150,7 @@ describe('routes/internal-groups', () => {
 
     it('envia a mensagem e atualiza o timestamp do grupo', async () => {
       setSupabase({
+        internal_groups: [{ data: [{ id: 'g1', created_by: 'user-1' }], error: null }],
         internal_group_members: [{ data: [{ group_id: 'g1' }], error: null }],
         internal_messages: [{ data: { id: 1, text: 'oi' }, error: null }],
       })
@@ -196,6 +222,7 @@ describe('routes/internal-groups', () => {
     it('retorna 403 quando o usuário não participa do grupo de destino', async () => {
       setSupabase({
         internal_messages: [{ data: [{ id: 1, text: 'oi', deleted_at: null }], error: null }],
+        internal_groups: [{ data: [{ id: 'g2', created_by: 'user-2' }], error: null }],
         internal_group_members: [{ data: [], error: null }],
       })
       const app = buildApp()
@@ -206,6 +233,7 @@ describe('routes/internal-groups', () => {
     it('encaminha a mensagem para o grupo de destino', async () => {
       setSupabase({
         internal_messages: [{ data: [{ id: 1, text: 'oi', deleted_at: null }], error: null }, { data: { id: 2, text: 'oi' }, error: null }],
+        internal_groups: [{ data: [{ id: 'g2', created_by: 'user-1' }], error: null }],
         internal_group_members: [{ data: [{ group_id: 'g2' }], error: null }],
       })
       const app = buildApp()
@@ -222,7 +250,10 @@ describe('routes/internal-groups', () => {
     })
 
     it('retorna 403 quando não é membro', async () => {
-      setSupabase({ internal_group_members: [{ data: [], error: null }] })
+      setSupabase({
+        internal_groups: [{ data: [{ id: 'g1', created_by: 'user-2' }], error: null }],
+        internal_group_members: [{ data: [], error: null }],
+      })
       const app = buildApp()
       const res = await request(app).post('/api/internal-groups/g1/location').send({ latitude: 1, longitude: 2 })
       expect(res.status).toBe(403)
@@ -230,6 +261,7 @@ describe('routes/internal-groups', () => {
 
     it('compartilha a localização com sucesso', async () => {
       setSupabase({
+        internal_groups: [{ data: [{ id: 'g1', created_by: 'user-1' }], error: null }],
         internal_group_members: [{ data: [{ group_id: 'g1' }], error: null }],
         internal_messages: [{ data: { id: 1, text: 'Localização compartilhada' }, error: null }],
       })
@@ -259,6 +291,7 @@ describe('routes/internal-groups', () => {
 
     it('PATCH atualiza nome e substitui os membros', async () => {
       setSupabase({
+        users: [{ data: [{ id: 'user-2' }], error: null }],
         internal_groups: [{ data: [{ created_by: 'user-1' }], error: null }],
         internal_group_members: [{ data: [{ group_id: 'g1' }], error: null }],
       })

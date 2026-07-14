@@ -149,9 +149,9 @@
       <v-row>
         <v-col cols="12" md="6">
           <div class="notif-group-title mb-2">
-            <v-icon icon="mdi-email-outline" size="14" class="mr-1" /> Notificações por E-mail
+            <v-icon icon="mdi-bell-ring-outline" size="14" class="mr-1" /> Notificações no Navegador
           </div>
-          <div v-for="n in emailNotifs" :key="n.key" class="notif-row">
+          <div v-for="n in browserNotifs" :key="n.key" class="notif-row">
             <div>
               <div class="text-body-2 font-weight-medium">{{ n.label }}</div>
               <div class="text-caption" style="color:#6B7C88">{{ n.desc }}</div>
@@ -159,11 +159,11 @@
             <v-switch v-model="notifications[n.key]" color="primary" hide-details density="compact" />
           </div>
 
-          <!-- Mensagem sem resposta — timeout editável -->
+          <!-- Mensagem sem resposta — controla a janela usada pelo sino de alertas (não é e-mail) -->
           <div class="notif-row notif-row--unanswered">
             <div>
               <div class="text-body-2 font-weight-medium">Mensagem sem resposta</div>
-              <div class="text-caption" style="color:#6B7C88">Alerta quando um lead aguarda resposta sem retorno</div>
+              <div class="text-caption" style="color:#6B7C88">O sino de alertas avisa quando um lead aguarda resposta há mais de:</div>
             </div>
             <div class="d-flex align-center ga-2 flex-shrink-0">
               <v-text-field
@@ -176,23 +176,8 @@
                 variant="outlined"
                 suffix="min"
                 style="width:90px"
-                :disabled="!notifications.email_unanswered"
               />
-              <v-switch v-model="notifications.email_unanswered" color="primary" hide-details density="compact" />
             </div>
-          </div>
-        </v-col>
-
-        <v-col cols="12" md="6">
-          <div class="notif-group-title mb-2">
-            <v-icon icon="mdi-bell-ring-outline" size="14" class="mr-1" /> Notificações no Navegador
-          </div>
-          <div v-for="n in browserNotifs" :key="n.key" class="notif-row">
-            <div>
-              <div class="text-body-2 font-weight-medium">{{ n.label }}</div>
-              <div class="text-caption" style="color:#6B7C88">{{ n.desc }}</div>
-            </div>
-            <v-switch v-model="notifications[n.key]" color="primary" hide-details density="compact" />
           </div>
         </v-col>
       </v-row>
@@ -313,22 +298,17 @@ async function saveRegional() {
 const savingNotifs = ref(false)
 const notifsSaved  = ref(false)
 
+// "Notificações por e-mail" existia aqui antes, mas era só um toggle salvo em
+// localStorage sem nenhum efeito real — o backend não tem nenhuma capacidade
+// de envio de e-mail. Removido pra não prometer algo que não acontece.
 const notifications = reactive(
   JSON.parse(localStorage.getItem('sdr_notifications') || 'null') || {
-    email_new_lead:      true,
-    email_unanswered:    true,
-    email_daily_summary: false,
     browser_realtime:    true,
     browser_new_message: true,
   }
 )
 
 const unansweredTimeout = ref(parseInt(localStorage.getItem('sdr_unanswered_timeout') || '30'))
-
-const emailNotifs = [
-  { key: 'email_new_lead',      label: 'Novo lead recebido',  desc: 'Notificação quando um novo lead entrar no sistema' },
-  { key: 'email_daily_summary', label: 'Resumo diário',       desc: 'Relatório diário com atendimentos e métricas da equipe' },
-]
 
 const browserNotifs = [
   { key: 'browser_realtime',    label: 'Alertas em tempo real',    desc: 'Notificações push enquanto a plataforma estiver aberta' },

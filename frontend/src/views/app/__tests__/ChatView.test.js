@@ -61,6 +61,28 @@ describe('ChatView (smoke)', () => {
     wrapper.unmount()
   })
 
+  it('mostra um indicador de falha de envio (tooltip) em mensagens com send_status=failed', async () => {
+    mockState.get.mockImplementation((url) => {
+      if (url === '/chat') return Promise.resolve({ data: { leads: [{ id: 'lead-1', name: 'Ana', phone: '5511988887777', conversation_status: 'open', updated_at: new Date().toISOString() }] } })
+      if (url === '/chat/lead-1/messages') {
+        return Promise.resolve({ data: { messages: [
+          { id: 1, role: 'agent', text: 'Oi', created_at: new Date().toISOString(), send_status: 'failed', send_error: 'Evolution indisponível' },
+          { id: 2, role: 'agent', text: 'Tudo bem?', created_at: new Date().toISOString(), send_status: 'sent' },
+        ] } })
+      }
+      return Promise.resolve({ data: {} })
+    })
+    const wrapper = mount(ChatView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+    await wrapper.find('.conv-item').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.msg-failed-icon').exists()).toBe(true)
+    // só uma das duas mensagens falhou
+    expect(wrapper.findAll('.msg-failed-icon')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
   it('painel de contato e barra de busca expandem/recolhem no lugar (classe "open" no wrapper, sem v-if)', async () => {
     mockState.get.mockImplementation((url) => {
       if (url === '/chat') return Promise.resolve({ data: { leads: [{ id: 'lead-1', name: 'Ana', phone: '5511988887777', conversation_status: 'open', updated_at: new Date().toISOString() }] } })

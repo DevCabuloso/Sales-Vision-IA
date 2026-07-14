@@ -158,6 +158,12 @@ describe('routes/channels', () => {
     expect(res.status).toBe(404)
   })
 
+  it('PATCH /:id/settings rejeita payload inválido (nome longo demais)', async () => {
+    const app = buildApp()
+    const res = await request(app).patch('/api/channels/ch1/settings').send({ name: 'x'.repeat(61) })
+    expect(res.status).toBe(400)
+  })
+
   it('PATCH /:id/settings atualiza apenas os campos enviados', async () => {
     setSupabase({ channels: [{ data: [{ id: 'ch1', goodbye_message: 'Até mais!' }], error: null }] })
     const app = buildApp()
@@ -219,6 +225,16 @@ describe('routes/channels', () => {
       expect(res.status).toBe(200)
       expect(res.body).toEqual({ closed: 5 })
     })
+
+    it('filtra os leads pelo :id do canal informado na URL (não fecha tickets de outros canais)', async () => {
+      setSupabase({ leads: [{ data: null, error: null, count: 2 }, { data: null, error: null }] })
+      const app = buildApp()
+      await request(app).post('/api/channels/ch1/close-tickets').send({ status: 'open' })
+      const updateCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'update')
+      const eqChannelCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'eq' && c.args[0] === 'channel_id')
+      expect(updateCall).toBeTruthy()
+      expect(eqChannelCall?.args).toEqual(['channel_id', 'ch1'])
+    })
   })
 
   describe('POST /:id/revalidate-webhook', () => {
@@ -229,8 +245,14 @@ describe('routes/channels', () => {
       expect(res.status).toBe(404)
     })
 
-    it('revalida o webhook com sucesso e envia o header com o EVOLUTION_WEBHOOK_SECRET', async () => {
-      setSupabase({ channels: [{ data: [{ instance_name: 'sdr_x' }], error: null }] })
+    it('revalida o webhook com sucesso, gera um segredo por-canal e o envia no header', async () => {
+      setSupabase({
+        channels: [
+          { data: [{ instance_name: 'sdr_x' }], error: null }, // lookup inicial do canal
+          { data: [{ webhook_secret: null }], error: null },   // getOrCreateChannelWebhookSecret: select
+          { data: null, error: null },                          // getOrCreateChannelWebhookSecret: update
+        ],
+      })
       const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({}) })
 
       const app = buildApp()
@@ -239,21 +261,27 @@ describe('routes/channels', () => {
       expect(res.body.webhookUrl).toBe('https://api.exemplo.com/webhooks/evolution/tenant-1')
       expect(fetchMock.mock.calls[0][0]).toBe('https://evo.exemplo.com/webhook/set/sdr_x')
       const webhookBody = JSON.parse(fetchMock.mock.calls[0][1].body)
-      expect(webhookBody.webhook.headers).toEqual({ apikey: 'evo-webhook-secret' })
+      // segredo por-canal gerado on-the-fly (UUID) — não é mais o EVOLUTION_WEBHOOK_SECRET global
+      expect(typeof webhookBody.webhook.headers.apikey).toBe('string')
+      expect(webhookBody.webhook.headers.apikey).not.toBe('evo-webhook-secret')
+      const updateCall = supabaseMock.calls.find((c) => c.table === 'channels' && c.method === 'update')
+      expect(updateCall.args[0]).toEqual({ webhook_secret: webhookBody.webhook.headers.apikey })
     })
 
-    it('envia headers: null quando EVOLUTION_WEBHOOK_SECRET não está configurado', async () => {
-      const { config } = await import('../../config/index.js')
-      config.evolution.webhookSecret = ''
-      setSupabase({ channels: [{ data: [{ instance_name: 'sdr_x' }], error: null }] })
+    it('reutiliza o segredo por-canal já existente em vez de gerar um novo', async () => {
+      setSupabase({
+        channels: [
+          { data: [{ instance_name: 'sdr_x' }], error: null },
+          { data: [{ webhook_secret: 'segredo-ja-existente' }], error: null },
+        ],
+      })
       const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({}) })
 
       const app = buildApp()
       await request(app).post('/api/channels/ch1/revalidate-webhook')
       const webhookBody = JSON.parse(fetchMock.mock.calls[0][1].body)
-      expect(webhookBody.webhook.headers).toBeNull()
-
-      config.evolution.webhookSecret = 'evo-webhook-secret'
+      expect(webhookBody.webhook.headers).toEqual({ apikey: 'segredo-ja-existente' })
+      expect(supabaseMock.calls.filter((c) => c.table === 'channels' && c.method === 'update')).toHaveLength(0)
     })
 
     it('retorna 500 quando a Evolution rejeita o webhook', async () => {
