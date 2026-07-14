@@ -190,6 +190,50 @@ describe('routes/admin', () => {
       expect(res.status).toBe(200)
     })
 
+    it('PATCH /clients/:id/renew rejeita corpo sem days nem next_billing_at', async () => {
+      const app = buildApp()
+      const res = await request(app).patch('/api/admin/clients/tenant-1/renew').send({})
+      expect(res.status).toBe(400)
+    })
+
+    it('PATCH /clients/:id/renew com next_billing_at explícito atualiza direto', async () => {
+      setSupabase({ tenants: [{ data: [{ id: 'tenant-1', next_billing_at: '2026-09-01T00:00:00.000Z' }], error: null }] })
+      const app = buildApp()
+      const res = await request(app).patch('/api/admin/clients/tenant-1/renew').send({ next_billing_at: '2026-09-01T00:00:00.000Z' })
+      expect(res.status).toBe(200)
+      expect(res.body.client.next_billing_at).toBe('2026-09-01T00:00:00.000Z')
+      const updateCall = supabaseMock.calls.find((c) => c.table === 'tenants' && c.method === 'update')
+      expect(updateCall.args[0].payment_status).toBe('paid')
+    })
+
+    it('PATCH /clients/:id/renew retorna 404 quando o cliente não existe (next_billing_at explícito)', async () => {
+      setSupabase({ tenants: [{ data: [], error: null }] })
+      const app = buildApp()
+      const res = await request(app).patch('/api/admin/clients/tenant-x/renew').send({ next_billing_at: '2026-09-01T00:00:00.000Z' })
+      expect(res.status).toBe(404)
+    })
+
+    it('PATCH /clients/:id/renew com days soma a partir de hoje quando não há vencimento futuro', async () => {
+      setSupabase({
+        tenants: [
+          { data: [{ next_billing_at: null }], error: null },
+          { data: [{ id: 'tenant-1', next_billing_at: '2026-08-13T00:00:00.000Z' }], error: null },
+        ],
+      })
+      const app = buildApp()
+      const res = await request(app).patch('/api/admin/clients/tenant-1/renew').send({ days: 30 })
+      expect(res.status).toBe(200)
+      const updateCall = supabaseMock.calls.find((c) => c.table === 'tenants' && c.method === 'update')
+      expect(updateCall.args[0].next_billing_at).toBeTruthy()
+    })
+
+    it('PATCH /clients/:id/renew com days retorna 404 quando o cliente não existe', async () => {
+      setSupabase({ tenants: [{ data: [], error: null }] })
+      const app = buildApp()
+      const res = await request(app).patch('/api/admin/clients/tenant-x/renew').send({ days: 30 })
+      expect(res.status).toBe(404)
+    })
+
     it('DELETE /clients/:id remove o tenant', async () => {
       setSupabase({})
       const app = buildApp()

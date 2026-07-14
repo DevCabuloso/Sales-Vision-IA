@@ -19,12 +19,19 @@
               {{ client.status }}
             </v-chip>
             <v-chip variant="outlined" size="small" color="accent">{{ client.plan }}</v-chip>
+            <v-chip :color="billingInfo.color" variant="tonal" size="small">
+              <v-icon icon="mdi-calendar-clock-outline" size="14" start />
+              {{ billingInfo.label }}
+            </v-chip>
             <span class="text-caption" style="color:#6B7C88">
               {{ client.max_leads ?? 1000 }} leads máx.
             </span>
           </div>
         </div>
         <div class="d-flex ga-2">
+          <v-btn variant="tonal" prepend-icon="mdi-calendar-refresh-outline" @click="openRenew">
+            Renovar
+          </v-btn>
           <v-btn variant="tonal" prepend-icon="mdi-pencil-outline" @click="openEditClient">
             Editar
           </v-btn>
@@ -216,6 +223,29 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog: renovar vencimento -->
+    <v-dialog v-model="renewDialog" max-width="400">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Renovar vencimento</v-card-title>
+        <v-card-text>
+          <p class="text-caption mb-3" style="color:#9FB0BC">
+            Isso só atualiza a data de referência no painel — a cobrança em si continua manual.
+          </p>
+          <div class="d-flex ga-2 mb-4">
+            <v-btn size="small" variant="tonal" @click="quickRenew(30)">+30 dias</v-btn>
+            <v-btn size="small" variant="tonal" @click="quickRenew(7)">+7 dias</v-btn>
+          </div>
+          <v-text-field v-model="renewDate" label="Ou escolha uma data" type="date" />
+          <v-alert v-if="renewError" type="error" variant="tonal" density="compact" :text="renewError" class="mt-2" />
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="renewDialog = false">Cancelar</v-btn>
+          <v-btn color="accent" :loading="saving" @click="saveRenewDate">Salvar data</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Dialog: criar/editar usuário -->
     <v-dialog v-model="userDialog" max-width="440">
       <v-card class="glass pa-2" border>
@@ -303,11 +333,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/services/api'
-import { editUserSchema, createTenantUserSchema, userResetPasswordSchema, updateClientSchema } from '@/schemas/admin'
+import { editUserSchema, createTenantUserSchema, userResetPasswordSchema, updateClientSchema, renewClientSchema } from '@/schemas/admin'
 import { validateForm } from '@/composables/useZodValidation'
+import { billingReminderInfo } from '@/utils/billingReminder'
 
 const props = defineProps({ id: String })
 const router = useRouter()
@@ -328,6 +359,11 @@ const features = reactive({})
 const editClientDialog = ref(false)
 const editForm = reactive({ name: '', plan: '', max_leads: 1000 })
 const editError = ref('')
+
+const renewDialog = ref(false)
+const renewDate = ref('')
+const renewError = ref('')
+const billingInfo = computed(() => billingReminderInfo(client.value?.next_billing_at))
 
 const userDialog = ref(false)
 const editingUser = ref(null)
@@ -443,6 +479,44 @@ async function saveEditClient() {
     toast('Cliente atualizado.')
   } catch (e) {
     editError.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
+
+function openRenew() {
+  renewDate.value = ''
+  renewError.value = ''
+  renewDialog.value = true
+}
+
+async function quickRenew(days) {
+  saving.value = true
+  try {
+    const updated = await api.adminRenewClient(props.id, { days })
+    client.value = { ...client.value, ...updated }
+    renewDialog.value = false
+    toast('Vencimento renovado.')
+  } catch (e) {
+    renewError.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveRenewDate() {
+  renewError.value = ''
+  const check = validateForm(renewClientSchema, { next_billing_at: renewDate.value })
+  if (!check.success) { renewError.value = check.error; return }
+  saving.value = true
+  try {
+    const iso = new Date(`${check.data.next_billing_at}T00:00:00`).toISOString()
+    const updated = await api.adminRenewClient(props.id, { next_billing_at: iso })
+    client.value = { ...client.value, ...updated }
+    renewDialog.value = false
+    toast('Vencimento atualizado.')
+  } catch (e) {
+    renewError.value = e.message
   } finally {
     saving.value = false
   }

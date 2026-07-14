@@ -142,6 +142,7 @@ export const api = {
   adminUpdateClient: (id, payload) => http.patch(`/admin/clients/${id}`, payload).then((r) => r.data.client),
   adminUpdateFeatures: (id, features) => http.patch(`/admin/clients/${id}/features`, features).then((r) => r.data.client),
   adminUpdateStatus: (id, status) => http.patch(`/admin/clients/${id}/status`, { status }).then((r) => r.data.client),
+  adminRenewClient: (id, payload) => http.patch(`/admin/clients/${id}/renew`, payload).then((r) => r.data.client),
   adminDeleteClient: (id) => http.delete(`/admin/clients/${id}`).then((r) => r.data),
   adminImpersonate: (clientId) =>
     http.post(`/admin/clients/${clientId}/impersonate`).then((r) => r.data),

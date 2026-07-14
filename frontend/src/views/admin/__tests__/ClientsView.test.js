@@ -2,13 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
 
-const mockState = vi.hoisted(() => ({ adminClients: null, adminCreateClient: null, adminUpdateStatus: null }))
+const mockState = vi.hoisted(() => ({ adminClients: null, adminCreateClient: null, adminUpdateStatus: null, adminRenewClient: null }))
 
 vi.mock('@/services/api', () => ({
   api: {
     adminClients: (...a) => mockState.adminClients(...a),
     adminCreateClient: (...a) => mockState.adminCreateClient(...a),
     adminUpdateStatus: (...a) => mockState.adminUpdateStatus(...a),
+    adminRenewClient: (...a) => mockState.adminRenewClient(...a),
     adminDeleteClient: vi.fn(),
   },
 }))
@@ -20,6 +21,7 @@ describe('ClientsView', () => {
     mockState.adminClients = vi.fn().mockResolvedValue([])
     mockState.adminCreateClient = vi.fn()
     mockState.adminUpdateStatus = vi.fn().mockResolvedValue({})
+    mockState.adminRenewClient = vi.fn().mockResolvedValue({})
   })
 
   it('carrega e lista os clientes', async () => {
@@ -40,6 +42,34 @@ describe('ClientsView', () => {
     await wrapper.find('input').setValue('ana')
     expect(wrapper.text()).toContain('Empresa Ana')
     expect(wrapper.text()).not.toContain('Empresa Bia')
+  })
+
+  it('mostra o lembrete de vencimento por cliente', async () => {
+    mockState.adminClients.mockResolvedValue([
+      { id: 't1', name: 'Vencido', slug: 'vencido', status: 'active', plan: 'pro', next_billing_at: new Date(Date.now() - 5 * 86400000).toISOString() },
+      { id: 't2', name: 'Sem Data', slug: 'sem-data', status: 'active', plan: 'pro', next_billing_at: null },
+    ])
+    const wrapper = mount(ClientsView, pluginOptions())
+    await flushPromises()
+    expect(wrapper.text()).toContain('Vencido há 5d')
+    expect(wrapper.text()).toContain('Sem vencimento definido')
+  })
+
+  it('renova o vencimento em +30 dias pelo menu de ações', async () => {
+    mockState.adminClients.mockResolvedValue([{ id: 't1', name: 'Empresa Ana', slug: 'empresa-ana', status: 'active', plan: 'pro', next_billing_at: null }])
+    const wrapper = mount(ClientsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const menuBtn = [...document.body.querySelectorAll('button')].find((b) => b.querySelector('.mdi-dots-vertical'))
+    menuBtn.click()
+    await flushPromises()
+
+    const renewItem = [...document.body.querySelectorAll('.v-list-item')].find((i) => i.textContent.includes('Renovar +30 dias'))
+    renewItem.click()
+    await flushPromises()
+
+    expect(mockState.adminRenewClient).toHaveBeenCalledWith('t1', { days: 30 })
+    wrapper.unmount()
   })
 
   it('exige nome, slug, e-mail e senha do admin ao criar um cliente', async () => {

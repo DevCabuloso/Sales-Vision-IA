@@ -39,6 +39,7 @@
             <th>Nome</th>
             <th>Status</th>
             <th>Plano</th>
+            <th>Vencimento</th>
             <th>Leads</th>
             <th>Criado em</th>
             <th style="text-align:right">Ações</th>
@@ -69,6 +70,11 @@
             <td>
               <span class="z-badge z-badge--plan">{{ c.plan }}</span>
             </td>
+            <td>
+              <v-chip :color="billingReminderInfo(c.next_billing_at).color" variant="tonal" size="small">
+                {{ billingReminderInfo(c.next_billing_at).label }}
+              </v-chip>
+            </td>
             <td class="ztable-num">{{ c.leads_count ?? 0 }}</td>
             <td class="ztable-sub">{{ formatDate(c.created_at) }}</td>
             <td style="text-align:right; white-space:nowrap" @click.stop>
@@ -88,6 +94,7 @@
                     :title="c.status === 'suspended' ? 'Reativar' : 'Suspender'"
                     @click="toggleStatus(c)"
                   />
+                  <v-list-item prepend-icon="mdi-calendar-refresh-outline" title="Renovar +30 dias" @click="renewClient(c)" />
                   <v-divider class="my-1" />
                   <v-list-item
                     prepend-icon="mdi-delete-outline"
@@ -100,7 +107,7 @@
             </td>
           </tr>
           <tr v-if="!filtered.length && !loading">
-            <td colspan="6" class="ztable-empty">
+            <td colspan="7" class="ztable-empty">
               <v-icon icon="mdi-domain-off" size="40" style="opacity:.2" />
               <p>Nenhum cliente encontrado.</p>
             </td>
@@ -186,6 +193,7 @@ import { useRouter } from 'vue-router'
 import { api } from '@/services/api'
 import { createClientSchema } from '@/schemas/admin'
 import { validateForm } from '@/composables/useZodValidation'
+import { billingReminderInfo } from '@/utils/billingReminder'
 
 const router = useRouter()
 const loading = ref(true)
@@ -299,6 +307,16 @@ async function toggleStatus(c) {
   try {
     await api.adminUpdateStatus(c.id, next)
     toast(next === 'active' ? 'Cliente reativado.' : 'Cliente suspenso.')
+    await load()
+  } catch (e) {
+    toast(e.message, 'error')
+  }
+}
+
+async function renewClient(c) {
+  try {
+    await api.adminRenewClient(c.id, { days: 30 })
+    toast('Vencimento renovado por +30 dias.')
     await load()
   } catch (e) {
     toast(e.message, 'error')

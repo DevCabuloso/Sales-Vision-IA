@@ -35,6 +35,10 @@ export const updateClientSchema = z.object({
     .int().positive('Limite de leads deve ser um número positivo.'),
 })
 
+export const renewClientSchema = z.object({
+  next_billing_at: z.string().trim().min(1, 'Informe a data de vencimento.'),
+})
+
 export const createClientSchema = z.object({
   name: z.string().trim().min(2, 'Preencha nome, slug, e-mail e senha do admin.'),
   slug: z.string().trim().min(2, 'Preencha nome, slug, e-mail e senha do admin.')

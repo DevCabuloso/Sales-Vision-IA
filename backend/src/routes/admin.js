@@ -144,6 +144,39 @@ adminRouter.patch('/clients/:id/status', async (req, res) => {
   res.json({ client: rows[0] })
 })
 
+const renewClientSchema = z.object({
+  days: z.number().int().positive().max(366).optional(),
+  next_billing_at: z.string().datetime().optional(),
+}).refine((d) => d.days || d.next_billing_at, { message: 'Informe "days" ou "next_billing_at".' })
+
+adminRouter.patch('/clients/:id/renew', async (req, res) => {
+  const parsed = renewClientSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message })
+  }
+  const { days, next_billing_at } = parsed.data
+
+  let nextBillingAt = next_billing_at
+  if (!nextBillingAt) {
+    const current = unwrap(
+      await supabase.from('tenants').select('next_billing_at').eq('id', req.params.id).limit(1)
+    )
+    if (!current.length) return res.status(404).json({ error: 'Cliente não encontrado.' })
+    const base = current[0].next_billing_at && new Date(current[0].next_billing_at).getTime() > Date.now()
+      ? new Date(current[0].next_billing_at)
+      : new Date()
+    nextBillingAt = new Date(base.getTime() + days * 24 * 60 * 60 * 1000).toISOString()
+  }
+
+  const rows = unwrap(
+    await supabase.from('tenants')
+      .update({ next_billing_at: nextBillingAt, payment_status: 'paid', updated_at: new Date().toISOString() })
+      .eq('id', req.params.id).select()
+  )
+  if (!rows.length) return res.status(404).json({ error: 'Cliente não encontrado.' })
+  res.json({ client: rows[0] })
+})
+
 adminRouter.patch('/clients/:id', async (req, res) => {
   const schema = z.object({
     name: z.string().min(2).optional(),

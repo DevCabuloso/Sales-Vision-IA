@@ -5,6 +5,7 @@ import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
 const mockState = vi.hoisted(() => ({
   adminClient: null, adminUpdateFeatures: null, adminImpersonate: null,
   adminUpdateClient: null, adminCreateUser: null, adminUpdateUser: null, adminResetPassword: null,
+  adminRenewClient: null,
 }))
 
 vi.mock('@/services/api', () => ({
@@ -16,6 +17,7 @@ vi.mock('@/services/api', () => ({
     adminUpdateUser: (...a) => mockState.adminUpdateUser(...a),
     adminCreateUser: (...a) => mockState.adminCreateUser(...a),
     adminResetPassword: (...a) => mockState.adminResetPassword(...a),
+    adminRenewClient: (...a) => mockState.adminRenewClient(...a),
     adminDeleteUser: vi.fn(),
     adminImpersonate: (...a) => mockState.adminImpersonate(...a),
     adminImpersonateUser: vi.fn(),
@@ -43,6 +45,7 @@ describe('ClientDetailView', () => {
     mockState.adminCreateUser = vi.fn().mockResolvedValue({ id: 'u2', name: 'Novo', email: 'novo@ex.com', role: 'agent' })
     mockState.adminUpdateUser = vi.fn().mockResolvedValue({ name: 'Bia Editada' })
     mockState.adminResetPassword = vi.fn().mockResolvedValue({ updated: true })
+    mockState.adminRenewClient = vi.fn().mockResolvedValue({ next_billing_at: '2026-09-13T00:00:00.000Z' })
   })
 
   it('carrega e mostra os dados do cliente', async () => {
@@ -72,6 +75,39 @@ describe('ClientDetailView', () => {
     await flushPromises()
 
     expect(mockState.adminImpersonate).toHaveBeenCalledWith('tenant-1')
+  })
+
+  it('renova +30 dias pelo dialog de renovação', async () => {
+    const wrapper = mount(ClientDetailView, { attachTo: document.body, props: { id: 'tenant-1' }, ...pluginOptions() })
+    await flushPromises()
+
+    const renewBtn = wrapper.findAll('button').find((b) => b.text().includes('Renovar'))
+    await renewBtn.trigger('click')
+    await flushPromises()
+
+    const quickBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === '+30 dias')
+    quickBtn.click()
+    await flushPromises()
+
+    expect(mockState.adminRenewClient).toHaveBeenCalledWith('tenant-1', { days: 30 })
+    wrapper.unmount()
+  })
+
+  it('rejeita data vazia ao renovar com data customizada', async () => {
+    const wrapper = mount(ClientDetailView, { attachTo: document.body, props: { id: 'tenant-1' }, ...pluginOptions() })
+    await flushPromises()
+
+    const renewBtn = wrapper.findAll('button').find((b) => b.text().includes('Renovar'))
+    await renewBtn.trigger('click')
+    await flushPromises()
+
+    const salvarDataBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Salvar data')
+    salvarDataBtn.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Informe a data de vencimento.')
+    expect(mockState.adminRenewClient).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('rejeita nome vazio ao editar o cliente e não chama a API', async () => {
