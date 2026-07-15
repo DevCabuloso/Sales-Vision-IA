@@ -17,7 +17,7 @@ leadsRouter.get('/', async (req, res) => {
 
     const rows = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
-        `SELECT id, name, phone, stage, score, intention, interests, created_at, updated_at
+        `SELECT id, name, phone, stage, crm_stage_id, score, intention, interests, created_at, updated_at
          FROM leads WHERE tenant_id = $1
          ORDER BY updated_at DESC
          LIMIT $2 OFFSET $3`,
@@ -93,10 +93,15 @@ leadsRouter.post('/', async (req, res) => {
 const updateSchema = z.object({
   name: z.string().optional(),
   stage: z.string().optional(),
+  crmStageId: z.string().uuid().nullable().optional(),
   score: z.number().int().min(0).max(100).optional(),
   intention: z.string().optional(),
   interests: z.array(z.string()).optional(),
 }).partial()
+
+// Estágio do funil "Pipeline CRM" (crmStageId) vive numa coluna separada de
+// stage (funil local) — só o nome da coluna difere do nome do campo no payload.
+const COLUMN_NAME = { crmStageId: 'crm_stage_id' }
 
 leadsRouter.patch('/:id', async (req, res) => {
   const parsed = updateSchema.safeParse(req.body)
@@ -105,6 +110,22 @@ leadsRouter.patch('/:id', async (req, res) => {
 
   try {
     const { lead, previousStage } = await withTenant(req.user.tenantId, async (client) => {
+      // RLS já restringe pipeline_stages ao tenant atual pra leitura normal,
+      // mas checagem de FK roda com privilégios elevados (não é filtrada por
+      // RLS) — sem esse SELECT explícito, um crmStageId de OUTRO tenant
+      // passaria na constraint (a linha existe, só não é "deste" tenant).
+      if (parsed.data.crmStageId) {
+        const stageRes = await client.query(
+          'SELECT 1 FROM pipeline_stages WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+          [parsed.data.crmStageId, req.user.tenantId]
+        )
+        if (!stageRes.rows.length) {
+          const err = new Error('Estágio de pipeline inválido.')
+          err.isBadRequest = true
+          throw err
+        }
+      }
+
       const currentRes = await client.query(
         'SELECT stage FROM leads WHERE id = $1 AND tenant_id = $2 LIMIT 1',
         [req.params.id, req.user.tenantId]
@@ -115,7 +136,7 @@ leadsRouter.patch('/:id', async (req, res) => {
       const values = []
       let i = 1
       for (const [key, value] of Object.entries(fields)) {
-        setClauses.push(`${key} = $${i}`)
+        setClauses.push(`${COLUMN_NAME[key] || key} = $${i}`)
         values.push(value)
         i++
       }
@@ -142,6 +163,7 @@ leadsRouter.patch('/:id', async (req, res) => {
 
     res.json({ lead })
   } catch (e) {
+    if (e.isBadRequest) return res.status(400).json({ error: e.message })
     res.status(500).json({ error: e.message })
   }
 })

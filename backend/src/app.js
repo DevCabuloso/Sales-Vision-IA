@@ -25,6 +25,7 @@ import { broadcastRouter } from './routes/broadcast.js'
 import { channelsRouter } from './routes/channels.js'
 import { contactsRouter } from './routes/contacts.js'
 import { labelsRouter } from './routes/labels.js'
+import { pipelineStagesRouter } from './routes/pipelineStages.js'
 import { queuesRouter } from './routes/queues.js'
 import { businessHoursRouter } from './routes/business-hours.js'
 import { internalGroupsRouter } from './routes/internal-groups.js'
@@ -149,6 +150,7 @@ export function createApp() {
   app.use('/api/channels', channelsRouter)
   app.use('/api/contacts', contactsRouter)
   app.use('/api/labels', labelsRouter)
+  app.use('/api/pipeline-stages', pipelineStagesRouter)
   app.use('/api/queues', queuesRouter)
   app.use('/api/business-hours', businessHoursRouter)
   app.use('/api/internal-groups', internalGroupsRouter)

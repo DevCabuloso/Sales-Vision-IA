@@ -78,6 +78,13 @@ export const api = {
   // meta test
   testMetaConnection: () => http.post('/integrations/meta/test').then((r) => r.data),
 
+  // pipeline crm
+  pipelineCrmWebhookSetup: () => http.get('/integrations/pipeline-crm/webhook-setup').then((r) => r.data),
+  generatePipelineCrmWebhook: () => http.post('/integrations/pipeline-crm/webhook-setup').then((r) => r.data),
+  connectPipelineCrm: (apiKey) => http.post('/integrations/pipeline-crm/connect', { apiKey }).then((r) => r.data),
+  importPipelineCrmStages: () => http.post('/integrations/pipeline-crm/import-stages').then((r) => r.data),
+  listPipelineStages: () => http.get('/pipeline-stages').then((r) => r.data.stages),
+
   // ai config
   getAIStatus: () => http.get('/ai-config/status').then((r) => r.data),
   toggleAI: (aiEnabled) => http.post('/ai-config/toggle', aiEnabled === undefined ? undefined : { ai_enabled: aiEnabled }).then((r) => r.data),

@@ -462,6 +462,60 @@ describe('routes/webhooks', () => {
     })
   })
 
+  describe('POST /pipeline-crm/:token', () => {
+    it('sempre responde 200, mesmo quando o token não é reconhecido', async () => {
+      setSupabase({ integrations: [{ data: [], error: null }] })
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/pipeline-crm/token-desconhecido').send({ event: 'deal.updated' })
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ ok: true })
+      await flush()
+      expect(updateCallsFor('integrations').length).toBe(0)
+    })
+
+    it('registra o evento (lastEventAt/lastEvent) quando o token bate com uma integração pipeline_crm', async () => {
+      setSupabase({
+        integrations: [
+          { data: [{ tenant_id: 'tenant-1', meta: { webhookToken: 'tok-123' } }], error: null },
+        ],
+      })
+      const app = buildApp()
+      const res = await request(app).post('/webhooks/pipeline-crm/tok-123').send({ event: 'deal.updated', deal_id: 42 })
+      expect(res.status).toBe(200)
+      await flush()
+
+      const update = updateCallsFor('integrations')[0]
+      expect(update.args[0].meta.webhookToken).toBe('tok-123')
+      expect(update.args[0].meta.lastEventAt).toEqual(expect.any(String))
+      expect(update.args[0].meta.lastEvent).toContain('deal.updated')
+    })
+
+    it('não registra nada quando existe integração pipeline_crm mas com um token diferente', async () => {
+      setSupabase({
+        integrations: [
+          { data: [{ tenant_id: 'tenant-1', meta: { webhookToken: 'tok-outro' } }], error: null },
+        ],
+      })
+      const app = buildApp()
+      await request(app).post('/webhooks/pipeline-crm/tok-123').send({ event: 'deal.updated' })
+      await flush()
+
+      expect(updateCallsFor('integrations').length).toBe(0)
+    })
+
+    it('busca só integrações pipeline_crm não desconectadas (filtra por provider e status)', async () => {
+      setSupabase({ integrations: [{ data: [], error: null }] })
+      const app = buildApp()
+      await request(app).post('/webhooks/pipeline-crm/tok-123').send({ event: 'deal.updated' })
+      await flush()
+
+      const eqCall = supabaseMock.calls.find((c) => c.table === 'integrations' && c.method === 'eq')
+      expect(eqCall.args).toEqual(['provider', 'pipeline_crm'])
+      const neqCall = supabaseMock.calls.find((c) => c.table === 'integrations' && c.method === 'neq')
+      expect(neqCall.args).toEqual(['status', 'disconnected'])
+    })
+  })
+
   describe('fail-closed em produção (sem secret configurado)', () => {
     const ORIGINAL_NODE_ENV = process.env.NODE_ENV
     afterEach(() => {

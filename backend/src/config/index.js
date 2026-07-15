@@ -82,6 +82,14 @@ export const config = {
     webhookSecret: process.env.EVOLUTION_WEBHOOK_SECRET || '',
   },
 
+  // A documentação oficial (app.pipelinecrm.com/api/docs) fica atrás de
+  // login — esta base URL vem de fontes de terceiros (wrapper Ruby oficial
+  // arquivado + posts de blog), não foi validada contra a API de verdade.
+  // Ajustar via env assim que confirmarmos com uma conta real.
+  pipelineCrm: {
+    apiBaseUrl: process.env.PIPELINE_CRM_API_BASE_URL || 'https://api.pipelinecrm.com/api/v3',
+  },
+
   infinitepay: {
     handle: process.env.INFINITEPAY_HANDLE || '',
     apiUrl: 'https://api.checkout.infinitepay.io/links',

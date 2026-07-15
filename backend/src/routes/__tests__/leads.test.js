@@ -68,6 +68,14 @@ describe('routes/leads', () => {
       const res = await request(app).get('/api/leads').query({ limit: 5000 })
       expect(res.body.limit).toBe(1000)
     })
+
+    it('inclui crm_stage_id na seleção (funil do Pipeline CRM)', async () => {
+      rlsMock.queueRows([])
+      const app = buildApp()
+      await request(app).get('/api/leads')
+      const call = rlsMock.calls.find((c) => /FROM leads WHERE tenant_id/.test(c.sql))
+      expect(call.sql).toContain('crm_stage_id')
+    })
   })
 
   describe('POST /', () => {
@@ -144,6 +152,35 @@ describe('routes/leads', () => {
       await request(app).patch('/api/leads/l1').send({ score: 80 })
       await flush()
       expect(insertCallsMatching(/INSERT INTO lead_stage_history/).length).toBe(0)
+    })
+  })
+
+  describe('PATCH /:id — crmStageId (funil "Pipeline CRM")', () => {
+    it('atualiza crm_stage_id quando o estágio importado pertence ao tenant', async () => {
+      rlsMock.queueRows([{ exists: 1 }]) // SELECT 1 FROM pipeline_stages ...
+      rlsMock.queueRows([{ stage: 'Novo Lead' }]) // SELECT stage FROM leads
+      rlsMock.queueRows([{ id: 'l1', crm_stage_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }]) // UPDATE ... RETURNING
+      const app = buildApp()
+      const res = await request(app).patch('/api/leads/l1').send({ crmStageId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+      expect(res.status).toBe(200)
+      const updateCall = rlsMock.calls.find((c) => /^UPDATE leads SET/.test(c.sql))
+      expect(updateCall.sql).toContain('crm_stage_id = $1')
+      const stageCheck = rlsMock.calls.find((c) => /FROM pipeline_stages/.test(c.sql))
+      expect(stageCheck.params).toEqual(['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'tenant-1'])
+    })
+
+    it('rejeita com 400 quando o crmStageId não pertence ao tenant (ou não existe) — não deixa mesclar dados entre tenants', async () => {
+      rlsMock.queueRows([]) // SELECT 1 FROM pipeline_stages -> nada encontrado
+      const app = buildApp()
+      const res = await request(app).patch('/api/leads/l1').send({ crmStageId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+      expect(res.status).toBe(400)
+      expect(res.body.error).toMatch(/inválido/)
+    })
+
+    it('rejeita crmStageId que não é um UUID válido', async () => {
+      const app = buildApp()
+      const res = await request(app).patch('/api/leads/l1').send({ crmStageId: 'não-é-um-uuid' })
+      expect(res.status).toBe(400)
     })
   })
 

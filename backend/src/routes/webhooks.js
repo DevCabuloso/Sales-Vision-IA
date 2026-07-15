@@ -92,6 +92,54 @@ async function resolveEvolutionTenant(instanceName) {
 webhooksRouter.get('/ping', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }))
 
 // ════════════════════════════════════════════════
+// PIPELINE CRM — recebimento de eventos (deal criado/atualizado/mudança de
+// estágio). O token opaco na URL É a autenticação (gerado em
+// POST /api/integrations/pipeline-crm/webhook-setup) — o Pipeline CRM não
+// documenta um esquema de assinatura pra validar de outra forma. Por
+// enquanto só registra o evento (sem processar/mapear pra um lead ainda).
+// ════════════════════════════════════════════════
+webhooksRouter.post('/pipeline-crm/:token',
+  express.json({ limit: '2mb' }),
+  async (req, res) => {
+    // Sempre 200, mesmo com token inválido — mesma lógica do webhook da
+    // InfinitePay (billing.js): evita que o remetente entre em retry/alerta
+    // por causa de uma configuração nossa (token trocado, integração
+    // desconectada) que não é problema dele.
+    res.json({ ok: true })
+
+    try {
+      const { token } = req.params
+      const rows = unwrap(
+        await supabase.from('integrations').select('tenant_id, meta')
+          .eq('provider', 'pipeline_crm').neq('status', 'disconnected')
+      )
+      const match = rows?.find((r) => r.meta?.webhookToken === token)
+      if (!match) {
+        console.warn('[webhook pipeline-crm] token não reconhecido')
+        return
+      }
+
+      console.log(`[webhook pipeline-crm] evento recebido para tenant=${match.tenant_id}`)
+
+      const raw = JSON.stringify(req.body || {})
+      const newMeta = {
+        ...match.meta,
+        lastEventAt: new Date().toISOString(),
+        // Guarda sempre como string (truncada) pra visibilidade na tela de
+        // integrações — evita crescimento ilimitado da linha com payloads
+        // grandes e não depende de reconstruir um JSON válido ao truncar.
+        lastEvent: raw.length > 5000 ? raw.slice(0, 5000) + '…' : raw,
+      }
+      await supabase.from('integrations')
+        .update({ meta: newMeta, updated_at: new Date().toISOString() })
+        .eq('tenant_id', match.tenant_id).eq('provider', 'pipeline_crm')
+    } catch (e) {
+      console.error('[webhook pipeline-crm]', e.message)
+    }
+  }
+)
+
+// ════════════════════════════════════════════════
 // META — verificação (GET) e recebimento (POST)
 // ════════════════════════════════════════════════
 webhooksRouter.get('/meta', (req, res) => {

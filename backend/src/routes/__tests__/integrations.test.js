@@ -7,7 +7,7 @@ import { createRlsMock } from '../../test-utils/rlsMock.js'
 const mockState = vi.hoisted(() => ({
   box: {}, getAuthUrl: null, handleCallback: null, disconnect: null,
   saveCredentials: null, getCredentials: null, disconnectProvider: null, encrypt: null, decryptJSON: null,
-  dnsLookup: null,
+  dnsLookup: null, fetchDealStages: null,
 }))
 
 vi.mock('node:dns/promises', () => ({
@@ -20,7 +20,11 @@ vi.mock('../../middleware/auth.js', () => ({
 }))
 
 vi.mock('../../config/index.js', () => ({
-  config: { frontendUrl: 'https://app.exemplo.com', jwt: { secret: 'test-secret', expiresIn: '1h' } },
+  config: {
+    frontendUrl: 'https://app.exemplo.com',
+    backendUrl: 'https://api.exemplo.com',
+    jwt: { secret: 'test-secret', expiresIn: '1h' },
+  },
 }))
 
 vi.mock('../../db/rls.js', () => ({
@@ -42,6 +46,10 @@ vi.mock('../../services/integrations.js', () => ({
 vi.mock('../../services/crypto.js', () => ({
   encrypt: (...args) => mockState.encrypt(...args),
   decryptJSON: (...args) => mockState.decryptJSON(...args),
+}))
+
+vi.mock('../../services/pipelineCrm.js', () => ({
+  fetchDealStages: (...args) => mockState.fetchDealStages(...args),
 }))
 
 const { integrationsRouter } = await import('../integrations.js')
@@ -73,6 +81,7 @@ describe('routes/integrations', () => {
     mockState.encrypt = vi.fn((v) => `enc(${v})`)
     mockState.decryptJSON = vi.fn((v) => ({ accessToken: v.replace(/^enc\(|\)$/g, '') }))
     mockState.dnsLookup = vi.fn().mockResolvedValue({ address: '93.184.216.34' })
+    mockState.fetchDealStages = vi.fn()
     setRls()
   })
 
@@ -274,6 +283,133 @@ describe('routes/integrations', () => {
       const res = await request(app).post('/api/integrations/evolution/disconnect')
       expect(res.status).toBe(200)
       expect(mockState.disconnectProvider).toHaveBeenCalledWith('tenant-1', 'evolution')
+    })
+
+    it('aceita pipeline_crm como provider válido', async () => {
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/pipeline_crm/disconnect')
+      expect(res.status).toBe(200)
+      expect(mockState.disconnectProvider).toHaveBeenCalledWith('tenant-1', 'pipeline_crm')
+    })
+  })
+
+  describe('GET /pipeline-crm/webhook-setup', () => {
+    it('retorna configured=false quando nunca foi gerado um token', async () => {
+      rlsMock.queueRows([])
+      const app = buildApp()
+      const res = await request(app).get('/api/integrations/pipeline-crm/webhook-setup')
+      expect(res.body).toEqual({ configured: false, webhookUrl: null, lastEventAt: null })
+    })
+
+    it('retorna a URL do webhook quando um token já foi gerado', async () => {
+      rlsMock.queueRows([{ status: 'pending', meta: { webhookToken: 'tok-123', lastEventAt: null } }])
+      const app = buildApp()
+      const res = await request(app).get('/api/integrations/pipeline-crm/webhook-setup')
+      expect(res.body).toEqual({
+        configured: true,
+        webhookUrl: 'https://api.exemplo.com/webhooks/pipeline-crm/tok-123',
+        lastEventAt: null,
+      })
+    })
+
+    it('ignora o token quando a integração está desconectada', async () => {
+      rlsMock.queueRows([{ status: 'disconnected', meta: { webhookToken: 'tok-123' } }])
+      const app = buildApp()
+      const res = await request(app).get('/api/integrations/pipeline-crm/webhook-setup')
+      expect(res.body).toEqual({ configured: false, webhookUrl: null, lastEventAt: null })
+    })
+  })
+
+  describe('POST /pipeline-crm/webhook-setup', () => {
+    it('gera uma URL de webhook nova e retorna status pending', async () => {
+      rlsMock.queueRows([])
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/pipeline-crm/webhook-setup')
+      expect(res.status).toBe(200)
+      expect(res.body.webhookUrl).toMatch(/^https:\/\/api\.exemplo\.com\/webhooks\/pipeline-crm\/[0-9a-f-]{36}$/)
+
+      const insert = insertCallsMatching(/INSERT INTO integrations/)[0]
+      expect(insert.params[0]).toBe('tenant-1')
+      const meta = JSON.parse(insert.params[1])
+      expect(meta.webhookToken).toBeTruthy()
+      expect(res.body.webhookUrl).toContain(meta.webhookToken)
+    })
+
+    it('preserva o restante do meta existente ao regenerar o token', async () => {
+      rlsMock.queueRows([{ meta: { webhookToken: 'tok-antigo', lastEventAt: '2026-07-14T00:00:00Z', lastEvent: 'x' } }])
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/pipeline-crm/webhook-setup')
+      expect(res.status).toBe(200)
+
+      const insert = insertCallsMatching(/INSERT INTO integrations/)[0]
+      const meta = JSON.parse(insert.params[1])
+      expect(meta.webhookToken).not.toBe('tok-antigo')
+      expect(meta.lastEventAt).toBeNull()
+      expect(meta.lastEvent).toBeNull()
+    })
+  })
+
+  describe('POST /pipeline-crm/connect', () => {
+    it('rejeita API key curta demais', async () => {
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/pipeline-crm/connect').send({ apiKey: 'curta' })
+      expect(res.status).toBe(400)
+    })
+
+    it('salva a API key criptografada preservando o meta existente (ex: webhookToken)', async () => {
+      rlsMock.queueRows([{ meta: { webhookToken: 'tok-123' } }])
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/pipeline-crm/connect').send({ apiKey: 'chave-valida-123' })
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ connected: true })
+
+      const insert = insertCallsMatching(/INSERT INTO integrations/)[0]
+      expect(insert.params[0]).toBe('tenant-1')
+      expect(mockState.encrypt).toHaveBeenCalledWith({ apiKey: 'chave-valida-123' })
+      expect(JSON.parse(insert.params[2])).toEqual({ webhookToken: 'tok-123' })
+    })
+  })
+
+  describe('POST /pipeline-crm/import-stages', () => {
+    it('retorna 400 quando não há API key conectada', async () => {
+      mockState.getCredentials.mockResolvedValue(null)
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/pipeline-crm/import-stages')
+      expect(res.status).toBe(400)
+      expect(mockState.fetchDealStages).not.toHaveBeenCalled()
+    })
+
+    it('retorna 502 quando a busca de estágios no Pipeline CRM falha', async () => {
+      mockState.getCredentials.mockResolvedValue({ credentials: { apiKey: 'chave-123' }, meta: {} })
+      mockState.fetchDealStages.mockRejectedValue(new Error('Pipeline CRM respondeu 401'))
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/pipeline-crm/import-stages')
+      expect(res.status).toBe(502)
+      expect(res.body.error).toContain('401')
+    })
+
+    it('retorna 400 quando o Pipeline CRM não tem nenhum estágio cadastrado', async () => {
+      mockState.getCredentials.mockResolvedValue({ credentials: { apiKey: 'chave-123' }, meta: {} })
+      mockState.fetchDealStages.mockResolvedValue([])
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/pipeline-crm/import-stages')
+      expect(res.status).toBe(400)
+    })
+
+    it('importa os estágios retornados e faz upsert em pipeline_stages', async () => {
+      mockState.getCredentials.mockResolvedValue({ credentials: { apiKey: 'chave-123' }, meta: {} })
+      mockState.fetchDealStages.mockResolvedValue([
+        { externalId: '1', name: 'Novo', position: 0, probability: 10, pipelineExternalId: null, pipelineName: null },
+        { externalId: '2', name: 'Fechado', position: 1, probability: 100, pipelineExternalId: null, pipelineName: null },
+      ])
+      const app = buildApp()
+      const res = await request(app).post('/api/integrations/pipeline-crm/import-stages')
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ imported: 2 })
+
+      const upserts = insertCallsMatching(/INSERT INTO pipeline_stages/)
+      expect(upserts).toHaveLength(2)
+      expect(upserts[0].params).toEqual(['tenant-1', '1', 'Novo', 0, 10, null, null, expect.any(String)])
     })
   })
 })

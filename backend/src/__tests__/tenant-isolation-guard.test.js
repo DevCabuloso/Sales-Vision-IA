@@ -15,7 +15,7 @@ const TENANT_SCOPED_TABLES = new Set([
   'business_hours', 'channels', 'custom_apis', 'flow_sessions', 'flows',
   'followup_enrollment_messages', 'followup_enrollments', 'followup_sequences',
   'followup_steps', 'integrations', 'internal_groups', 'internal_messages',
-  'labels', 'lead_stage_history', 'leads', 'messages', 'queues',
+  'labels', 'lead_stage_history', 'leads', 'messages', 'pipeline_stages', 'queues',
   'scheduled_messages', 'template_categories', 'templates', 'ticket_logs',
   'whatsapp_group_access',
 ])

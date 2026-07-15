@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="d-flex align-center justify-space-between mb-5 flex-wrap ga-3">
+    <div class="d-flex align-center justify-space-between mb-3 flex-wrap ga-3">
       <div>
         <h1 class="text-h5 font-weight-bold mb-1">CRM Kanban</h1>
         <p class="text-body-2" style="color:#9FB0BC">{{ totalLeads }} leads · arraste para mudar de estágio</p>
@@ -11,28 +11,43 @@
       </div>
     </div>
 
+    <v-btn-toggle v-model="pipelineMode" mandatory density="compact" color="primary" class="mb-5" variant="outlined">
+      <v-btn value="local" size="small">Funil local</v-btn>
+      <v-btn value="crm" size="small">Pipeline CRM</v-btn>
+    </v-btn-toggle>
+
     <div v-if="loading" class="py-12 text-center"><v-progress-circular indeterminate color="primary" size="48" /></div>
 
-    <div v-else class="kanban-board">
+    <div v-else-if="pipelineMode === 'crm' && !columns.length" class="py-12 text-center">
+      <v-icon icon="mdi-sitemap" size="40" style="opacity:.25" class="mb-3" />
+      <p class="text-body-2 mb-3" style="color:#9FB0BC">Nenhum estágio importado do Pipeline CRM ainda.</p>
+      <v-btn color="primary" size="small" to="/integracoes">Ir para Integrações</v-btn>
+    </div>
+
+    <div v-else>
+      <p v-if="unassignedCount > 0" class="text-caption mb-3" style="color:#9FB0BC">
+        {{ unassignedCount }} lead(s) ainda sem estágio do Pipeline CRM — abra o lead e use "Mover para" pra atribuir um.
+      </p>
+      <div class="kanban-board">
       <div
-        v-for="col in columns" :key="col.stage"
+        v-for="col in columns" :key="col.key"
         class="kanban-col"
         @dragover.prevent
-        @drop="onDrop($event, col.stage)"
+        @drop="onDrop($event, col.key)"
       >
         <div class="kanban-header" :style="`border-top:3px solid ${col.color}`">
           <div class="d-flex align-center ga-2">
             <v-icon :icon="col.icon" size="18" :color="col.color" />
-            <span class="text-body-2 font-weight-bold">{{ col.stage }}</span>
+            <span class="text-body-2 font-weight-bold">{{ col.label }}</span>
             <v-chip class="ml-auto" size="x-small" :style="`background:${col.color}22;color:${col.color}`">
-              {{ filteredByStage(col.stage).length }}
+              {{ filteredByStage(col.key).length }}
             </v-chip>
           </div>
         </div>
 
         <div class="kanban-cards">
           <div
-            v-for="lead in filteredByStage(col.stage)" :key="lead.id"
+            v-for="lead in filteredByStage(col.key)" :key="lead.id"
             class="kanban-card"
             draggable="true"
             @dragstart="onDragStart($event, lead)"
@@ -61,10 +76,11 @@
             <div class="text-caption mt-2" style="color:#9FB0BC">{{ timeAgo(lead.updated_at) }}</div>
           </div>
 
-          <div v-if="!filteredByStage(col.stage).length" class="kanban-empty">
+          <div v-if="!filteredByStage(col.key).length" class="kanban-empty">
             <v-icon icon="mdi-drag-horizontal-variant" size="32" style="opacity:.15" />
           </div>
         </div>
+      </div>
       </div>
     </div>
 
@@ -73,7 +89,7 @@
       <v-card class="glass pa-6" border>
         <div class="d-flex align-center justify-space-between mb-4">
           <span class="text-h6 font-weight-bold">{{ selected.name || selected.phone }}</span>
-          <v-chip variant="tonal" size="small" :style="`background:${stageColor(selected.stage)}22;color:${stageColor(selected.stage)}`">{{ selected.stage }}</v-chip>
+          <v-chip variant="tonal" size="small" :style="`background:${selectedColumnColor}22;color:${selectedColumnColor}`">{{ selectedColumnLabel }}</v-chip>
         </div>
 
         <div class="d-flex flex-column ga-2 mb-4">
@@ -92,15 +108,15 @@
           <p class="text-caption mb-2" style="color:#9FB0BC">Mover para:</p>
           <div class="d-flex flex-wrap ga-2">
             <v-btn
-              v-for="col in columns.filter((c) => c.stage !== selected.stage)" :key="col.stage"
+              v-for="col in columns.filter((c) => c.key !== selectedColumnKey)" :key="col.key"
               size="x-small" variant="outlined"
               :style="`border-color:${col.color};color:${col.color}`"
-              @click="moveStage(selected, col.stage)"
-            >{{ col.stage }}</v-btn>
+              @click="moveStage(selected, col.key)"
+            >{{ col.label }}</v-btn>
           </div>
         </div>
 
-        <div v-if="history.length" class="mb-4">
+        <div v-if="pipelineMode === 'local' && history.length" class="mb-4">
           <p class="text-caption mb-2" style="color:#9FB0BC">Histórico:</p>
           <div v-for="h in history" :key="h.id" class="d-flex align-center ga-2 py-1 text-caption" :style="{ borderBottom: '1px solid var(--sep)', color: 'var(--text-muted)' }">
             <v-icon icon="mdi-arrow-right" size="12" />
@@ -132,14 +148,31 @@ const detailDialog = ref(false)
 const history = ref([])
 let draggedLead = null
 
-const columns = [
-  { stage: 'Novo Lead',        icon: 'mdi-account-plus-outline',   color: '#6366F1' },
-  { stage: 'Em Qualificação',  icon: 'mdi-account-search-outline', color: '#38BDF8' },
-  { stage: 'Qualificado',      icon: 'mdi-account-check-outline',  color: '#10B981' },
-  { stage: 'Reunião Agendada', icon: 'mdi-calendar-check-outline', color: '#F59E0B' },
-  { stage: 'Perdido',          icon: 'mdi-account-off-outline',    color: '#EF4444' },
-  { stage: 'Vendido',          icon: 'mdi-trophy-outline',         color: '#A855F7' },
+// 'local' = funil fixo de sempre (leads.stage); 'crm' = estágios importados
+// do Pipeline CRM (leads.crm_stage_id) — os dois vivem em paralelo, mudar de
+// aba não altera nem apaga dados do outro funil.
+const pipelineMode = ref('local')
+const pipelineStages = ref([])
+
+const localColumns = [
+  { key: 'Novo Lead',        label: 'Novo Lead',        icon: 'mdi-account-plus-outline',   color: '#6366F1' },
+  { key: 'Em Qualificação',  label: 'Em Qualificação',  icon: 'mdi-account-search-outline', color: '#38BDF8' },
+  { key: 'Qualificado',      label: 'Qualificado',      icon: 'mdi-account-check-outline',  color: '#10B981' },
+  { key: 'Reunião Agendada', label: 'Reunião Agendada', icon: 'mdi-calendar-check-outline', color: '#F59E0B' },
+  { key: 'Perdido',          label: 'Perdido',          icon: 'mdi-account-off-outline',    color: '#EF4444' },
+  { key: 'Vendido',          label: 'Vendido',          icon: 'mdi-trophy-outline',         color: '#A855F7' },
 ]
+// Estágios importados não têm cor/ícone próprios — usa uma paleta fixa por posição.
+const CRM_PALETTE = ['#6366F1', '#38BDF8', '#10B981', '#F59E0B', '#A855F7', '#EF4444', '#14B8A6', '#F472B6']
+const crmColumns = computed(() => pipelineStages.value.map((s, idx) => ({
+  key: s.id, label: s.name, icon: 'mdi-circle-medium', color: CRM_PALETTE[idx % CRM_PALETTE.length],
+})))
+const columns = computed(() => (pipelineMode.value === 'crm' ? crmColumns.value : localColumns))
+
+const selectedColumnKey = computed(() => (!selected.value ? null : (pipelineMode.value === 'crm' ? selected.value.crm_stage_id : selected.value.stage)))
+const selectedColumn = computed(() => columns.value.find((c) => c.key === selectedColumnKey.value))
+const selectedColumnLabel = computed(() => selectedColumn.value?.label || (pipelineMode.value === 'crm' ? 'Sem estágio' : selected.value?.stage))
+const selectedColumnColor = computed(() => selectedColumn.value?.color || '#6366F1')
 
 const totalLeads = computed(() => leads.value.length)
 const filteredLeads = computed(() => {
@@ -147,23 +180,50 @@ const filteredLeads = computed(() => {
   const q = search.value.toLowerCase()
   return leads.value.filter((l) => (l.name || '').toLowerCase().includes(q) || l.phone.toLowerCase().includes(q) || (l.intention || '').toLowerCase().includes(q))
 })
-function filteredByStage(stage) { return filteredLeads.value.filter((l) => l.stage === stage) }
+const unassignedCount = computed(() => (pipelineMode.value === 'crm' ? filteredLeads.value.filter((l) => !l.crm_stage_id).length : 0))
+function filteredByStage(key) {
+  return filteredLeads.value.filter((l) => (pipelineMode.value === 'crm' ? l.crm_stage_id === key : l.stage === key))
+}
 function scoreColor(s) { if (s >= 70) return 'success'; if (s >= 40) return 'warning'; return 'error' }
-function stageColor(s) { return { 'Novo Lead': '#6366F1', 'Em Qualificação': '#38BDF8', 'Qualificado': '#10B981', 'Reunião Agendada': '#F59E0B', 'Perdido': '#EF4444', 'Vendido': '#A855F7' }[s] || '#6366F1' }
 function timeAgo(d) { if (!d) return ''; const min = Math.floor((Date.now() - new Date(d).getTime()) / 60000); if (min < 60) return `${min}min atrás`; const hr = Math.floor(min / 60); if (hr < 24) return `${hr}h atrás`; return `${Math.floor(hr / 24)}d atrás` }
 function formatDate(d) { if (!d) return ''; return new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) }
 
-async function load() { loading.value = true; try { leads.value = await api.listLeads() } catch (e) { toast.error(e.message) } finally { loading.value = false } }
+async function load() {
+  loading.value = true
+  try {
+    const [leadsRes, stagesRes] = await Promise.all([api.listLeads(), api.listPipelineStages().catch(() => [])])
+    leads.value = leadsRes
+    pipelineStages.value = stagesRes
+  } catch (e) { toast.error(e.message) } finally { loading.value = false }
+}
 
 function onDragStart(event, lead) { draggedLead = lead; event.dataTransfer.effectAllowed = 'move' }
-async function onDrop(event, targetStage) { if (!draggedLead || draggedLead.stage === targetStage) return; await moveStage(draggedLead, targetStage); draggedLead = null }
+async function onDrop(event, targetKey) {
+  if (!draggedLead) return
+  const currentKey = pipelineMode.value === 'crm' ? draggedLead.crm_stage_id : draggedLead.stage
+  if (currentKey === targetKey) return
+  await moveStage(draggedLead, targetKey)
+  draggedLead = null
+}
 
-async function moveStage(lead, newStage) {
-  const oldStage = lead.stage; lead.stage = newStage
+async function moveStage(lead, newKey) {
+  const label = columns.value.find((c) => c.key === newKey)?.label || newKey
+
+  if (pipelineMode.value === 'crm') {
+    const oldKey = lead.crm_stage_id; lead.crm_stage_id = newKey
+    try {
+      await api.updateLead(lead.id, { crmStageId: newKey })
+      if (detailDialog.value && selected.value?.id === lead.id) selected.value.crm_stage_id = newKey
+      toast.success(`Movido para "${label}"`)
+    } catch (e) { lead.crm_stage_id = oldKey; toast.error(e.message) }
+    return
+  }
+
+  const oldStage = lead.stage; lead.stage = newKey
   try {
-    await api.updateLead(lead.id, { stage: newStage })
-    if (detailDialog.value && selected.value?.id === lead.id) { selected.value.stage = newStage; loadHistory(lead.id) }
-    toast.success(`Movido para "${newStage}"`)
+    await api.updateLead(lead.id, { stage: newKey })
+    if (detailDialog.value && selected.value?.id === lead.id) { selected.value.stage = newKey; loadHistory(lead.id) }
+    toast.success(`Movido para "${label}"`)
   } catch (e) { lead.stage = oldStage; toast.error(e.message) }
 }
 
