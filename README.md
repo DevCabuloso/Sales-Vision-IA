@@ -1,75 +1,65 @@
-# SDR IA Enterprise — Plataforma (Supabase + supabase-js + Realtime)
+# SDR IA Enterprise — Plataforma multi-tenant de SDR com IA
 
-Plataforma multi-tenant de SDR com IA: qualifica leads, conversa no WhatsApp (Meta API + Evolution) e agenda reuniões reais no Google Calendar. Painel do cliente + painel do dono, com **atualização ao vivo (Realtime)**.
+Plataforma SaaS multi-tenant que qualifica leads automaticamente por IA, conversa pelo WhatsApp (Meta Cloud API e Evolution API) e agenda reuniões reais no Google Calendar. Inclui painel do cliente (operação diária) e painel do dono (gestão de todos os tenants, billing, suporte), com atualização ao vivo via Supabase Realtime.
 
-**Stack:** Vue 3 + Vuetify 3 (front) · Node/Express (back) · **Supabase** (`@supabase/supabase-js`) · OpenAI · Docker.
+**Stack:** Vue 3 + Vuetify 3 + Pinia (frontend) · Node/Express (backend) · PostgreSQL via Supabase, com **RLS real** (Row-Level Security por tenant, cliente `pg` dedicado) · OpenAI (function-calling) · Zod (validação) · PM2 em produção (Hetzner).
+
+## O que a plataforma faz
+
+- **Qualificação de leads por IA** — a IA conversa no WhatsApp, qualifica o lead via function-calling e agenda reunião direto no Google Calendar do cliente.
+- **WhatsApp** — dois canais: Meta Cloud API oficial e Evolution API (self-hosted), roteados por feature flag; credenciais por tenant criptografadas com AES-256-GCM.
+- **Pipeline / CRM Kanban** — funil de vendas visual por estágio, com integração via webhook e importação de estágios de CRMs externos ([backend/src/services/pipelineCrm.js](backend/src/services/pipelineCrm.js), [backend/src/routes/pipelineStages.js](backend/src/routes/pipelineStages.js)).
+- **Disparo em massa (broadcast)** com status de entrega real, agenda/horário de acompanhamento (follow-up) geral ou por mensagem.
+- **Integrações** — webhooks de entrada/saída e APIs customizadas por tenant ([backend/src/routes/integrations.js](backend/src/routes/integrations.js), [backend/src/routes/webhooks.js](backend/src/routes/webhooks.js), [backend/src/routes/custom-apis.js](backend/src/routes/custom-apis.js)).
+- **Painel do dono (admin)** — lista/detalhe de clientes, monitoramento, suporte, configurações globais, lembrete de vencimento de mensalidade (sino + destinatário configurável).
+- **Onboarding self-service** — landing de teste grátis com pagamento real via PIX (InfinitePay, R$1 de validação) e fluxo de criação de tenant.
+- **Multi-tenant com isolamento real** — todas as rotas tenant-scoped passam por `withTenant`, que roda as queries sob o papel `app_rls` (sem `BYPASSRLS`) no Postgres — isolamento garantido no banco, não só na aplicação.
+- **Realtime** — Leads, Agenda, Dashboard (cliente) e Visão Geral (dono) atualizam sozinhos quando os dados mudam (ex: a IA cria um lead via WhatsApp e ele aparece na hora, sem refresh).
 
 ## Arquitetura de dados
 
-- O **backend** acessa o Supabase com a **service_role key** (acesso total, ignora RLS) via `@supabase/supabase-js`. Toda escrita passa por aqui.
-- O **frontend** usa a **anon key** só para **Realtime** (escutar mudanças). Ele nunca escreve direto no banco — continua chamando a API do backend.
-- As duas queries analíticas do painel do dono (lista de clientes e overview) são **funções RPC** no Postgres (`backend/src/db/functions.sql`).
+- O **backend** acessa o Postgres via `pg`, usando o papel `app_rls` (RLS real habilitado) para rotas tenant-scoped — ver `backend/src/db/withTenant.js`. Toda escrita passa por aqui.
+- O **frontend** usa a `anon key` do Supabase só para **Realtime** (escutar mudanças). Nunca escreve direto no banco — sempre chama a API do backend.
+- Consultas analíticas do painel do dono (lista de clientes, overview) são **funções RPC** no Postgres (`backend/src/db/functions.sql`), `SECURITY DEFINER`, chamadas só pelo backend em rotas protegidas por `requireOwner`.
 
-## 1. Configurar o Supabase
+## Rodar em desenvolvimento
 
-1. Crie um projeto em https://supabase.com.
-2. **SQL Editor → New query:** cole TODO o `backend/src/db/schema.sql` e rode. (Cria tabelas + habilita Realtime.)
-3. **SQL Editor → New query:** cole TODO o `backend/src/db/functions.sql` e rode. (Cria as funções do painel do dono.)
-4. Pegue as chaves em **Project Settings → API**:
-   - **Project URL** → vai em `SUPABASE_URL` e `VITE_SUPABASE_URL`
-   - **anon public** → vai em `VITE_SUPABASE_ANON_KEY`
-   - **service_role** (secret) → vai em `SUPABASE_SERVICE_KEY` (⚠️ só no backend, nunca no front)
-
-## 2. Preencher o .env
-
-Abra o `.env` na raiz e preencha: as 4 variáveis do Supabase acima, `OPENAI_API_KEY` e as credenciais do Google. `JWT_SECRET` e `ENCRYPTION_KEY` já vêm gerados.
-
-## 3. Subir com Docker
-
+**Tudo de uma vez (raiz do monorepo):**
 ```bash
-docker compose up --build
-```
-- Front: http://localhost:8080
-- API: http://localhost:3000
-
-> As `VITE_*` entram no bundle em tempo de build — por isso são passadas como build args no `docker-compose.yml`. Se mudar a anon key, rode `docker compose up --build` de novo.
-
-## 4. Criar seu usuário dono (owner)
-
-```bash
-docker compose exec backend node scripts/owner-sql.js "voce@email.com" "suaSenha"
-```
-Copie o `INSERT` impresso, cole no SQL Editor do Supabase e rode. Faça login em http://localhost:8080.
-
----
-
-## Rodar sem Docker (dev)
-
-**Backend:**
-```bash
-cd backend && npm install
-cp .env.example .env   # preencha SUPABASE_URL, SUPABASE_SERVICE_KEY, etc.
 npm run dev
 ```
+Sobe backend (nodemon, porta 5000/3000 conforme `.env`) e frontend (Vite) juntos.
 
-**Frontend:**
+**Ou separado:**
 ```bash
-cd frontend && npm install
-cp .env.example .env   # preencha VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY
-npm run dev
+cd backend && npm install && cp .env.example .env && npm run dev
+cd frontend && npm install && cp .env.example .env && npm run dev
 ```
 
-## Realtime — onde está ligado
+Preencha no `.env` do backend: credenciais do Supabase/Postgres (`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `DATABASE_URL`), `OPENAI_API_KEY`, credenciais do Google Calendar, `JWT_SECRET`, `ENCRYPTION_KEY`, credenciais do Meta/Evolution. No `.env` do frontend: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_BASE`.
 
-As telas **Leads**, **Agenda**, **Dashboard** (cliente) e **Visão Geral** (dono) recarregam sozinhas quando os dados mudam — ex: a IA cria um lead via WhatsApp e ele aparece na hora, sem refresh. Implementado em `frontend/src/composables/useRealtime.js`, escutando as tabelas `leads`, `appointments` e `usage_events`.
+Também é possível subir via `docker compose up --build` para um ambiente containerizado local (front em `:8080`, API em `:3000`) — não é o método usado em produção.
 
-Se as `VITE_SUPABASE_*` não estiverem preenchidas, o Realtime simplesmente fica desativado (o app funciona normal, só sem o "ao vivo").
+## Criar seu usuário dono (owner)
 
-## IA, WhatsApp, integrações e feature flags
+```bash
+cd backend && npm run create-owner
+```
 
-(iguais à versão anterior — IA com function-calling responde e agenda; WhatsApp roteia por flag; credenciais por cliente criptografadas com AES-256-GCM; webhooks em `/webhooks/meta` e `/webhooks/evolution/<TENANT_ID>`.)
+## Testes
 
-## Notas sobre o supabase-js
+- Backend: `npm run test --prefix backend` (Vitest)
+- Frontend: `npm run test --prefix frontend` (Vitest + @vue/test-utils)
+- Ambos: `npm run test:all` (raiz)
+- E2E: `npm run test:e2e` (Playwright, sobe o frontend automaticamente)
 
-- O backend usa a **service_role**, que ignora RLS. Se você quiser ativar RLS nas tabelas para uma camada extra de segurança, lembre que o backend continuará funcionando (service_role bypassa), mas o Realtime do front (anon) vai precisar de policies de SELECT. Por padrão deixei sem RLS para simplicidade.
-- As funções RPC usam `SECURITY DEFINER` para rodar com privilégios do dono — só são chamadas pelo backend, em rotas já protegidas por `requireOwner`.
+## Produção
+
+Deploy via `deploy.ps1`: empacota backend/frontend (sem `node_modules`/`.env`), envia por `scp` para o servidor (Hetzner) e reinicia o backend via **PM2** (`ecosystem.config.cjs`, modo `fork`, instância única — os caches em memória do orquestrador não são compartilhados entre instâncias, então não escale horizontalmente sem migrar isso para um store externo primeiro). O frontend é rebuildado (`vite build`) direto no servidor.
+
+## Segurança
+
+- RLS real no Postgres por tenant (papel `app_rls`, sem bypass) para todas as rotas tenant-scoped.
+- Credenciais de canal (WhatsApp etc.) por tenant, criptografadas com AES-256-GCM.
+- Validação de entrada com Zod em todas as rotas; sanitização de HTML com DOMPurify no frontend.
+- Webhooks (Meta/Evolution) validados por HMAC/verify token, fail-closed em produção.
