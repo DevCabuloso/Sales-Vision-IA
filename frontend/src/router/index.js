@@ -78,6 +78,7 @@ const routes = [
       { path: 'clientes', name: 'admin-clients', component: () => import('@/views/admin/ClientsView.vue') },
       { path: 'clientes/:id', name: 'admin-client', component: () => import('@/views/admin/ClientDetailView.vue'), props: true },
       { path: 'usuarios', name: 'admin-users', component: () => import('@/views/admin/UsersView.vue') },
+      { path: 'suporte', name: 'admin-support', component: () => import('@/views/admin/SupportView.vue') },
       { path: 'monitoramento', name: 'admin-monitoring', component: () => import('@/views/admin/MonitoringView.vue') },
       { path: 'configuracoes', name: 'admin-settings', component: () => import('@/views/admin/SettingsView.vue') },
       { path: 'documentacao', name: 'admin-docs', component: () => import('@/views/admin/DocumentationView.vue') },

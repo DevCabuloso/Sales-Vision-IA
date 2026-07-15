@@ -117,4 +117,24 @@ describe('NotificationBell', () => {
     expect(mockState.push).toHaveBeenCalledWith('/chat/l1')
     expect(wrapper.find('.notif-panel').exists()).toBe(false)
   })
+
+  it('navega pro chamado de suporte e marca como lida ao clicar num aviso de resposta', async () => {
+    mockState.alerts.value = [{ id: 'a1', type: 'support_reply', title: 'Suporte respondeu seu chamado', message: 'Já estou vendo isso!', ticket_id: 't1' }]
+    const wrapper = mount(NotificationBell, pluginOptions())
+    await wrapper.find('.bell-btn').trigger('click')
+    await wrapper.find('.notif-item').trigger('click')
+
+    expect(mockState.push).toHaveBeenCalledWith('/ajuda?ticket=t1')
+    expect(mockState.dismissAlert).toHaveBeenCalledWith('a1')
+    expect(wrapper.find('.notif-panel').exists()).toBe(false)
+  })
+
+  it('não navega ao clicar num aviso que não é de suporte (ex.: vencimento)', async () => {
+    mockState.alerts.value = [{ id: 'a1', type: 'billing_reminder', title: 'Vencimento', message: 'Vence em 3 dias.' }]
+    const wrapper = mount(NotificationBell, pluginOptions())
+    await wrapper.find('.bell-btn').trigger('click')
+    await wrapper.find('.notif-item').trigger('click')
+
+    expect(mockState.push).not.toHaveBeenCalled()
+  })
 })

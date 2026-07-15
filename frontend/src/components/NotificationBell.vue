@@ -31,9 +31,11 @@
             v-for="a in alerts"
             :key="a.id"
             class="notif-item"
+            :class="{ 'notif-item--clickable': a.type === 'support_reply' }"
+            @click="a.type === 'support_reply' ? goToTicket(a) : null"
           >
-            <div class="notif-avatar notif-avatar--alert">
-              <v-icon icon="mdi-cash-clock" size="16" />
+            <div class="notif-avatar notif-avatar--alert" :class="{ 'notif-avatar--support': a.type === 'support_reply' }">
+              <v-icon :icon="a.type === 'support_reply' ? 'mdi-face-agent' : 'mdi-cash-clock'" size="16" />
             </div>
             <div class="notif-body">
               <div class="notif-name">{{ a.title }}</div>
@@ -100,6 +102,12 @@ function clearAll() {
 function goToLead(n) {
   open.value = false
   router.push(n.lead_id ? `/chat/${n.lead_id}` : '/chat')
+}
+
+function goToTicket(a) {
+  open.value = false
+  dismissAlert(a.id)
+  router.push(a.ticket_id ? `/ajuda?ticket=${a.ticket_id}` : '/ajuda')
 }
 
 function onClickOutside() { open.value = false }
@@ -212,6 +220,12 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   border-color: rgba(245,158,11,0.2);
   color: #FBB040;
 }
+.notif-avatar--support {
+  background: rgba(99,102,241,0.12);
+  border-color: rgba(99,102,241,0.2);
+  color: #818CF8;
+}
+.notif-item--clickable { cursor: pointer; }
 
 .notif-body { flex: 1; min-width: 0; }
 

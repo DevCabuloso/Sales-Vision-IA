@@ -24,7 +24,11 @@
 
       <v-list-subheader>GESTÃO</v-list-subheader>
       <v-list density="compact" nav>
-        <v-list-item v-for="item in navManagement" :key="item.to" :prepend-icon="item.icon" :title="item.title" :active="isActive(item.to)" active-color="accent" rounded="lg" @click="navigate(item.to)" />
+        <v-list-item v-for="item in navManagement" :key="item.to" :prepend-icon="item.icon" :title="item.title" :active="isActive(item.to)" active-color="accent" rounded="lg" @click="navigate(item.to)">
+          <template v-if="item.to === '/admin/suporte' && openTicketsCount > 0" #append>
+            <v-chip color="error" size="x-small" variant="flat">{{ openTicketsCount }}</v-chip>
+          </template>
+        </v-list-item>
       </v-list>
 
       <v-list-subheader>SISTEMA</v-list-subheader>
@@ -66,14 +70,33 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { api } from '@/services/api'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
+
+// Badge de chamados de suporte aguardando resposta — poll simples, mesmo
+// padrão do sino de notificações (ver stores/notifications.js).
+const openTicketsCount = ref(0)
+let ticketsPoll = null
+async function loadOpenTicketsCount() {
+  try {
+    const tickets = await api.adminListSupportTickets('open')
+    openTicketsCount.value = tickets.length
+  } catch {
+    // silencioso — próximo poll tenta de novo
+  }
+}
+onMounted(() => {
+  loadOpenTicketsCount()
+  ticketsPoll = setInterval(loadOpenTicketsCount, 60_000)
+})
+onUnmounted(() => { if (ticketsPoll) clearInterval(ticketsPoll) })
 
 const { isMobile } = useIsMobile()
 // v-navigation-drawer sem "permanent" já colapsa sozinho em mobile (via
@@ -95,6 +118,7 @@ const navMain = [
 const navManagement = [
   { title: 'Clientes', icon: 'mdi-domain',              to: '/admin/clientes' },
   { title: 'Usuários', icon: 'mdi-account-group-outline', to: '/admin/usuarios' },
+  { title: 'Suporte',  icon: 'mdi-face-agent',           to: '/admin/suporte' },
 ]
 const navSystem = [
   { title: 'Configurações', icon: 'mdi-cog-outline', to: '/admin/configuracoes' },

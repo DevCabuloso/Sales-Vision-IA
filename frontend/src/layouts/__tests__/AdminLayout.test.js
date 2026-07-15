@@ -10,6 +10,10 @@ vi.mock('@/stores/auth', () => ({
   useAuthStore: () => mockState.auth,
 }))
 
+vi.mock('@/services/api', () => ({
+  api: { adminListSupportTickets: vi.fn().mockResolvedValue([]) },
+}))
+
 const AdminLayout = (await import('../AdminLayout.vue')).default
 
 // AdminLayout usa VNavigationDrawer/VAppBar/VMain (componentes de layout do
@@ -29,6 +33,17 @@ describe('layouts/AdminLayout.vue (smoke)', () => {
     expect(wrapper.text()).toContain('Visão Geral')
     expect(wrapper.text()).toContain('Clientes')
     expect(wrapper.text()).toContain('Configurações')
+    wrapper.unmount()
+  })
+
+  it('mostra o total de chamados aguardando como badge no item Suporte', async () => {
+    const { api } = await import('@/services/api')
+    api.adminListSupportTickets.mockResolvedValue([{ id: 't1' }, { id: 't2' }])
+    const wrapper = mount(AppWrapper, pluginOptions())
+    await flushPromises()
+    expect(api.adminListSupportTickets).toHaveBeenCalledWith('open')
+    expect(wrapper.text()).toContain('Suporte')
+    expect(wrapper.text()).toContain('2')
     wrapper.unmount()
   })
 

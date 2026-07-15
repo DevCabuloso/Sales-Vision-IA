@@ -88,18 +88,114 @@
       </main>
     </div>
 
-    <v-card class="glass pa-5 text-center mt-6" border>
-      <v-icon icon="mdi-account-question-outline" size="28" style="opacity:.5" class="mb-2" />
-      <p class="text-body-2 mb-0" style="color:var(--text-muted)">
-        Não encontrou o que precisava? Fale com o administrador da sua operação para ajustes de acesso e configuração.
+    <!-- ═══ SUPORTE: pedir ajuda / meus chamados ═══ -->
+    <v-card class="glass pa-5 mt-6" border>
+      <div class="d-flex align-center justify-space-between flex-wrap ga-3 mb-1">
+        <div class="d-flex align-center ga-2">
+          <v-icon icon="mdi-face-agent" size="22" style="opacity:.7" />
+          <span class="text-subtitle-1 font-weight-bold">Suporte</span>
+        </div>
+        <v-btn color="primary" size="small" prepend-icon="mdi-plus" @click="openCreateDialog">Pedir ajuda</v-btn>
+      </div>
+      <p class="text-body-2 mb-4" style="color:var(--text-muted)">
+        Não encontrou o que precisava? Abra um chamado e converse direto com o administrador da plataforma.
       </p>
+
+      <div v-if="ticketsLoading" class="text-center py-4">
+        <v-progress-circular indeterminate size="24" color="primary" />
+      </div>
+      <div v-else-if="!tickets.length" class="text-body-2" style="color:var(--text-faint)">
+        Você ainda não abriu nenhum chamado.
+      </div>
+      <div v-else class="support-ticket-list">
+        <button v-for="tk in tickets" :key="tk.id" class="support-ticket-item" @click="openTicket(tk)">
+          <div>
+            <span class="support-ticket-cat">{{ categoryLabel(tk.category) }}</span>
+            <div v-if="tk.description" class="support-ticket-desc">{{ tk.description }}</div>
+          </div>
+          <v-chip :color="statusColor(tk.status)" size="x-small" variant="flat">{{ statusLabel(tk.status) }}</v-chip>
+        </button>
+      </div>
     </v-card>
+
+    <!-- ─── Dialog: novo chamado ─── -->
+    <v-dialog v-model="showCreateDialog" max-width="480">
+      <v-card class="pa-2">
+        <v-card-title>Pedir ajuda ao administrador</v-card-title>
+        <v-card-text>
+          <v-select
+            v-model="createForm.category"
+            :items="categoryOptions"
+            item-title="label"
+            item-value="value"
+            label="Qual o assunto?"
+            variant="outlined"
+            density="comfortable"
+          />
+          <v-textarea
+            v-model="createForm.description"
+            label="Descreva o que está acontecendo (opcional)"
+            variant="outlined"
+            density="comfortable"
+            rows="3"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="showCreateDialog = false">Cancelar</v-btn>
+          <v-btn color="primary" :loading="creating" @click="submitCreateTicket">Abrir chamado</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- ─── Dialog: chat do chamado ─── -->
+    <v-dialog v-model="showChatDialog" max-width="520" scrollable>
+      <v-card v-if="activeTicket" class="support-chat-card">
+        <v-card-title class="d-flex align-center justify-space-between">
+          <span>{{ categoryLabel(activeTicket.category) }}</span>
+          <v-chip :color="statusColor(activeTicket.status)" size="x-small" variant="flat">{{ statusLabel(activeTicket.status) }}</v-chip>
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="support-chat-messages">
+          <div v-if="!messages.length" class="text-body-2 text-center py-6" style="color:var(--text-faint)">
+            Nenhuma mensagem ainda. Escreva abaixo para começar.
+          </div>
+          <div
+            v-for="m in messages" :key="m.id"
+            class="support-msg"
+            :class="{ 'support-msg--owner': m.sender_type === 'owner' }"
+          >
+            <div class="support-msg-bubble">{{ m.text }}</div>
+          </div>
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="pa-3">
+          <template v-if="activeTicket.status !== 'closed'">
+            <v-text-field
+              v-model="newMessageText"
+              placeholder="Digite sua mensagem..."
+              variant="outlined"
+              density="compact"
+              hide-details
+              @keyup.enter="sendMessage"
+            />
+            <v-btn icon="mdi-send" color="primary" variant="flat" :loading="sending" @click="sendMessage" />
+          </template>
+          <span v-else class="text-body-2" style="color:var(--text-faint)">Este chamado foi encerrado.</span>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-snackbar v-model="snackbar.show" :color="snackbar.color" timeout="3000">{{ snackbar.text }}</v-snackbar>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
+import { api } from '@/services/api'
 
+const route = useRoute()
 const search = ref('')
 
 const sections = [
@@ -238,6 +334,109 @@ function toggleFaq(key) {
 }
 function isFaqOpen(key) { return openFaqs.value.has(key) }
 watch([activeCategory, search], () => { openFaqs.value = new Set() })
+
+// ═══ Suporte (chamados) ═══
+const categoryOptions = [
+  { value: 'tecnico', label: 'Problema técnico / erro na plataforma' },
+  { value: 'duvida', label: 'Dúvida sobre como usar' },
+  { value: 'whatsapp', label: 'Problema de conexão do WhatsApp' },
+  { value: 'financeiro', label: 'Cobrança / financeiro' },
+  { value: 'sugestao', label: 'Sugestão de melhoria' },
+  { value: 'outro', label: 'Outro' },
+]
+function categoryLabel(value) { return categoryOptions.find((c) => c.value === value)?.label || value }
+function statusLabel(status) { return { open: 'Aguardando', in_progress: 'Em atendimento', closed: 'Encerrado' }[status] || status }
+function statusColor(status) { return { open: 'warning', in_progress: 'info', closed: 'default' }[status] || 'default' }
+
+const tickets = ref([])
+const ticketsLoading = ref(false)
+const snackbar = ref({ show: false, text: '', color: 'error' })
+function notify(text, color = 'error') { snackbar.value = { show: true, text, color } }
+
+async function loadTickets() {
+  ticketsLoading.value = true
+  try {
+    tickets.value = await api.listSupportTickets()
+    // veio do sino (NotificationBell) com um chamado específico pra abrir
+    if (route.query.ticket) {
+      const target = tickets.value.find((t) => t.id === route.query.ticket)
+      if (target) openTicket(target)
+    }
+  } catch {
+    notify('Não foi possível carregar seus chamados.')
+  } finally {
+    ticketsLoading.value = false
+  }
+}
+
+const showCreateDialog = ref(false)
+const creating = ref(false)
+const createForm = ref({ category: 'duvida', description: '' })
+function openCreateDialog() {
+  createForm.value = { category: 'duvida', description: '' }
+  showCreateDialog.value = true
+}
+async function submitCreateTicket() {
+  creating.value = true
+  try {
+    const ticket = await api.createSupportTicket(createForm.value)
+    tickets.value.unshift(ticket)
+    showCreateDialog.value = false
+    openTicket(ticket)
+  } catch {
+    notify('Não foi possível abrir o chamado. Tente novamente.')
+  } finally {
+    creating.value = false
+  }
+}
+
+const showChatDialog = ref(false)
+const activeTicket = ref(null)
+const messages = ref([])
+const newMessageText = ref('')
+const sending = ref(false)
+let pollInterval = null
+
+async function loadMessages() {
+  if (!activeTicket.value) return
+  try {
+    messages.value = await api.getSupportMessages(activeTicket.value.id)
+  } catch {
+    // silencioso — próximo poll tenta de novo
+  }
+}
+
+function openTicket(ticket) {
+  activeTicket.value = ticket
+  showChatDialog.value = true
+  messages.value = []
+  loadMessages()
+  stopPolling()
+  pollInterval = setInterval(loadMessages, 4000)
+}
+
+async function sendMessage() {
+  const text = newMessageText.value.trim()
+  if (!text || !activeTicket.value) return
+  sending.value = true
+  try {
+    const msg = await api.sendSupportMessage(activeTicket.value.id, text)
+    messages.value.push(msg)
+    newMessageText.value = ''
+  } catch {
+    notify('Não foi possível enviar a mensagem.')
+  } finally {
+    sending.value = false
+  }
+}
+
+function stopPolling() {
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null }
+}
+watch(showChatDialog, (open) => { if (!open) stopPolling() })
+
+onMounted(loadTickets)
+onUnmounted(stopPolling)
 </script>
 
 <style scoped>
@@ -317,6 +516,32 @@ watch([activeCategory, search], () => { openFaqs.value = new Set() })
 .faq-card.open .faq-body-outer { grid-template-rows: 1fr; }
 .faq-body-inner { overflow: hidden; }
 .faq-body { padding: 0 16px 16px; }
+
+/* ─── Suporte ─── */
+.support-ticket-list { display: flex; flex-direction: column; gap: 6px; }
+.support-ticket-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border-radius: 10px;
+  background: var(--panel-bg); border: 1px solid var(--border-subtle);
+  cursor: pointer; text-align: left; width: 100%;
+  transition: background 0.12s;
+}
+.support-ticket-item:hover { background: var(--panel-hover); }
+.support-ticket-cat { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.support-ticket-desc {
+  font-size: 12px; color: var(--text-muted); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px;
+}
+
+.support-chat-messages { max-height: 360px; min-height: 160px; overflow-y: auto; padding: 16px !important; }
+.support-msg { display: flex; margin-bottom: 8px; }
+.support-msg--owner { justify-content: flex-end; }
+.support-msg-bubble {
+  max-width: 80%; padding: 8px 12px; border-radius: 12px;
+  background: var(--panel-bg); font-size: 13px; color: var(--text-primary);
+  white-space: pre-wrap; word-break: break-word;
+}
+.support-msg--owner .support-msg-bubble { background: rgba(99,102,241,0.18); }
 
 /* ─── Mobile ─── */
 @media (max-width: 900px) {

@@ -171,6 +171,14 @@ export const api = {
   adminResetOwnerPassword: (id, password) =>
     http.post(`/admin/owners/${id}/reset-password`, { password }).then((r) => r.data),
 
+  // admin — suporte (chamados dos clientes)
+  adminListSupportTickets: (status) =>
+    http.get('/admin/support/tickets', { params: status ? { status } : {} }).then((r) => r.data.tickets),
+  adminStartSupportTicket: (id) => http.post(`/admin/support/tickets/${id}/start`).then((r) => r.data.ticket),
+  adminCloseSupportTicket: (id) => http.post(`/admin/support/tickets/${id}/close`).then((r) => r.data.ticket),
+  adminGetSupportMessages: (id) => http.get(`/admin/support/tickets/${id}/messages`).then((r) => r.data.messages),
+  adminSendSupportMessage: (id, text) => http.post(`/admin/support/tickets/${id}/messages`, { text }).then((r) => r.data.message),
+
   // contacts
   listContacts: (params) => http.get('/contacts', { params }).then((r) => r.data.contacts),
   createContact: (payload) => http.post('/contacts', payload).then((r) => r.data.contact),
@@ -214,6 +222,12 @@ export const api = {
   deleteInternalMessage: (groupId, id) => http.delete(`/internal-groups/${groupId}/messages/${id}`).then((r) => r.data),
   forwardInternalMessage: (groupId, id, toGroupId) => http.post(`/internal-groups/${groupId}/messages/${id}/forward`, { toGroupId }).then((r) => r.data),
   sendInternalLocation: (groupId, latitude, longitude) => http.post(`/internal-groups/${groupId}/location`, { latitude, longitude }).then((r) => r.data),
+
+  // suporte (chamados abertos pelo usuário com o dono da plataforma)
+  listSupportTickets: () => http.get('/support/tickets').then((r) => r.data.tickets),
+  createSupportTicket: (payload) => http.post('/support/tickets', payload).then((r) => r.data.ticket),
+  getSupportMessages: (id) => http.get(`/support/tickets/${id}/messages`).then((r) => r.data.messages),
+  sendSupportMessage: (id, text) => http.post(`/support/tickets/${id}/messages`, { text }).then((r) => r.data.message),
 
   // chat externo — editar/apagar/encaminhar mensagem, localização
   editMessage: (leadId, id, text) => http.patch(`/chat/${leadId}/messages/${id}`, { text }).then((r) => r.data),

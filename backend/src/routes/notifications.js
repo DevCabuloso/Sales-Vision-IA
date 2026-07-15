@@ -63,7 +63,7 @@ notificationsRouter.get('/', async (req, res) => {
       // usuário — diferente das "notificações" acima, que são recalculadas a
       // cada request a partir de messages, sem tabela própria.
       const alertsR = await client.query(
-        `SELECT id, type, title, message, created_at FROM notifications
+        `SELECT id, type, title, message, ticket_id, created_at FROM notifications
          WHERE tenant_id = $1 AND user_id = $2 AND read_at IS NULL AND resolved_at IS NULL
          ORDER BY created_at DESC`,
         [tenantId, req.user.id]

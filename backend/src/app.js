@@ -34,6 +34,8 @@ import { flowsRouter } from './routes/flows.js'
 import { reportsRouter } from './routes/reports.js'
 import { followupsRouter } from './routes/followups.js'
 import { billingRouter } from './routes/billing.js'
+import { supportRouter } from './routes/support.js'
+import { adminSupportRouter } from './routes/admin-support.js'
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -132,6 +134,11 @@ export function createApp() {
   app.use('/api/leads', leadsRouter)
   app.use('/api/appointments', appointmentsRouter)
   app.use('/api/integrations', integrationsRouter)
+  // precisa vir ANTES de '/api/admin' — senão toda request pra /api/admin/support/*
+  // passaria primeiro pelo requireAuth+requireOwner "solto" do adminRouter (que não
+  // tem rota /support e só devolveria o controle pro próximo app.use depois de já
+  // ter rodado a checagem), fazendo autenticação em dobro à toa.
+  app.use('/api/admin/support', adminSupportRouter)
   app.use('/api/admin', adminRouter)
   app.use('/api/ai-config', aiConfigRouter)
   app.use('/api/templates', templatesRouter)
@@ -150,6 +157,7 @@ export function createApp() {
   app.use('/api/notifications', notificationsRouter)
   app.use('/api/flows', flowsRouter)
   app.use('/api/followups', followupsRouter)
+  app.use('/api/support', supportRouter)
 
   // 404
   app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }))
