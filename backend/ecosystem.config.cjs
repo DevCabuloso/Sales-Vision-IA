@@ -15,6 +15,12 @@ module.exports = {
       // src/utils/assertSingleInstance.js crasha o boot de qualquer instância > 0
       // como rede de segurança caso isso mude sem querer.
       instances: 1,
+      // Explícito de propósito: o padrão do PM2 pra exec_mode mudou entre versões
+      // (uma atualização de 7.0.1→7.0.3 fez o processo subir em "cluster" em vez
+      // de "fork" sem essa linha) — cluster usa IPC/modelo de processo diferente
+      // do fork, e o resto do código (caches em memória, assertSingleInstance)
+      // foi desenhado assumindo fork. Não depender do default da versão do PM2.
+      exec_mode: 'fork',
     },
   ],
 }

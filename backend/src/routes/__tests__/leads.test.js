@@ -74,10 +74,12 @@ describe('routes/leads', () => {
   })
 
   describe('POST /', () => {
-    it('rejeita telefone muito curto', async () => {
+    it('rejeita telefone muito curto, com o formato de erro padrão ({ error: mensagem })', async () => {
       const app = buildApp()
       const res = await request(app).post('/api/leads').send({ phone: '123' })
       expect(res.status).toBe(400)
+      expect(res.body).toEqual({ error: expect.any(String) })
+      expect(res.body.details).toBeUndefined()
     })
 
     it('retorna 403 quando o limite de leads do plano foi atingido', async () => {

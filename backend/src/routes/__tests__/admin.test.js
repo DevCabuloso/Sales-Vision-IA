@@ -99,10 +99,12 @@ describe('routes/admin', () => {
       expect(res.body.integrations).toHaveLength(1)
     })
 
-    it('POST /clients rejeita payload inválido', async () => {
+    it('POST /clients rejeita payload inválido com o formato de erro padrão ({ error: mensagem })', async () => {
       const app = buildApp()
       const res = await request(app).post('/api/admin/clients').send({ name: 'x' })
       expect(res.status).toBe(400)
+      expect(res.body).toEqual({ error: expect.any(String) })
+      expect(res.body.details).toBeUndefined()
     })
 
     it('POST /clients rejeita senha de admin com menos de 8 caracteres', async () => {
@@ -154,6 +156,14 @@ describe('routes/admin', () => {
       const app = buildApp()
       const res = await request(app).patch('/api/admin/clients/tenant-1/features').send({})
       expect(res.status).toBe(400)
+    })
+
+    it('PATCH /clients/:id/features rejeita valor que falha no Zod com o formato de erro padrão', async () => {
+      const app = buildApp()
+      const res = await request(app).patch('/api/admin/clients/tenant-1/features').send({ feat_broadcast: 'não-é-booleano' })
+      expect(res.status).toBe(400)
+      expect(res.body).toEqual({ error: expect.any(String) })
+      expect(res.body.details).toBeUndefined()
     })
 
     it('PATCH /clients/:id/features retorna 404 quando não encontrado', async () => {
@@ -341,10 +351,12 @@ describe('routes/admin', () => {
       expect(limitCall.args[0]).toBe(5000)
     })
 
-    it('POST /clients/:id/users rejeita senha com menos de 8 caracteres', async () => {
+    it('POST /clients/:id/users rejeita senha com menos de 8 caracteres, com o formato de erro padrão', async () => {
       const app = buildApp()
       const res = await request(app).post('/api/admin/clients/tenant-1/users').send({ email: 'a@a.com', name: 'A', password: 'curta12' })
       expect(res.status).toBe(400)
+      expect(res.body).toEqual({ error: expect.any(String) })
+      expect(res.body.details).toBeUndefined()
     })
 
     it('POST /clients/:id/users retorna 404 quando o cliente não existe', async () => {
@@ -414,10 +426,12 @@ describe('routes/admin', () => {
       expect(res.body.owners).toHaveLength(1)
     })
 
-    it('POST /owners rejeita senha com menos de 8 caracteres', async () => {
+    it('POST /owners rejeita senha com menos de 8 caracteres, com o formato de erro padrão', async () => {
       const app = buildApp()
       const res = await request(app).post('/api/admin/owners').send({ email: 'dono@ex.com', name: 'Dono', password: 'curta12' })
       expect(res.status).toBe(400)
+      expect(res.body).toEqual({ error: expect.any(String) })
+      expect(res.body.details).toBeUndefined()
     })
 
     it('POST /owners retorna 409 em e-mail duplicado', async () => {

@@ -40,7 +40,7 @@ const createSchema = z.object({
 leadsRouter.post('/', async (req, res) => {
   const parsed = createSchema.safeParse(req.body)
   if (!parsed.success) {
-    return res.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() })
+    return res.status(400).json({ error: parsed.error.issues[0].message })
   }
   const d = parsed.data
 

@@ -66,7 +66,7 @@ const createClientSchema = z.object({
 adminRouter.post('/clients', async (req, res) => {
   const parsed = createClientSchema.safeParse(req.body)
   if (!parsed.success) {
-    return res.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() })
+    return res.status(400).json({ error: parsed.error.issues[0].message })
   }
   const d = parsed.data
   const f = d.features || {}
@@ -113,7 +113,7 @@ adminRouter.post('/clients', async (req, res) => {
 adminRouter.patch('/clients/:id/features', async (req, res) => {
   const parsed = featuresSchema.safeParse(req.body)
   if (!parsed.success) {
-    return res.status(400).json({ error: 'Funções inválidas.', details: parsed.error.flatten() })
+    return res.status(400).json({ error: parsed.error.issues[0].message })
   }
   if (!Object.keys(parsed.data).length) return res.status(400).json({ error: 'Nenhuma função informada.' })
 
@@ -304,7 +304,7 @@ const createUserSchema = z.object({
 
 adminRouter.post('/clients/:id/users', async (req, res) => {
   const parsed = createUserSchema.safeParse(req.body)
-  if (!parsed.success) return res.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() })
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const d = parsed.data
 
   const tenant = unwrap(
@@ -400,7 +400,7 @@ const createOwnerSchema = z.object({
 
 adminRouter.post('/owners', async (req, res) => {
   const parsed = createOwnerSchema.safeParse(req.body)
-  if (!parsed.success) return res.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() })
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const { email, name, password } = parsed.data
   const hash = await hashPassword(password)
   const { data, error } = await supabase.from('users').insert({
