@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { analyzeLead } from '../services/ai/analyze.js'
 import { logUsage } from '../services/usage.js'
@@ -15,13 +15,16 @@ leadsRouter.get('/', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000)
     const offset = parseInt(req.query.offset, 10) || 0
 
-    const rows = unwrap(
-      await supabase.from('leads')
-        .select('id, name, phone, stage, score, intention, interests, created_at, updated_at')
-        .eq('tenant_id', req.user.tenantId)
-        .order('updated_at', { ascending: false })
-        .range(offset, offset + limit - 1)
-    )
+    const rows = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `SELECT id, name, phone, stage, score, intention, interests, created_at, updated_at
+         FROM leads WHERE tenant_id = $1
+         ORDER BY updated_at DESC
+         LIMIT $2 OFFSET $3`,
+        [req.user.tenantId, limit, offset]
+      )
+      return r.rows
+    })
     res.json({ leads: rows, limit, offset })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -44,31 +47,46 @@ leadsRouter.post('/', async (req, res) => {
   }
   const d = parsed.data
 
-  const { count } = await supabase.from('leads')
-    .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', req.user.tenantId)
-  const tenant = unwrap(
-    await supabase.from('tenants').select('max_leads').eq('id', req.user.tenantId).limit(1)
-  )
-  if ((count ?? 0) >= (tenant?.[0]?.max_leads ?? 1000)) {
-    return res.status(403).json({ error: 'Limite de leads do plano atingido.' })
-  }
+  try {
+    const lead = await withTenant(req.user.tenantId, async (client) => {
+      const countRes = await client.query(
+        'SELECT count(*)::int AS count FROM leads WHERE tenant_id = $1',
+        [req.user.tenantId]
+      )
+      const tenantRes = await client.query(
+        'SELECT max_leads FROM tenants WHERE id = $1 LIMIT 1',
+        [req.user.tenantId]
+      )
+      const count = countRes.rows[0]?.count ?? 0
+      const maxLeads = tenantRes.rows[0]?.max_leads ?? 1000
+      if (count >= maxLeads) {
+        const limitError = new Error('Limite de leads do plano atingido.')
+        limitError.isLimitError = true
+        throw limitError
+      }
 
-  const { data, error } = await supabase.from('leads').insert({
-    tenant_id: req.user.tenantId,
-    name: d.name || null,
-    phone: normalizePhone(d.phone),
-    stage: d.stage || 'Novo Lead',
-    intention: d.intention || null,
-    interests: d.interests || [],
-  }).select().single()
-
-  if (error) {
-    if (error.code === '23505') return res.status(409).json({ error: 'Já existe um lead com esse telefone.' })
-    return res.status(500).json({ error: error.message })
+      const insertRes = await client.query(
+        `INSERT INTO leads (tenant_id, name, phone, stage, intention, interests)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING *`,
+        [
+          req.user.tenantId,
+          d.name || null,
+          normalizePhone(d.phone),
+          d.stage || 'Novo Lead',
+          d.intention || null,
+          d.interests || [],
+        ]
+      )
+      return insertRes.rows[0]
+    })
+    await logUsage(req.user.tenantId, req.user.id, 'lead_created', { phone: d.phone })
+    res.status(201).json({ lead })
+  } catch (e) {
+    if (e.isLimitError) return res.status(403).json({ error: e.message })
+    if (e.code === '23505') return res.status(409).json({ error: 'Já existe um lead com esse telefone.' })
+    res.status(500).json({ error: e.message })
   }
-  await logUsage(req.user.tenantId, req.user.id, 'lead_created', { phone: d.phone })
-  res.status(201).json({ lead: data })
 })
 
 // ─── PATCH /api/leads/:id ───
@@ -86,29 +104,43 @@ leadsRouter.patch('/:id', async (req, res) => {
   if (!Object.keys(parsed.data).length) return res.status(400).json({ error: 'Nada para atualizar.' })
 
   try {
-    const current = unwrap(
-      await supabase.from('leads').select('stage').eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
+    const { lead, previousStage } = await withTenant(req.user.tenantId, async (client) => {
+      const currentRes = await client.query(
+        'SELECT stage FROM leads WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [req.params.id, req.user.tenantId]
+      )
 
-    const patch = { ...parsed.data, updated_at: new Date().toISOString() }
-    const rows = unwrap(
-      await supabase.from('leads').update(patch)
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
-        .select()
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Lead não encontrado.' })
+      const fields = { ...parsed.data, updated_at: new Date().toISOString() }
+      const setClauses = []
+      const values = []
+      let i = 1
+      for (const [key, value] of Object.entries(fields)) {
+        setClauses.push(`${key} = $${i}`)
+        values.push(value)
+        i++
+      }
+      values.push(req.params.id, req.user.tenantId)
+      const updateRes = await client.query(
+        `UPDATE leads SET ${setClauses.join(', ')}
+         WHERE id = $${i} AND tenant_id = $${i + 1}
+         RETURNING *`,
+        values
+      )
+      return { lead: updateRes.rows[0] || null, previousStage: currentRes.rows[0]?.stage || null }
+    })
+    if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' })
 
-    if (parsed.data.stage && current[0]?.stage !== parsed.data.stage) {
-      supabase.from('lead_stage_history').insert({
-        tenant_id:  req.user.tenantId,
-        lead_id:    req.params.id,
-        from_stage: current[0]?.stage || null,
-        to_stage:   parsed.data.stage,
-        changed_by: req.user.id,
-      }).then(null, (e) => console.warn('[leads] falha ao salvar histórico de estágio:', e.message))
+    if (parsed.data.stage && previousStage !== parsed.data.stage) {
+      withTenant(req.user.tenantId, (client) =>
+        client.query(
+          `INSERT INTO lead_stage_history (tenant_id, lead_id, from_stage, to_stage, changed_by)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [req.user.tenantId, req.params.id, previousStage, parsed.data.stage, req.user.id]
+        )
+      ).catch((e) => console.warn('[leads] falha ao salvar histórico de estágio:', e.message))
     }
 
-    res.json({ lead: rows[0] })
+    res.json({ lead })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -117,9 +149,8 @@ leadsRouter.patch('/:id', async (req, res) => {
 // ─── DELETE /api/leads/:id ───
 leadsRouter.delete('/:id', async (req, res) => {
   try {
-    unwrap(
-      await supabase.from('leads').delete()
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
+    await withTenant(req.user.tenantId, (client) =>
+      client.query('DELETE FROM leads WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
     res.json({ deleted: true })
   } catch (e) {
@@ -130,12 +161,15 @@ leadsRouter.delete('/:id', async (req, res) => {
 // ─── GET /api/leads/:id/history ───
 leadsRouter.get('/:id/history', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('lead_stage_history')
-        .select('id, from_stage, to_stage, notes, changed_at, changed_by')
-        .eq('lead_id', req.params.id).eq('tenant_id', req.user.tenantId)
-        .order('changed_at', { ascending: false })
-    )
+    const rows = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `SELECT id, from_stage, to_stage, notes, changed_at, changed_by
+         FROM lead_stage_history WHERE lead_id = $1 AND tenant_id = $2
+         ORDER BY changed_at DESC`,
+        [req.params.id, req.user.tenantId]
+      )
+      return r.rows
+    })
     res.json({ history: rows })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -150,12 +184,15 @@ const MESSAGES_HARD_LIMIT = 500
 leadsRouter.get('/:id/messages', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || MESSAGES_HARD_LIMIT, MESSAGES_HARD_LIMIT)
-    const rows = unwrap(
-      await supabase.from('messages')
-        .select('role, text, provider, created_at')
-        .eq('lead_id', req.params.id).eq('tenant_id', req.user.tenantId)
-        .order('created_at', { ascending: false }).limit(limit)
-    )
+    const rows = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `SELECT role, text, provider, created_at
+         FROM messages WHERE lead_id = $1 AND tenant_id = $2
+         ORDER BY created_at DESC LIMIT $3`,
+        [req.params.id, req.user.tenantId, limit]
+      )
+      return r.rows
+    })
     res.json({ messages: rows.reverse() })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -164,25 +201,37 @@ leadsRouter.get('/:id/messages', async (req, res) => {
 
 // ─── POST /api/leads/:id/analyze ───
 leadsRouter.post('/:id/analyze', async (req, res) => {
-  const msgs = unwrap(
-    await supabase.from('messages').select('role, text')
-      .eq('lead_id', req.params.id).eq('tenant_id', req.user.tenantId)
-      .order('created_at', { ascending: false }).limit(MESSAGES_HARD_LIMIT)
-  ).reverse()
   try {
-    const analysis = await analyzeLead(msgs)
-    const rows = unwrap(
-      await supabase.from('leads').update({
-        score: analysis.score,
-        intention: analysis.intention,
-        stage: analysis.stage,
-        interests: analysis.interests,
-        updated_at: new Date().toISOString(),
-      }).eq('id', req.params.id).eq('tenant_id', req.user.tenantId).select()
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Lead não encontrado.' })
-    res.json({ lead: rows[0], analysis })
+    const msgs = (
+      await withTenant(req.user.tenantId, async (client) => {
+        const r = await client.query(
+          `SELECT role, text FROM messages WHERE lead_id = $1 AND tenant_id = $2
+           ORDER BY created_at DESC LIMIT $3`,
+          [req.params.id, req.user.tenantId, MESSAGES_HARD_LIMIT]
+        )
+        return r.rows
+      })
+    ).reverse()
+
+    let analysis
+    try {
+      analysis = await analyzeLead(msgs)
+    } catch (e) {
+      return res.status(502).json({ error: 'Falha na análise de IA: ' + e.message })
+    }
+
+    const lead = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `UPDATE leads SET score = $1, intention = $2, stage = $3, interests = $4, updated_at = $5
+         WHERE id = $6 AND tenant_id = $7
+         RETURNING *`,
+        [analysis.score, analysis.intention, analysis.stage, analysis.interests, new Date().toISOString(), req.params.id, req.user.tenantId]
+      )
+      return r.rows[0] || null
+    })
+    if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' })
+    res.json({ lead, analysis })
   } catch (e) {
-    res.status(502).json({ error: 'Falha na análise de IA: ' + e.message })
+    res.status(500).json({ error: e.message })
   }
 })

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {} }))
 
@@ -10,12 +10,8 @@ vi.mock('../../middleware/auth.js', () => ({
   requireTenant: (req, res, next) => next(),
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 const { reportsRouter } = await import('../reports.js')
@@ -26,39 +22,34 @@ function buildApp() {
   return app
 }
 
-let supabaseMock
-function setSupabase(responses) {
-  supabaseMock = createSupabaseMock(responses)
-  mockState.box.supabase = supabaseMock.supabase
-  return supabaseMock
+let rlsMock
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
 }
 
 describe('routes/reports', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    setRls()
   })
 
   it('GET /daily monta o resumo, o ranking por operador e o funil de estágios', async () => {
-    setSupabase({
-      users: [{ data: [{ id: 'u1', name: 'Ana', email: 'ana@ex.com', role: 'agent' }], error: null }],
-      ticket_logs: [{
-        data: [
-          { lead_id: 'lead-1', user_id: 'u1', user_name: 'Ana', action: 'opened', to_user_id: null, to_user_name: null, created_at: '2026-01-01T10:00:00.000Z' },
-          { lead_id: 'lead-1', user_id: 'u1', user_name: 'Ana', action: 'closed', to_user_id: null, to_user_name: null, created_at: '2026-01-01T12:00:00.000Z' },
-        ], error: null,
-      }],
-      leads: [
-        { data: [{ id: 'lead-1', name: 'Lead Um', phone: '123', stage: 'Qualificado', score: 80, created_at: '2026-01-01T09:00:00.000Z' }], error: null },
-        { data: [{ id: 'lead-1', name: 'Lead Um', phone: '123', stage: 'Qualificado' }], error: null },
-      ],
-      messages: [{ data: [{ role: 'lead' }, { role: 'ai' }, { role: 'agent' }], error: null }],
-      appointments: [{ data: [{ id: 'a1', lead_id: 'lead-1', lead_name: 'Lead Um', start_time: '2026-01-01T15:00:00.000Z' }], error: null }],
-      usage_events: [{ data: [
-        { user_id: 'u1', event_type: 'message_sent', created_at: '2026-01-01T10:30:00.000Z' },
-        { user_id: 'u1', event_type: 'appointment_created', created_at: '2026-01-01T15:00:00.000Z' },
-      ], error: null }],
-      'rpc:leads_stage_counts': [{ data: [{ stage: 'Qualificado', count: 1 }, { stage: 'Novo Lead', count: 2 }], error: null }],
-    })
+    rlsMock.queueRows([{ id: 'u1', name: 'Ana', email: 'ana@ex.com', role: 'agent' }]) // users
+    rlsMock.queueRows([
+      { lead_id: 'lead-1', user_id: 'u1', user_name: 'Ana', action: 'opened', to_user_id: null, to_user_name: null, created_at: '2026-01-01T10:00:00.000Z' },
+      { lead_id: 'lead-1', user_id: 'u1', user_name: 'Ana', action: 'closed', to_user_id: null, to_user_name: null, created_at: '2026-01-01T12:00:00.000Z' },
+    ]) // ticket_logs
+    rlsMock.queueRows([{ id: 'lead-1', name: 'Lead Um', phone: '123', stage: 'Qualificado', score: 80, created_at: '2026-01-01T09:00:00.000Z' }]) // leadsToday
+    rlsMock.queueRows([{ role: 'lead' }, { role: 'ai' }, { role: 'agent' }]) // messages
+    rlsMock.queueRows([{ id: 'a1', lead_id: 'lead-1', lead_name: 'Lead Um', start_time: '2026-01-01T15:00:00.000Z' }]) // appointments
+    rlsMock.queueRows([
+      { user_id: 'u1', event_type: 'message_sent', created_at: '2026-01-01T10:30:00.000Z' },
+      { user_id: 'u1', event_type: 'appointment_created', created_at: '2026-01-01T15:00:00.000Z' },
+    ]) // usage_events
+    rlsMock.queueRows([{ stage: 'Qualificado', count: 1 }, { stage: 'Novo Lead', count: 2 }]) // leads_stage_counts
+    rlsMock.queueRows([{ id: 'lead-1', name: 'Lead Um', phone: '123', stage: 'Qualificado' }]) // touchedLeads
 
     const app = buildApp()
     const res = await request(app).get('/api/reports/daily').query({ date: '2026-01-01' })
@@ -82,20 +73,18 @@ describe('routes/reports', () => {
 
     // funil de estágios é calculado no banco (GROUP BY via RPC), não buscando
     // todas as linhas de `leads` e agregando em JS
-    const rpcCall = supabaseMock.calls.find((c) => c.table === 'rpc:leads_stage_counts')
-    expect(rpcCall.args[0]).toEqual({ p_tenant_id: 'tenant-1' })
+    const rpcCall = rlsMock.calls.find((c) => /leads_stage_counts/.test(c.sql))
+    expect(rpcCall.params).toEqual(['tenant-1'])
   })
 
   it('ignora datas em formato inválido e usa a data de hoje', async () => {
-    setSupabase({
-      users: [{ data: [], error: null }],
-      ticket_logs: [{ data: [], error: null }],
-      leads: [{ data: [], error: null }, { data: [], error: null }],
-      messages: [{ data: [], error: null }],
-      appointments: [{ data: [], error: null }],
-      usage_events: [{ data: [], error: null }],
-      'rpc:leads_stage_counts': [{ data: [], error: null }],
-    })
+    rlsMock.queueRows([]) // users
+    rlsMock.queueRows([]) // ticket_logs
+    rlsMock.queueRows([]) // leadsToday
+    rlsMock.queueRows([]) // messages
+    rlsMock.queueRows([]) // appointments
+    rlsMock.queueRows([]) // usage_events
+    rlsMock.queueRows([]) // leads_stage_counts
     const app = buildApp()
     const res = await request(app).get('/api/reports/daily').query({ date: 'não-é-data' })
     expect(res.status).toBe(200)
@@ -103,15 +92,13 @@ describe('routes/reports', () => {
   })
 
   it('retorna estrutura vazia quando não há nenhum dado no dia', async () => {
-    setSupabase({
-      users: [{ data: [], error: null }],
-      ticket_logs: [{ data: [], error: null }],
-      leads: [{ data: [], error: null }, { data: [], error: null }],
-      messages: [{ data: [], error: null }],
-      appointments: [{ data: [], error: null }],
-      usage_events: [{ data: [], error: null }],
-      'rpc:leads_stage_counts': [{ data: [], error: null }],
-    })
+    rlsMock.queueRows([])
+    rlsMock.queueRows([])
+    rlsMock.queueRows([])
+    rlsMock.queueRows([])
+    rlsMock.queueRows([])
+    rlsMock.queueRows([])
+    rlsMock.queueRows([])
     const app = buildApp()
     const res = await request(app).get('/api/reports/daily').query({ date: '2026-01-01' })
     expect(res.body.summary.newLeads).toBe(0)

@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { invalidateTenantCache } from '../services/orchestrator.js'
 
@@ -62,10 +62,10 @@ const settingsSchema = z.object(
 
 opSettingsRouter.get('/', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('tenants').select('op_settings').eq('id', req.user.tenantId).limit(1)
-    )
-    const saved = rows[0]?.op_settings || {}
+    const saved = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query('SELECT op_settings FROM tenants WHERE id = $1 LIMIT 1', [req.user.tenantId])
+      return r.rows[0]?.op_settings || {}
+    })
     res.json({ settings: { ...DEFAULTS, ...saved } })
   } catch {
     // coluna ainda não existe ou outro erro — retorna defaults sem travar
@@ -78,11 +78,11 @@ opSettingsRouter.put('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   try {
     const patch = parsed.data
-    unwrap(
-      await supabase
-        .from('tenants')
-        .update({ op_settings: patch, updated_at: new Date().toISOString() })
-        .eq('id', req.user.tenantId)
+    await withTenant(req.user.tenantId, (client) =>
+      client.query(
+        'UPDATE tenants SET op_settings = $1::jsonb, updated_at = $2 WHERE id = $3',
+        [JSON.stringify(patch), new Date().toISOString(), req.user.tenantId]
+      )
     )
     invalidateTenantCache(req.user.tenantId)
     res.json({ settings: { ...DEFAULTS, ...patch } })

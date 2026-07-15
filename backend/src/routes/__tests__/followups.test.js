@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, uploadChatMedia: null }))
 
@@ -10,12 +10,8 @@ vi.mock('../../middleware/auth.js', () => ({
   requireTenant: (req, res, next) => next(),
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 vi.mock('../../services/mediaStorage.js', () => ({
@@ -31,14 +27,14 @@ function buildApp() {
   return app
 }
 
-let supabaseMock
-function setSupabase(responses) {
-  supabaseMock = createSupabaseMock(responses)
-  mockState.box.supabase = supabaseMock.supabase
-  return supabaseMock
+let rlsMock
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
 }
-function insertCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'insert') }
-function deleteCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'delete') }
+function insertCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^INSERT/.test(c.sql)) }
+function deleteCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^DELETE/.test(c.sql)) }
 
 const validSequence = {
   name: 'Pós-venda',
@@ -51,22 +47,21 @@ describe('routes/followups', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockState.uploadChatMedia = vi.fn().mockResolvedValue('https://cdn.exemplo.com/arquivo.png')
+    setRls()
   })
 
   describe('GET /', () => {
     it('retorna lista vazia quando não há sequências', async () => {
-      setSupabase({ followup_sequences: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/followups')
       expect(res.body).toEqual({ sequences: [] })
     })
 
     it('inclui steps_count e active_count por sequência', async () => {
-      setSupabase({
-        followup_sequences: [{ data: [{ id: 's1', name: 'Pós-venda' }], error: null }],
-        followup_steps: [{ data: [{ sequence_id: 's1' }, { sequence_id: 's1' }], error: null }],
-        followup_enrollments: [{ data: [{ sequence_id: 's1' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 's1', name: 'Pós-venda' }])
+      rlsMock.queueRows([{ sequence_id: 's1' }, { sequence_id: 's1' }])
+      rlsMock.queueRows([{ sequence_id: 's1' }])
       const app = buildApp()
       const res = await request(app).get('/api/followups')
       expect(res.body.sequences[0]).toMatchObject({ steps_count: 2, active_count: 1 })
@@ -75,17 +70,15 @@ describe('routes/followups', () => {
 
   describe('GET /:id', () => {
     it('retorna 404 quando não encontrado', async () => {
-      setSupabase({ followup_sequences: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/followups/s-x')
       expect(res.status).toBe(404)
     })
 
     it('retorna a sequência com suas etapas', async () => {
-      setSupabase({
-        followup_sequences: [{ data: [{ id: 's1', name: 'Pós-venda' }], error: null }],
-        followup_steps: [{ data: [{ id: 'step-1', order_index: 0 }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 's1', name: 'Pós-venda' }])
+      rlsMock.queueRows([{ id: 'step-1', order_index: 0 }])
       const app = buildApp()
       const res = await request(app).get('/api/followups/s1')
       expect(res.body.sequence.name).toBe('Pós-venda')
@@ -107,46 +100,42 @@ describe('routes/followups', () => {
     })
 
     it('cria a sequência e suas etapas', async () => {
-      setSupabase({
-        followup_sequences: [{ data: { id: 's1', name: 'Pós-venda' }, error: null }],
-        followup_steps: [{ data: [{ id: 'step-1', order_index: 0 }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 's1', name: 'Pós-venda' }])
+      rlsMock.queueRows([{ id: 'step-1', order_index: 0 }])
       const app = buildApp()
       const res = await request(app).post('/api/followups').send(validSequence)
       expect(res.status).toBe(201)
-      expect(insertCallsFor('followup_steps')[0].args[0]).toHaveLength(1)
+      expect(res.body.steps).toHaveLength(1)
     })
   })
 
   describe('PATCH /:id', () => {
     it('retorna 404 quando não encontrado', async () => {
-      setSupabase({ followup_sequences: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).patch('/api/followups/s-x').send({ name: 'Novo nome' })
       expect(res.status).toBe(404)
     })
 
     it('atualiza nome sem mexer nas etapas quando "steps" não é enviado', async () => {
-      setSupabase({
-        followup_sequences: [{ data: [{ id: 's1' }], error: null }, { data: { id: 's1', name: 'Novo nome' }, error: null }],
-        followup_steps: [{ data: [{ id: 'step-1' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 's1' }])
+      rlsMock.queueRows([{ id: 's1', name: 'Novo nome' }])
+      rlsMock.queueRows([{ id: 'step-1' }])
       const app = buildApp()
       const res = await request(app).patch('/api/followups/s1').send({ name: 'Novo nome' })
       expect(res.status).toBe(200)
-      expect(deleteCallsFor('followup_steps').length).toBe(0)
+      expect(deleteCallsMatching(/followup_steps/).length).toBe(0)
     })
 
     it('substitui as etapas quando "steps" é enviado', async () => {
-      setSupabase({
-        followup_sequences: [{ data: [{ id: 's1' }], error: null }, { data: { id: 's1', name: 'Pós-venda' }, error: null }],
-        followup_steps: [{ data: [{ id: 'step-novo' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 's1' }])
+      rlsMock.queueRows([{ id: 's1', name: 'Pós-venda' }])
+      rlsMock.queueRows([{ id: 'step-novo' }])
       const app = buildApp()
       const res = await request(app).patch('/api/followups/s1').send(validSequence)
       expect(res.status).toBe(200)
-      expect(deleteCallsFor('followup_steps').length).toBe(1)
-      expect(insertCallsFor('followup_steps').length).toBe(1)
+      expect(deleteCallsMatching(/followup_steps/).length).toBe(1)
+      expect(insertCallsMatching(/followup_steps/).length).toBe(1)
     })
   })
 
@@ -154,42 +143,36 @@ describe('routes/followups', () => {
     // Regressão: followup_steps/followup_enrollments referenciam a sequência via FK sem
     // ON DELETE CASCADE — apagar a sequência sem tratar isso falharia por violação de FK.
     it('remove a sequência e suas etapas quando não há inscrições', async () => {
-      setSupabase({ followup_enrollments: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).delete('/api/followups/s1')
       expect(res.status).toBe(200)
-      expect(deleteCallsFor('followup_steps')).toHaveLength(1)
-      expect(deleteCallsFor('followup_sequences')).toHaveLength(1)
+      expect(deleteCallsMatching(/followup_steps/)).toHaveLength(1)
+      expect(deleteCallsMatching(/followup_sequences/)).toHaveLength(1)
     })
 
     it('bloqueia a exclusão quando há contatos inscritos (ativos ou concluídos)', async () => {
-      setSupabase({ followup_enrollments: [{ data: [{ id: 'enr-1' }], error: null }] })
+      rlsMock.queueRows([{ id: 'enr-1' }])
       const app = buildApp()
       const res = await request(app).delete('/api/followups/s1')
       expect(res.status).toBe(400)
-      expect(deleteCallsFor('followup_sequences')).toHaveLength(0)
+      expect(deleteCallsMatching(/followup_sequences/)).toHaveLength(0)
     })
   })
 
   describe('POST /:id/duplicate', () => {
     it('retorna 404 quando não encontrado', async () => {
-      setSupabase({ followup_sequences: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/followups/s-x/duplicate')
       expect(res.status).toBe(404)
     })
 
     it('duplica a sequência com "(cópia)" no nome e copia as etapas', async () => {
-      setSupabase({
-        followup_sequences: [
-          { data: [{ id: 's1', name: 'Pós-venda', description: null, time_mode: 'general', default_send_time: '09:00' }], error: null },
-          { data: { id: 's2', name: 'Pós-venda (cópia)' }, error: null },
-        ],
-        followup_steps: [
-          { data: [{ order_index: 0, delay_days: 0, text: 'Oi!', media_url: null, media_type: null, media_mimetype: null, media_filename: null, send_time: null }], error: null },
-          { data: [{ id: 'step-copiado' }], error: null },
-        ],
-      })
+      rlsMock.queueRows([{ id: 's1', name: 'Pós-venda', description: null, time_mode: 'general', default_send_time: '09:00' }])
+      rlsMock.queueRows([{ order_index: 0, delay_days: 0, text: 'Oi!', media_url: null, media_type: null, media_mimetype: null, media_filename: null, send_time: null }])
+      rlsMock.queueRows([{ id: 's2', name: 'Pós-venda (cópia)' }])
+      rlsMock.queueRows([{ id: 'step-copiado' }])
       const app = buildApp()
       const res = await request(app).post('/api/followups/s1/duplicate')
       expect(res.status).toBe(201)
@@ -206,16 +189,15 @@ describe('routes/followups', () => {
     })
 
     it('retorna 404 quando a etapa não existe', async () => {
-      setSupabase({ followup_steps: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/followups/s1/steps/step-x/media').attach('file', Buffer.from('imagem'), { filename: 'foto.png', contentType: 'image/png' })
       expect(res.status).toBe(404)
     })
 
     it('anexa a mídia e atualiza a etapa', async () => {
-      setSupabase({
-        followup_steps: [{ data: [{ id: 'step-1' }], error: null }, { data: { id: 'step-1', media_url: 'https://cdn.exemplo.com/arquivo.png' }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'step-1' }])
+      rlsMock.queueRows([{ id: 'step-1', media_url: 'https://cdn.exemplo.com/arquivo.png' }])
       const app = buildApp()
       const res = await request(app).post('/api/followups/s1/steps/step-1/media').attach('file', Buffer.from('imagem'), { filename: 'foto.png', contentType: 'image/png' })
       expect(res.status).toBe(200)

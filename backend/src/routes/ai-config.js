@@ -3,7 +3,7 @@ import { z } from 'zod'
 import multer from 'multer'
 import XLSX from 'xlsx'
 import { PDFParse } from 'pdf-parse'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { chat } from '../services/ai/openai.js'
 import { buildSystemContent } from '../services/ai/agent.js'
@@ -59,14 +59,31 @@ function sanitizeConfig(row) {
   return { ...rest, has_openai_key: !!openai_api_key }
 }
 
+// Upsert genérico só com as colunas presentes em `payload` (sempre inclui
+// tenant_id) — evita ter que listar manualmente cada combinação possível de
+// campos opcionais do PUT /.
+async function upsertAiConfig(client, payload) {
+  const columns = Object.keys(payload)
+  const placeholders = columns.map((_, i) => `$${i + 1}`)
+  const values = columns.map((c) => payload[c])
+  const updateSet = columns.filter((c) => c !== 'tenant_id').map((c) => `${c} = EXCLUDED.${c}`).join(', ')
+  const r = await client.query(
+    `INSERT INTO ai_configs (${columns.join(', ')}) VALUES (${placeholders.join(', ')})
+     ON CONFLICT (tenant_id) DO UPDATE SET ${updateSet}
+     RETURNING *`,
+    values
+  )
+  return r.rows[0]
+}
+
 // GET /api/ai-config
 aiConfigRouter.get('/', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('ai_configs').select('*')
-        .eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    res.json({ config: sanitizeConfig(rows[0]) || null })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query('SELECT * FROM ai_configs WHERE tenant_id = $1 LIMIT 1', [req.user.tenantId])
+      return r.rows[0]
+    })
+    res.json({ config: sanitizeConfig(row) || null })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -84,10 +101,8 @@ aiConfigRouter.put('/', async (req, res) => {
     if ('openai_api_key' in parsed.data) {
       payload.openai_api_key = openai_api_key ? encrypt(openai_api_key) : null
     }
-    const rows = unwrap(
-      await supabase.from('ai_configs').upsert(payload, { onConflict: 'tenant_id' }).select('*').single()
-    )
-    res.json({ config: sanitizeConfig(rows) })
+    const row = await withTenant(req.user.tenantId, (client) => upsertAiConfig(client, payload))
+    res.json({ config: sanitizeConfig(row) })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -96,11 +111,11 @@ aiConfigRouter.put('/', async (req, res) => {
 // GET /api/ai-config/status — retorna se a IA está ligada
 aiConfigRouter.get('/status', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('tenants').select('ai_enabled')
-        .eq('id', req.user.tenantId).limit(1)
-    )
-    res.json({ ai_enabled: rows[0]?.ai_enabled ?? true })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query('SELECT ai_enabled FROM tenants WHERE id = $1 LIMIT 1', [req.user.tenantId])
+      return r.rows[0]
+    })
+    res.json({ ai_enabled: row?.ai_enabled ?? true })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -112,25 +127,20 @@ aiConfigRouter.get('/status', async (req, res) => {
 aiConfigRouter.post('/toggle', async (req, res) => {
   try {
     if (typeof req.body?.ai_enabled === 'boolean') {
-      unwrap(
-        await supabase.from('tenants')
-          .update({ ai_enabled: req.body.ai_enabled })
-          .eq('id', req.user.tenantId)
+      await withTenant(req.user.tenantId, (client) =>
+        client.query('UPDATE tenants SET ai_enabled = $1 WHERE id = $2', [req.body.ai_enabled, req.user.tenantId])
       )
       invalidateTenantCache(req.user.tenantId)
       return res.json({ ai_enabled: req.body.ai_enabled })
     }
-    const rows = unwrap(
-      await supabase.from('tenants').select('ai_enabled')
-        .eq('id', req.user.tenantId).limit(1)
-    )
-    const current = rows[0]?.ai_enabled ?? true
-    unwrap(
-      await supabase.from('tenants').update({ ai_enabled: !current })
-        .eq('id', req.user.tenantId)
-    )
+    const next = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query('SELECT ai_enabled FROM tenants WHERE id = $1 LIMIT 1', [req.user.tenantId])
+      const current = r.rows[0]?.ai_enabled ?? true
+      await client.query('UPDATE tenants SET ai_enabled = $1 WHERE id = $2', [!current, req.user.tenantId])
+      return !current
+    })
     invalidateTenantCache(req.user.tenantId)
-    res.json({ ai_enabled: !current })
+    res.json({ ai_enabled: next })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -141,11 +151,10 @@ aiConfigRouter.post('/test', async (req, res) => {
   const { message = 'Olá! Me fale sobre como vocês podem me ajudar.' } = req.body
 
   try {
-    const rows = unwrap(
-      await supabase.from('ai_configs').select('*')
-        .eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    const cfg = rows[0]
+    const cfg = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query('SELECT * FROM ai_configs WHERE tenant_id = $1 LIMIT 1', [req.user.tenantId])
+      return r.rows[0]
+    })
 
     const messages = [
       { role: 'system', content: buildSystemContent(cfg, null) },
@@ -177,16 +186,14 @@ aiConfigRouter.post('/knowledge-base', upload.single('file'), async (req, res) =
     const truncated = text.length > KNOWLEDGE_BASE_MAX_CHARS
     if (truncated) text = text.slice(0, KNOWLEDGE_BASE_MAX_CHARS)
 
-    const rows = unwrap(
-      await supabase.from('ai_configs').upsert({
-        tenant_id: req.user.tenantId,
-        knowledge_base: text,
-        knowledge_base_filename: req.file.originalname,
-        knowledge_base_updated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'tenant_id' }).select('*').single()
-    )
-    res.json({ config: rows, truncated })
+    const row = await withTenant(req.user.tenantId, (client) => upsertAiConfig(client, {
+      tenant_id: req.user.tenantId,
+      knowledge_base: text,
+      knowledge_base_filename: req.file.originalname,
+      knowledge_base_updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }))
+    res.json({ config: row, truncated })
   } catch (e) {
     res.status(400).json({ error: e.message })
   }
@@ -195,16 +202,14 @@ aiConfigRouter.post('/knowledge-base', upload.single('file'), async (req, res) =
 // DELETE /api/ai-config/knowledge-base
 aiConfigRouter.delete('/knowledge-base', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('ai_configs').upsert({
-        tenant_id: req.user.tenantId,
-        knowledge_base: null,
-        knowledge_base_filename: null,
-        knowledge_base_updated_at: null,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'tenant_id' }).select('*').single()
-    )
-    res.json({ config: rows })
+    const row = await withTenant(req.user.tenantId, (client) => upsertAiConfig(client, {
+      tenant_id: req.user.tenantId,
+      knowledge_base: null,
+      knowledge_base_filename: null,
+      knowledge_base_updated_at: null,
+      updated_at: new Date().toISOString(),
+    }))
+    res.json({ config: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

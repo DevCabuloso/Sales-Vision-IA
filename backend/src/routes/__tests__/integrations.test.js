@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({
   box: {}, getAuthUrl: null, handleCallback: null, disconnect: null,
@@ -23,12 +23,8 @@ vi.mock('../../config/index.js', () => ({
   config: { frontendUrl: 'https://app.exemplo.com', jwt: { secret: 'test-secret', expiresIn: '1h' } },
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 vi.mock('../../services/googleCalendar.js', () => ({
@@ -57,13 +53,13 @@ function buildApp() {
   return app
 }
 
-let supabaseMock
-function setSupabase(responses) {
-  supabaseMock = createSupabaseMock(responses)
-  mockState.box.supabase = supabaseMock.supabase
-  return supabaseMock
+let rlsMock
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
 }
-function upsertCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'upsert') }
+function insertCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql)) }
 
 describe('routes/integrations', () => {
   beforeEach(() => {
@@ -77,18 +73,19 @@ describe('routes/integrations', () => {
     mockState.encrypt = vi.fn((v) => `enc(${v})`)
     mockState.decryptJSON = vi.fn((v) => ({ accessToken: v.replace(/^enc\(|\)$/g, '') }))
     mockState.dnsLookup = vi.fn().mockResolvedValue({ address: '93.184.216.34' })
+    setRls()
   })
 
   describe('GET /google/setup', () => {
     it('retorna configured=false quando o tenant não tem credenciais próprias', async () => {
-      setSupabase({ integrations: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/integrations/google/setup')
       expect(res.body).toEqual({ configured: false, clientId: null })
     })
 
     it('retorna configured=true quando há client_id e client_secret salvos', async () => {
-      setSupabase({ integrations: [{ data: [{ meta: { setup: { client_id: 'abc', client_secret_enc: 'enc(x)' } } }], error: null }] })
+      rlsMock.queueRows([{ meta: { setup: { client_id: 'abc', client_secret_enc: 'enc(x)' } } }])
       const app = buildApp()
       const res = await request(app).get('/api/integrations/google/setup')
       expect(res.body).toEqual({ configured: true, clientId: 'abc' })
@@ -103,13 +100,13 @@ describe('routes/integrations', () => {
     })
 
     it('salva as credenciais preservando o meta existente', async () => {
-      setSupabase({ integrations: [{ data: [{ meta: { calendarId: 'primary' }, status: 'connected' }], error: null }] })
+      rlsMock.queueRows([{ meta: { calendarId: 'primary' }, status: 'connected' }])
       const app = buildApp()
       const res = await request(app).post('/api/integrations/google/setup').send({ clientId: 'client-id-123', clientSecret: 'client-secret-123' })
       expect(res.status).toBe(200)
-      const upsert = upsertCallsFor('integrations')[0]
-      expect(upsert.args[0].meta).toEqual({ calendarId: 'primary', setup: { client_id: 'client-id-123', client_secret_enc: 'enc(client-secret-123)' } })
-      expect(upsert.args[0].status).toBe('connected')
+      const insert = insertCallsMatching(/INSERT INTO integrations/)[0]
+      expect(JSON.parse(insert.params[2])).toEqual({ calendarId: 'primary', setup: { client_id: 'client-id-123', client_secret_enc: 'enc(client-secret-123)' } })
+      expect(insert.params[1]).toBe('connected')
     })
   })
 
@@ -163,14 +160,14 @@ describe('routes/integrations', () => {
 
   describe('GET /google/status', () => {
     it('retorna connected=false quando não conectado', async () => {
-      setSupabase({ integrations: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/integrations/google/status')
       expect(res.body).toEqual({ connected: false })
     })
 
     it('retorna connected=true com o e-mail quando conectado', async () => {
-      setSupabase({ integrations: [{ data: [{ status: 'connected', meta: { email: 'ana@ex.com' } }], error: null }] })
+      rlsMock.queueRows([{ status: 'connected', meta: { email: 'ana@ex.com' } }])
       const app = buildApp()
       const res = await request(app).get('/api/integrations/google/status')
       expect(res.body).toEqual({ connected: true, email: 'ana@ex.com' })
@@ -186,14 +183,14 @@ describe('routes/integrations', () => {
 
   describe('POST /meta/test', () => {
     it('retorna 404 quando não configurado', async () => {
-      setSupabase({ integrations: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/integrations/meta/test')
       expect(res.status).toBe(404)
     })
 
     it('valida a conexão com sucesso', async () => {
-      setSupabase({ integrations: [{ data: [{ credentials: 'enc(tok-123)', meta: { phoneNumberId: 'phone-1' } }], error: null }] })
+      rlsMock.queueRows([{ credentials: 'enc(tok-123)', meta: { phoneNumberId: 'phone-1' } }])
       const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ display_phone_number: '+55 11 98888-7777', verified_name: 'Empresa' }) })
 
       const app = buildApp()
@@ -204,7 +201,7 @@ describe('routes/integrations', () => {
     })
 
     it('retorna 400 quando a Meta rejeita as credenciais', async () => {
-      setSupabase({ integrations: [{ data: [{ credentials: 'enc(tok-123)', meta: { phoneNumberId: 'phone-1' } }], error: null }] })
+      rlsMock.queueRows([{ credentials: 'enc(tok-123)', meta: { phoneNumberId: 'phone-1' } }])
       vi.spyOn(global, 'fetch').mockResolvedValue({ ok: false, status: 401, json: async () => ({ error: { message: 'token inválido' } }) })
 
       const app = buildApp()
@@ -259,7 +256,7 @@ describe('routes/integrations', () => {
   })
 
   it('GET /status lista as integrações do tenant', async () => {
-    setSupabase({ integrations: [{ data: [{ provider: 'evolution', status: 'connected' }], error: null }] })
+    rlsMock.queueRows([{ provider: 'evolution', status: 'connected' }])
     const app = buildApp()
     const res = await request(app).get('/api/integrations/status')
     expect(res.body.integrations).toHaveLength(1)

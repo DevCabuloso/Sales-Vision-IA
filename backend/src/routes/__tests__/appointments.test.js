@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, createEvent: null, cancelEvent: null, listEvents: null, updateEvent: null, logUsage: null, permCalls: [] }))
 
@@ -11,12 +11,8 @@ vi.mock('../../middleware/auth.js', () => ({
   requirePermission: (...keys) => { mockState.permCalls.push(keys); return (req, res, next) => next() },
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 vi.mock('../../services/googleCalendar.js', () => ({
@@ -39,14 +35,14 @@ function buildApp() {
   return app
 }
 
-let supabaseMock
-function setSupabase(responses) {
-  supabaseMock = createSupabaseMock(responses)
-  mockState.box.supabase = supabaseMock.supabase
-  return supabaseMock
+let rlsMock
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
 }
-function insertCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'insert') }
-function updateCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'update') }
+function insertCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^INSERT/.test(c.sql)) }
+function updateCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^UPDATE/.test(c.sql)) }
 
 describe('routes/appointments', () => {
   beforeEach(() => {
@@ -56,6 +52,7 @@ describe('routes/appointments', () => {
     mockState.listEvents = vi.fn()
     mockState.updateEvent = vi.fn()
     mockState.logUsage = vi.fn().mockResolvedValue(undefined)
+    setRls()
   })
 
   it('exige a permissão "agenda" (enforcement de operador restrito) em toda a rota', () => {
@@ -63,22 +60,22 @@ describe('routes/appointments', () => {
   })
 
   it('GET / lista as reuniões do tenant paginando com limit/offset padrão (500/0)', async () => {
-    setSupabase({ appointments: [{ data: [{ id: 'a1', title: 'Demo' }], error: null }] })
+    rlsMock.queueRows([{ id: 'a1', title: 'Demo' }])
     const app = buildApp()
     const res = await request(app).get('/api/appointments')
     expect(res.body.appointments).toHaveLength(1)
     expect(res.body).toMatchObject({ limit: 500, offset: 0 })
-    const rangeCall = supabaseMock.calls.find((c) => c.table === 'appointments' && c.method === 'range')
-    expect(rangeCall.args).toEqual([0, 499])
+    const call = rlsMock.calls.find((c) => /FROM appointments/.test(c.sql))
+    expect(call.params.slice(-2)).toEqual([500, 0])
   })
 
   it('GET / aceita limit/offset customizados via query, respeitando o teto de 1000', async () => {
-    setSupabase({ appointments: [{ data: [], error: null }] })
+    rlsMock.queueRows([])
     const app = buildApp()
     const res = await request(app).get('/api/appointments?limit=99999&offset=20')
     expect(res.body).toMatchObject({ limit: 1000, offset: 20 })
-    const rangeCall = supabaseMock.calls.find((c) => c.table === 'appointments' && c.method === 'range')
-    expect(rangeCall.args).toEqual([20, 1019])
+    const call = rlsMock.calls.find((c) => /FROM appointments/.test(c.sql))
+    expect(call.params.slice(-2)).toEqual([1000, 20])
   })
 
   describe('POST /sync', () => {
@@ -87,26 +84,21 @@ describe('routes/appointments', () => {
         { externalId: 'ext-1', title: 'Novo evento', start: '2026-01-01T10:00:00Z', end: '2026-01-01T10:30:00Z', meetingLink: 'https://meet/1', status: 'confirmed' },
         { externalId: 'ext-2', title: 'Evento existente atualizado', start: '2026-01-02T10:00:00Z', end: '2026-01-02T10:30:00Z', meetingLink: null, status: 'confirmed' },
       ])
-      setSupabase({
-        appointments: [
-          { data: [{ id: 'a-existing', external_id: 'ext-2', status: 'scheduled' }], error: null },
-          { data: {}, error: null }, // update do existente
-          { data: {}, error: null }, // insert do novo
-        ],
-      })
+      rlsMock.queueRows([{ id: 'a-existing', external_id: 'ext-2', status: 'scheduled' }])
       const app = buildApp()
       const res = await request(app).post('/api/appointments/sync')
       expect(res.body).toEqual({ synced: 2 })
-      expect(insertCallsFor('appointments')).toHaveLength(1)
-      expect(updateCallsFor('appointments')).toHaveLength(1)
+      expect(insertCallsMatching(/appointments/)).toHaveLength(1)
+      expect(updateCallsMatching(/appointments/)).toHaveLength(1)
     })
 
     it('marca como cancelado quando o evento do Google foi cancelado', async () => {
       mockState.listEvents.mockResolvedValue([{ externalId: 'ext-1', title: 'x', start: 'a', end: 'b', status: 'cancelled' }])
-      setSupabase({ appointments: [{ data: [], error: null }, { data: {}, error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       await request(app).post('/api/appointments/sync')
-      expect(insertCallsFor('appointments')[0].args[0].status).toBe('cancelled')
+      const insert = insertCallsMatching(/appointments/)[0]
+      expect(insert.params).toContain('cancelled')
     })
 
     it('retorna aviso amigável quando o Google Calendar não está conectado', async () => {
@@ -148,7 +140,7 @@ describe('routes/appointments', () => {
 
     it('cria o evento no Google e persiste o agendamento', async () => {
       mockState.createEvent.mockResolvedValue({ externalId: 'ext-1', meetingLink: 'https://meet/1' })
-      setSupabase({ appointments: [{ data: { id: 'a1', title: 'Demo' }, error: null }] })
+      rlsMock.queueRows([{ id: 'a1', title: 'Demo' }])
       const app = buildApp()
       const res = await request(app).post('/api/appointments').send({
         title: 'Demo', start: '2026-01-01T10:00:00Z', end: '2026-01-01T10:30:00Z',
@@ -176,23 +168,22 @@ describe('routes/appointments', () => {
     })
 
     it('retorna 404 quando não encontrado', async () => {
-      setSupabase({ appointments: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).patch('/api/appointments/a-x').send({ title: 'Novo título' })
       expect(res.status).toBe(404)
     })
 
     it('rejeita reagendar reunião cancelada', async () => {
-      setSupabase({ appointments: [{ data: [{ external_id: 'ext-1', status: 'cancelled' }], error: null }] })
+      rlsMock.queueRows([{ external_id: 'ext-1', status: 'cancelled' }])
       const app = buildApp()
       const res = await request(app).patch('/api/appointments/a1').send({ title: 'Novo título' })
       expect(res.status).toBe(400)
     })
 
     it('atualiza sem chamar o Google quando não há external_id', async () => {
-      setSupabase({
-        appointments: [{ data: [{ external_id: null, status: 'scheduled' }], error: null }, { data: { id: 'a1', title: 'Novo título' }, error: null }],
-      })
+      rlsMock.queueRows([{ external_id: null, status: 'scheduled' }])
+      rlsMock.queueRows([{ id: 'a1', title: 'Novo título' }])
       const app = buildApp()
       const res = await request(app).patch('/api/appointments/a1').send({ title: 'Novo título' })
       expect(res.status).toBe(200)
@@ -201,19 +192,18 @@ describe('routes/appointments', () => {
 
     it('atualiza o evento no Google e usa o novo meeting_link quando há external_id', async () => {
       mockState.updateEvent.mockResolvedValue({ meetingLink: 'https://meet/novo' })
-      setSupabase({
-        appointments: [{ data: [{ external_id: 'ext-1', status: 'scheduled' }], error: null }, { data: { id: 'a1' }, error: null }],
-      })
+      rlsMock.queueRows([{ external_id: 'ext-1', status: 'scheduled' }])
+      rlsMock.queueRows([{ id: 'a1' }])
       const app = buildApp()
       const res = await request(app).patch('/api/appointments/a1').send({ start: '2026-01-02T10:00:00Z' })
       expect(res.status).toBe(200)
-      const update = updateCallsFor('appointments')[0]
-      expect(update.args[0].meeting_link).toBe('https://meet/novo')
+      const update = updateCallsMatching(/appointments/)[0]
+      expect(update.params).toContain('https://meet/novo')
     })
 
     it('retorna 502 quando falha ao reagendar no Google', async () => {
       mockState.updateEvent.mockRejectedValue(new Error('falha de rede'))
-      setSupabase({ appointments: [{ data: [{ external_id: 'ext-1', status: 'scheduled' }], error: null }] })
+      rlsMock.queueRows([{ external_id: 'ext-1', status: 'scheduled' }])
       const app = buildApp()
       const res = await request(app).patch('/api/appointments/a1').send({ title: 'x' })
       expect(res.status).toBe(502)
@@ -222,25 +212,25 @@ describe('routes/appointments', () => {
 
   describe('POST /:id/cancel', () => {
     it('retorna 404 quando não encontrado', async () => {
-      setSupabase({ appointments: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/appointments/a-x/cancel')
       expect(res.status).toBe(404)
     })
 
     it('cancela no Google e marca como cancelado localmente', async () => {
-      setSupabase({ appointments: [{ data: [{ external_id: 'ext-1' }], error: null }] })
+      rlsMock.queueRows([{ external_id: 'ext-1' }])
       const app = buildApp()
       const res = await request(app).post('/api/appointments/a1/cancel')
       expect(res.status).toBe(200)
       expect(mockState.cancelEvent).toHaveBeenCalledWith('tenant-1', 'ext-1')
-      const update = updateCallsFor('appointments')[0]
-      expect(update.args[0].status).toBe('cancelled')
+      const update = updateCallsMatching(/appointments/)[0]
+      expect(update.sql).toContain('cancelled')
     })
 
     it('cancela localmente mesmo se a chamada ao Google falhar', async () => {
       mockState.cancelEvent.mockRejectedValue(new Error('erro Google'))
-      setSupabase({ appointments: [{ data: [{ external_id: 'ext-1' }], error: null }] })
+      rlsMock.queueRows([{ external_id: 'ext-1' }])
       const app = buildApp()
       const res = await request(app).post('/api/appointments/a1/cancel')
       expect(res.status).toBe(200)

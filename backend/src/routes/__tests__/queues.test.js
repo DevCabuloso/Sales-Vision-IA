@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, user: null }))
 
@@ -10,12 +10,8 @@ vi.mock('../../middleware/auth.js', () => ({
   requireTenant: (req, res, next) => next(),
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 const { queuesRouter } = await import('../queues.js')
@@ -27,26 +23,25 @@ function buildApp() {
   return app
 }
 
-let supabaseMock
-function setSupabase(responses) {
-  supabaseMock = createSupabaseMock(responses)
-  mockState.box.supabase = supabaseMock.supabase
-  return supabaseMock
+let rlsMock
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
 }
-function insertCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'insert') }
-function deleteCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'delete') }
+function insertCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^INSERT/.test(c.sql)) }
+function deleteCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^DELETE/.test(c.sql)) }
 
 describe('routes/queues', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockState.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }
+    setRls()
   })
 
   it('GET / retorna as filas com seus operadores', async () => {
-    setSupabase({
-      queues: [{ data: [{ id: 'q1', name: 'Suporte' }], error: null }],
-      queue_operators: [{ data: [{ queue_id: 'q1', users: { id: 'u1', name: 'Ana', email: 'ana@ex.com' } }], error: null }],
-    })
+    rlsMock.queueRows([{ id: 'q1', name: 'Suporte' }])
+    rlsMock.queueRows([{ queue_id: 'q1', id: 'u1', name: 'Ana', email: 'ana@ex.com' }])
     const app = buildApp()
     const res = await request(app).get('/api/queues')
     expect(res.status).toBe(200)
@@ -54,7 +49,7 @@ describe('routes/queues', () => {
   })
 
   it('GET / retorna lista vazia sem consultar operadores quando não há filas', async () => {
-    setSupabase({ queues: [{ data: [], error: null }] })
+    rlsMock.queueRows([])
     const app = buildApp()
     const res = await request(app).get('/api/queues')
     expect(res.body).toEqual({ queues: [] })
@@ -67,47 +62,45 @@ describe('routes/queues', () => {
   })
 
   it('POST / cria a fila e associa os operadores informados', async () => {
-    setSupabase({
-      users: [{ data: [{ id: 'u1' }, { id: 'u2' }], error: null }],
-      queues: [{ data: { id: 'q1', name: 'Suporte', color: '#6366F1' }, error: null }],
-    })
+    rlsMock.queueRows([{ id: 'u1' }, { id: 'u2' }]) // assertUsersBelongToTenant
+    rlsMock.queueRows([{ id: 'q1', name: 'Suporte', color: '#6366F1' }]) // insert queues
     const app = buildApp()
     const res = await request(app).post('/api/queues').send({ name: 'Suporte', operator_ids: ['u1', 'u2'] })
     expect(res.status).toBe(201)
-    const opInsert = insertCallsFor('queue_operators')[0]
-    expect(opInsert.args[0]).toEqual([{ queue_id: 'q1', user_id: 'u1' }, { queue_id: 'q1', user_id: 'u2' }])
+    const opInsert = insertCallsMatching(/INSERT INTO queue_operators/)[0]
+    expect(opInsert.params).toEqual(['q1', 'u1', 'q1', 'u2'])
   })
 
   it('POST / rejeita operator_ids que não pertençam a este tenant (isolamento entre tenants)', async () => {
-    setSupabase({ users: [{ data: [{ id: 'u1' }], error: null }] }) // u2 não pertence ao tenant-1
+    rlsMock.queueRows([{ id: 'u1' }]) // u2 não pertence ao tenant-1
     const app = buildApp()
     const res = await request(app).post('/api/queues').send({ name: 'Suporte', operator_ids: ['u1', 'u2'] })
     expect(res.status).toBe(400)
-    expect(insertCallsFor('queues')).toHaveLength(0)
+    expect(insertCallsMatching(/INSERT INTO queues /)).toHaveLength(0)
   })
 
   it('PATCH /:id substitui os operadores quando operator_ids é enviado', async () => {
-    setSupabase({
-      users: [{ data: [{ id: 'u2' }], error: null }],
-      queues: [{ data: { id: 'q1', name: 'Suporte' }, error: null }],
-      queue_operators: [{ data: [{ users: { id: 'u2', name: 'Bia', email: 'bia@ex.com' } }], error: null }],
-    })
+    rlsMock.queueRows([{ id: 'u2' }]) // assertUsersBelongToTenant
+    rlsMock.queueRows([{ id: 'q1', name: 'Suporte' }]) // update queues
+    rlsMock.queueRows([]) // delete queue_operators
+    rlsMock.queueRows([]) // insert queue_operators
+    rlsMock.queueRows([{ queue_id: 'q1', id: 'u2', name: 'Bia', email: 'bia@ex.com' }]) // fetchOperators
     const app = buildApp()
     const res = await request(app).patch('/api/queues/q1').send({ operator_ids: ['u2'] })
     expect(res.status).toBe(200)
-    expect(deleteCallsFor('queue_operators').length).toBe(1)
+    expect(deleteCallsMatching(/queue_operators/).length).toBe(1)
     expect(res.body.queue.operators).toEqual([{ id: 'u2', name: 'Bia', email: 'bia@ex.com' }])
   })
 
   it('PATCH /:id rejeita operator_ids de outro tenant sem tocar a fila', async () => {
-    setSupabase({ users: [{ data: [], error: null }] })
+    rlsMock.queueRows([])
     const app = buildApp()
     const res = await request(app).patch('/api/queues/q1').send({ operator_ids: ['u-de-outro-tenant'] })
     expect(res.status).toBe(400)
   })
 
   it('DELETE /:id remove a fila', async () => {
-    setSupabase({})
+    rlsMock.queueRows([])
     const app = buildApp()
     const res = await request(app).delete('/api/queues/q1')
     expect(res.status).toBe(200)

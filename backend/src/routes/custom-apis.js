@@ -1,14 +1,12 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { encrypt, decryptJSON } from '../services/crypto.js'
 import { assertPublicUrl, safeFetch } from '../utils/ssrfGuard.js'
 
 export const customApisRouter = Router()
 customApisRouter.use(requireAuth, requireTenant)
-
-const PROVIDERS = ['openai', 'claude', 'gemini', 'deepseek', 'custom']
 
 const schema = z.object({
   name:     z.string().min(1).max(100),
@@ -20,14 +18,21 @@ const schema = z.object({
   active:   z.boolean().optional().default(true),
 })
 
+const JSONB_COLUMNS = new Set(['headers'])
+function columnPlaceholder(col, i) { return JSONB_COLUMNS.has(col) ? `$${i}::jsonb` : `$${i}` }
+function columnValue(col, value) { return JSONB_COLUMNS.has(col) ? JSON.stringify(value) : value }
+
 // GET /api/custom-apis
 customApisRouter.get('/', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('custom_apis').select('id, name, base_url, model, headers, provider, active, created_at, updated_at')
-        .eq('tenant_id', req.user.tenantId)
-        .order('created_at', { ascending: false })
-    )
+    const rows = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `SELECT id, name, base_url, model, headers, provider, active, created_at, updated_at
+         FROM custom_apis WHERE tenant_id = $1 ORDER BY created_at DESC`,
+        [req.user.tenantId]
+      )
+      return r.rows
+    })
     res.json({ apis: rows })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -42,13 +47,19 @@ customApisRouter.post('/', async (req, res) => {
   try {
     await assertPublicUrl(parsed.data.base_url)
     const { api_key, ...rest } = parsed.data
-    const row = unwrap(
-      await supabase.from('custom_apis').insert({
-        tenant_id: req.user.tenantId,
-        ...rest,
-        api_key: api_key ? encrypt(api_key) : null,
-      }).select('id, name, base_url, model, headers, provider, active, created_at').single()
-    )
+    const payload = { tenant_id: req.user.tenantId, ...rest, api_key: api_key ? encrypt(api_key) : null }
+
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const columns = Object.keys(payload)
+      const placeholders = columns.map((c, i) => columnPlaceholder(c, i + 1))
+      const values = columns.map((c) => columnValue(c, payload[c]))
+      const r = await client.query(
+        `INSERT INTO custom_apis (${columns.join(', ')}) VALUES (${placeholders.join(', ')})
+         RETURNING id, name, base_url, model, headers, provider, active, created_at`,
+        values
+      )
+      return r.rows[0]
+    })
     res.status(201).json({ api: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -66,11 +77,19 @@ customApisRouter.patch('/:id', async (req, res) => {
     const update = { ...rest, updated_at: new Date().toISOString() }
     if (api_key !== undefined) update.api_key = api_key ? encrypt(api_key) : null
 
-    const row = unwrap(
-      await supabase.from('custom_apis').update(update)
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
-        .select('id, name, base_url, model, headers, provider, active, updated_at').single()
-    )
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const columns = Object.keys(update)
+      const setClauses = columns.map((c, i) => `${c} = ${columnPlaceholder(c, i + 1)}`)
+      const values = columns.map((c) => columnValue(c, update[c]))
+      values.push(req.params.id, req.user.tenantId)
+      const r = await client.query(
+        `UPDATE custom_apis SET ${setClauses.join(', ')}
+         WHERE id = $${columns.length + 1} AND tenant_id = $${columns.length + 2}
+         RETURNING id, name, base_url, model, headers, provider, active, updated_at`,
+        values
+      )
+      return r.rows[0]
+    })
     res.json({ api: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -80,8 +99,9 @@ customApisRouter.patch('/:id', async (req, res) => {
 // DELETE /api/custom-apis/:id
 customApisRouter.delete('/:id', async (req, res) => {
   try {
-    await supabase.from('custom_apis').delete()
-      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
+    await withTenant(req.user.tenantId, (client) =>
+      client.query('DELETE FROM custom_apis WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
+    )
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -93,12 +113,14 @@ customApisRouter.post('/:id/test', async (req, res) => {
   const { message = 'Olá! Isso é um teste de conexão.' } = req.body
 
   try {
-    const rows = unwrap(
-      await supabase.from('custom_apis').select('*')
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'API não encontrada.' })
-    const apiCfg = rows[0]
+    const apiCfg = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT * FROM custom_apis WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [req.params.id, req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!apiCfg) return res.status(404).json({ error: 'API não encontrada.' })
 
     await assertPublicUrl(apiCfg.base_url)
 

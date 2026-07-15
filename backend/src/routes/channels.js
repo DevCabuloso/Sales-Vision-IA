@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { config } from '../config/index.js'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { getOrCreateChannelWebhookSecret } from '../utils/channelWebhookSecret.js'
 
@@ -24,11 +24,13 @@ function instanceName(tenantId, channelId) {
 // GET /api/channels
 channelsRouter.get('/', requireAuth, requireTenant, async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('channels').select('*')
-        .eq('tenant_id', req.user.tenantId)
-        .order('created_at', { ascending: false })
-    )
+    const rows = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT * FROM channels WHERE tenant_id = $1 ORDER BY created_at DESC',
+        [req.user.tenantId]
+      )
+      return r.rows
+    })
     res.json({ channels: rows })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -43,19 +45,16 @@ channelsRouter.post('/', requireAuth, requireTenant, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
   try {
-    const rows = unwrap(
-      await supabase.from('channels').insert({
-        tenant_id: req.user.tenantId,
-        name: parsed.data.name,
-        status: 'disconnected',
-      }).select()
-    )
-    const channel = rows[0]
-    const instance = instanceName(req.user.tenantId, channel.id)
-
-    unwrap(
-      await supabase.from('channels').update({ instance_name: instance }).eq('id', channel.id)
-    )
+    const { channel, instance } = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `INSERT INTO channels (tenant_id, name, status) VALUES ($1, $2, 'disconnected') RETURNING *`,
+        [req.user.tenantId, parsed.data.name]
+      )
+      const channel = r.rows[0]
+      const instance = instanceName(req.user.tenantId, channel.id)
+      await client.query('UPDATE channels SET instance_name = $1 WHERE id = $2', [instance, channel.id])
+      return { channel, instance }
+    })
 
     const r = await evoFetch('/instance/create', {
       method: 'POST',
@@ -92,12 +91,14 @@ channelsRouter.post('/', requireAuth, requireTenant, async (req, res) => {
 // GET /api/channels/:id/qr
 channelsRouter.get('/:id/qr', requireAuth, requireTenant, async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('channels').select('*')
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
-    const channel = rows[0]
+    const channel = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT * FROM channels WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [req.params.id, req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!channel) return res.status(404).json({ error: 'Canal não encontrado.' })
 
     // Após logout a instância fica em estado inconsistente — reinicia antes de gerar novo QR
     if (channel.status === 'disconnected') {
@@ -128,12 +129,14 @@ channelsRouter.get('/:id/qr', requireAuth, requireTenant, async (req, res) => {
 // GET /api/channels/:id/status
 channelsRouter.get('/:id/status', requireAuth, requireTenant, async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('channels').select('*')
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
-    const channel = rows[0]
+    const channel = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT * FROM channels WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [req.params.id, req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!channel) return res.status(404).json({ error: 'Canal não encontrado.' })
 
     const r = await evoFetch(`/instance/connectionState/${channel.instance_name}`)
     if (!r.ok) return res.json({ status: 'disconnected', phone: null })
@@ -144,13 +147,19 @@ channelsRouter.get('/:id/status', requireAuth, requireTenant, async (req, res) =
     const phone = data.instance?.profileName || data.instance?.me?.user || null
 
     if (connected && channel.status !== 'connected') {
-      await supabase.from('channels').update({
-        status: 'connected', phone, updated_at: new Date().toISOString(),
-      }).eq('id', channel.id)
+      await withTenant(req.user.tenantId, (client) =>
+        client.query(
+          'UPDATE channels SET status = $1, phone = $2, updated_at = $3 WHERE id = $4',
+          ['connected', phone, new Date().toISOString(), channel.id]
+        )
+      )
     } else if (!connected && channel.status === 'connected') {
-      await supabase.from('channels').update({
-        status: 'disconnected', phone: null, updated_at: new Date().toISOString(),
-      }).eq('id', channel.id)
+      await withTenant(req.user.tenantId, (client) =>
+        client.query(
+          'UPDATE channels SET status = $1, phone = $2, updated_at = $3 WHERE id = $4',
+          ['disconnected', null, new Date().toISOString(), channel.id]
+        )
+      )
     }
 
     res.json({ status: connected ? 'connected' : 'disconnected', phone })
@@ -177,14 +186,19 @@ channelsRouter.patch('/:id/settings', requireAuth, requireTenant, async (req, re
     if (assigned_user_id  !== undefined) update.assigned_user_id   = assigned_user_id || null
     if (assigned_queue_id !== undefined) update.assigned_queue_id  = assigned_queue_id || null
 
-    const rows = unwrap(
-      await supabase.from('channels')
-        .update(update)
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
-        .select()
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
-    res.json({ channel: rows[0] })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const columns = Object.keys(update)
+      const setClauses = columns.map((c, i) => `${c} = $${i + 1}`)
+      const values = columns.map((c) => update[c])
+      values.push(req.params.id, req.user.tenantId)
+      const r = await client.query(
+        `UPDATE channels SET ${setClauses.join(', ')} WHERE id = $${columns.length + 1} AND tenant_id = $${columns.length + 2} RETURNING *`,
+        values
+      )
+      return r.rows[0]
+    })
+    if (!row) return res.status(404).json({ error: 'Canal não encontrado.' })
+    res.json({ channel: row })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
@@ -194,14 +208,15 @@ channelsRouter.patch('/:id', requireAuth, requireTenant, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Nome obrigatório.' })
   const { name } = parsed.data
   try {
-    const rows = unwrap(
-      await supabase.from('channels')
-        .update({ name: name.trim(), updated_at: new Date().toISOString() })
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
-        .select()
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
-    res.json({ channel: rows[0] })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'UPDATE channels SET name = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4 RETURNING *',
+        [name.trim(), new Date().toISOString(), req.params.id, req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!row) return res.status(404).json({ error: 'Canal não encontrado.' })
+    res.json({ channel: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -210,16 +225,17 @@ channelsRouter.patch('/:id', requireAuth, requireTenant, async (req, res) => {
 // PATCH /api/channels/:id/default — definir como padrão
 channelsRouter.patch('/:id/default', requireAuth, requireTenant, async (req, res) => {
   try {
-    // Remove padrão de todos do tenant, depois define o selecionado
-    await supabase.from('channels').update({ is_default: false }).eq('tenant_id', req.user.tenantId)
-    const rows = unwrap(
-      await supabase.from('channels')
-        .update({ is_default: true, updated_at: new Date().toISOString() })
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
-        .select()
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
-    res.json({ channel: rows[0] })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      // Remove padrão de todos do tenant, depois define o selecionado
+      await client.query('UPDATE channels SET is_default = false WHERE tenant_id = $1', [req.user.tenantId])
+      const r = await client.query(
+        'UPDATE channels SET is_default = true, updated_at = $1 WHERE id = $2 AND tenant_id = $3 RETURNING *',
+        [new Date().toISOString(), req.params.id, req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!row) return res.status(404).json({ error: 'Canal não encontrado.' })
+    res.json({ channel: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -231,15 +247,25 @@ channelsRouter.post('/:id/close-tickets', requireAuth, requireTenant, async (req
   const allowed = ['open', 'pending', 'all']
   if (!allowed.includes(status)) return res.status(400).json({ error: 'Status inválido. Use: open, pending, all.' })
   try {
-    let q = supabase.from('leads')
-      .update({ conversation_status: 'resolved', human_takeover: false, assigned_to: null, updated_at: new Date().toISOString() })
-      .eq('tenant_id', req.user.tenantId)
-      .eq('channel_id', req.params.id)
-    if (status !== 'all') q = q.eq('conversation_status', status)
-    else q = q.in('conversation_status', ['open', 'pending'])
-    const { count } = await q.select('id', { count: 'exact', head: true })
-    await q
-    res.json({ closed: count ?? 0 })
+    const closed = await withTenant(req.user.tenantId, async (client) => {
+      const params = [req.user.tenantId, req.params.id, new Date().toISOString()]
+      let statusClause
+      if (status === 'all') {
+        params.push(['open', 'pending'])
+        statusClause = `conversation_status = ANY($4::text[])`
+      } else {
+        params.push(status)
+        statusClause = `conversation_status = $4`
+      }
+      const r = await client.query(
+        `UPDATE leads SET conversation_status = 'resolved', human_takeover = false, assigned_to = NULL, updated_at = $3
+         WHERE tenant_id = $1 AND channel_id = $2 AND ${statusClause}
+         RETURNING id`,
+        params
+      )
+      return r.rows.length
+    })
+    res.json({ closed })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -248,11 +274,14 @@ channelsRouter.post('/:id/close-tickets', requireAuth, requireTenant, async (req
 // POST /api/channels/:id/revalidate-webhook — reregistra webhook na Evolution
 channelsRouter.post('/:id/revalidate-webhook', requireAuth, requireTenant, async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('channels').select('instance_name')
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
+    const channel = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT instance_name FROM channels WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [req.params.id, req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!channel) return res.status(404).json({ error: 'Canal não encontrado.' })
 
     const webhookUrl = `${config.backendUrl}/webhooks/evolution/${req.user.tenantId}`
     // Segredo próprio deste canal (gerado na hora se ainda não existir) — a
@@ -261,7 +290,7 @@ channelsRouter.post('/:id/revalidate-webhook', requireAuth, requireTenant, async
     // entre todos os tenants (ver utils/channelWebhookSecret.js).
     const webhookSecret = await getOrCreateChannelWebhookSecret(req.params.id)
     // Evolution API v2 espera body aninhado em { webhook: { ... } } com camelCase.
-    const r = await evoFetch(`/webhook/set/${rows[0].instance_name}`, {
+    const r = await evoFetch(`/webhook/set/${channel.instance_name}`, {
       method: 'POST',
       body: JSON.stringify({
         webhook: {
@@ -287,13 +316,16 @@ channelsRouter.post('/:id/revalidate-webhook', requireAuth, requireTenant, async
 // POST /api/channels/:id/disconnect
 channelsRouter.post('/:id/disconnect', requireAuth, requireTenant, async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('channels').select('instance_name')
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
+    const channel = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT instance_name FROM channels WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [req.params.id, req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!channel) return res.status(404).json({ error: 'Canal não encontrado.' })
 
-    const { instance_name } = rows[0]
+    const { instance_name } = channel
 
     // Logout da sessão WhatsApp
     await evoFetch(`/instance/logout/${instance_name}`, { method: 'DELETE' })
@@ -303,9 +335,12 @@ channelsRouter.post('/:id/disconnect', requireAuth, requireTenant, async (req, r
     await evoFetch(`/instance/restart/${instance_name}`, { method: 'POST' })
       .catch((e) => console.warn('[channels/disconnect] falha ao reiniciar instância:', e.message))
 
-    unwrap(await supabase.from('channels').update({
-      status: 'disconnected', phone: null, updated_at: new Date().toISOString(),
-    }).eq('id', req.params.id))
+    await withTenant(req.user.tenantId, (client) =>
+      client.query(
+        'UPDATE channels SET status = $1, phone = $2, updated_at = $3 WHERE id = $4',
+        ['disconnected', null, new Date().toISOString(), req.params.id]
+      )
+    )
 
     res.json({ disconnected: true })
   } catch (e) {
@@ -316,20 +351,25 @@ channelsRouter.post('/:id/disconnect', requireAuth, requireTenant, async (req, r
 // DELETE /api/channels/:id
 channelsRouter.delete('/:id', requireAuth, requireTenant, async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('channels').select('instance_name')
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Canal não encontrado.' })
+    const channel = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT instance_name FROM channels WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [req.params.id, req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!channel) return res.status(404).json({ error: 'Canal não encontrado.' })
 
     // a Evolution recusa excluir uma instância ainda conectada — desconecta antes de excluir
-    const { instance_name } = rows[0]
+    const { instance_name } = channel
     await evoFetch(`/instance/logout/${instance_name}`, { method: 'DELETE' })
       .catch((e) => console.warn('[channels/delete] falha ao fazer logout na Evolution:', e.message))
     await evoFetch(`/instance/delete/${instance_name}`, { method: 'DELETE' })
       .catch((e) => console.warn('[channels/delete] falha ao remover instância na Evolution:', e.message))
 
-    unwrap(await supabase.from('channels').delete().eq('id', req.params.id))
+    await withTenant(req.user.tenantId, (client) =>
+      client.query('DELETE FROM channels WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
+    )
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

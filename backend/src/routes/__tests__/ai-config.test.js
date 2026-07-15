@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 import * as XLSX from 'xlsx'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, chat: null, buildSystemContent: null, encrypt: null, decryptJSON: null, invalidateTenantCache: null }))
 
@@ -11,12 +11,8 @@ vi.mock('../../middleware/auth.js', () => ({
   requireTenant: (req, res, next) => next(),
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 vi.mock('../../services/ai/openai.js', () => ({
@@ -45,14 +41,19 @@ function buildApp() {
   return app
 }
 
-let supabaseMock
-function setSupabase(responses) {
-  supabaseMock = createSupabaseMock(responses)
-  mockState.box.supabase = supabaseMock.supabase
-  return supabaseMock
+let rlsMock
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
 }
-function upsertCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'upsert') }
-function updateCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'update') }
+function insertCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql)) }
+// Lê um parâmetro pelo nome da coluna, independente da ordem em que o
+// upsertAiConfig monta o INSERT dinâmico.
+function paramNamed(call, col) {
+  const cols = call.sql.match(/INSERT INTO \w+ \(([^)]+)\)/)[1].split(',').map((s) => s.trim())
+  return call.params[cols.indexOf(col)]
+}
 
 describe('routes/ai-config', () => {
   beforeEach(() => {
@@ -62,18 +63,19 @@ describe('routes/ai-config', () => {
     mockState.encrypt = vi.fn((v) => `enc(${v})`)
     mockState.decryptJSON = vi.fn((v) => v.replace(/^enc\(|\)$/g, ''))
     mockState.invalidateTenantCache = vi.fn()
+    setRls()
   })
 
   describe('GET /', () => {
     it('retorna null quando o tenant não tem configuração', async () => {
-      setSupabase({ ai_configs: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/ai-config')
       expect(res.body).toEqual({ config: null })
     })
 
     it('remove a chave crua e expõe apenas has_openai_key', async () => {
-      setSupabase({ ai_configs: [{ data: [{ name: 'x', openai_api_key: 'enc(sk-123)' }], error: null }] })
+      rlsMock.queueRows([{ name: 'x', openai_api_key: 'enc(sk-123)' }])
       const app = buildApp()
       const res = await request(app).get('/api/ai-config')
       expect(res.body.config.has_openai_key).toBe(true)
@@ -89,38 +91,40 @@ describe('routes/ai-config', () => {
     })
 
     it('não altera a chave quando o campo é omitido', async () => {
-      setSupabase({ ai_configs: [{ data: { name: 'x' }, error: null }] })
+      rlsMock.queueRows([{ name: 'x' }])
       const app = buildApp()
       const res = await request(app).put('/api/ai-config').send({ name: 'x' })
       expect(res.status).toBe(200)
-      expect(upsertCallsFor('ai_configs')[0].args[0]).not.toHaveProperty('openai_api_key')
+      const insert = insertCallsMatching(/INSERT INTO ai_configs/)[0]
+      expect(insert.sql).not.toContain('openai_api_key')
     })
 
     it('criptografa a chave quando enviada', async () => {
-      setSupabase({ ai_configs: [{ data: { name: 'x' }, error: null }] })
+      rlsMock.queueRows([{ name: 'x' }])
       const app = buildApp()
       await request(app).put('/api/ai-config').send({ openai_api_key: 'sk-nova-chave' })
-      expect(upsertCallsFor('ai_configs')[0].args[0].openai_api_key).toBe('enc(sk-nova-chave)')
+      const insert = insertCallsMatching(/INSERT INTO ai_configs/)[0]
+      expect(paramNamed(insert, 'openai_api_key')).toBe('enc(sk-nova-chave)')
     })
 
     it('limpa a chave quando enviada como null', async () => {
-      setSupabase({ ai_configs: [{ data: { name: 'x' }, error: null }] })
+      rlsMock.queueRows([{ name: 'x' }])
       const app = buildApp()
       await request(app).put('/api/ai-config').send({ openai_api_key: null })
-      expect(upsertCallsFor('ai_configs')[0].args[0].openai_api_key).toBeNull()
+      const insert = insertCallsMatching(/INSERT INTO ai_configs/)[0]
+      expect(paramNamed(insert, 'openai_api_key')).toBeNull()
     })
   })
 
   describe('GET /status e POST /toggle', () => {
     it('GET /status retorna true por padrão', async () => {
-      setSupabase({ tenants: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/ai-config/status')
       expect(res.body).toEqual({ ai_enabled: true })
     })
 
     it('POST /toggle com body explícito define o valor exato e invalida o cache', async () => {
-      setSupabase({ tenants: [{ data: {}, error: null }] })
       const app = buildApp()
       const res = await request(app).post('/api/ai-config/toggle').send({ ai_enabled: false })
       expect(res.body).toEqual({ ai_enabled: false })
@@ -128,7 +132,7 @@ describe('routes/ai-config', () => {
     })
 
     it('POST /toggle sem body inverte o valor atual', async () => {
-      setSupabase({ tenants: [{ data: [{ ai_enabled: true }], error: null }, { data: {}, error: null }] })
+      rlsMock.queueRows([{ ai_enabled: true }])
       const app = buildApp()
       const res = await request(app).post('/api/ai-config/toggle')
       expect(res.body).toEqual({ ai_enabled: false })
@@ -137,7 +141,7 @@ describe('routes/ai-config', () => {
 
   describe('POST /test', () => {
     it('roda a IA usando o system prompt construído e a chave descriptografada', async () => {
-      setSupabase({ ai_configs: [{ data: [{ openai_api_key: 'enc(sk-tenant)', temperature: 0.5, max_tokens: 500 }], error: null }] })
+      rlsMock.queueRows([{ openai_api_key: 'enc(sk-tenant)', temperature: 0.5, max_tokens: 500 }])
       mockState.chat.mockResolvedValue({ content: 'Olá! Como posso ajudar?' })
 
       const app = buildApp()
@@ -157,19 +161,17 @@ describe('routes/ai-config', () => {
     })
 
     it('extrai texto de um arquivo .txt e salva na base de conhecimento', async () => {
-      setSupabase({ ai_configs: [{ data: { id: 'cfg-1', knowledge_base: 'Catálogo: Produto X R$100' }, error: null }] })
       const app = buildApp()
       const res = await request(app).post('/api/ai-config/knowledge-base')
         .attach('file', Buffer.from('Catálogo: Produto X R$100'), 'catalogo.txt')
 
       expect(res.status).toBe(200)
-      const upsert = upsertCallsFor('ai_configs')[0]
-      expect(upsert.args[0].knowledge_base).toBe('Catálogo: Produto X R$100')
-      expect(upsert.args[0].knowledge_base_filename).toBe('catalogo.txt')
+      const insert = insertCallsMatching(/INSERT INTO ai_configs/)[0]
+      expect(paramNamed(insert, 'knowledge_base')).toBe('Catálogo: Produto X R$100')
+      expect(paramNamed(insert, 'knowledge_base_filename')).toBe('catalogo.txt')
     })
 
     it('extrai texto de uma planilha XLSX', async () => {
-      setSupabase({ ai_configs: [{ data: { id: 'cfg-1' }, error: null }] })
       const wb = XLSX.utils.book_new()
       const ws = XLSX.utils.aoa_to_sheet([['Produto', 'Preço'], ['Produto X', '100']])
       XLSX.utils.book_append_sheet(wb, ws, 'Catálogo')
@@ -178,17 +180,17 @@ describe('routes/ai-config', () => {
       const app = buildApp()
       const res = await request(app).post('/api/ai-config/knowledge-base').attach('file', buffer, 'catalogo.xlsx')
       expect(res.status).toBe(200)
-      const upsert = upsertCallsFor('ai_configs')[0]
-      expect(upsert.args[0].knowledge_base).toContain('Produto X')
+      const insert = insertCallsMatching(/INSERT INTO ai_configs/)[0]
+      expect(paramNamed(insert, 'knowledge_base')).toContain('Produto X')
     })
 
     it('trunca o texto extraído em 15000 caracteres e sinaliza truncated=true', async () => {
-      setSupabase({ ai_configs: [{ data: { id: 'cfg-1' }, error: null }] })
       const bigText = 'A'.repeat(20000)
       const app = buildApp()
       const res = await request(app).post('/api/ai-config/knowledge-base').attach('file', Buffer.from(bigText), 'grande.txt')
       expect(res.body.truncated).toBe(true)
-      expect(upsertCallsFor('ai_configs')[0].args[0].knowledge_base).toHaveLength(15000)
+      const insert = insertCallsMatching(/INSERT INTO ai_configs/)[0]
+      expect(paramNamed(insert, 'knowledge_base')).toHaveLength(15000)
     })
 
     it('retorna 400 para formato de arquivo não suportado', async () => {
@@ -200,11 +202,11 @@ describe('routes/ai-config', () => {
   })
 
   it('DELETE /knowledge-base limpa os campos da base de conhecimento', async () => {
-    setSupabase({ ai_configs: [{ data: { id: 'cfg-1', knowledge_base: null }, error: null }] })
     const app = buildApp()
     const res = await request(app).delete('/api/ai-config/knowledge-base')
     expect(res.status).toBe(200)
-    const upsert = upsertCallsFor('ai_configs')[0]
-    expect(upsert.args[0]).toMatchObject({ knowledge_base: null, knowledge_base_filename: null })
+    const insert = insertCallsMatching(/INSERT INTO ai_configs/)[0]
+    expect(paramNamed(insert, 'knowledge_base')).toBeNull()
+    expect(paramNamed(insert, 'knowledge_base_filename')).toBeNull()
   })
 })

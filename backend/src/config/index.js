@@ -30,6 +30,9 @@ export const config = {
     connectionString:
       process.env.DATABASE_URL ||
       'postgres://sdr:sdr@localhost:5432/sdr',
+    // Papel restrito (NOBYPASSRLS) usado pelas rotas tenant-scoped via db/rls.js —
+    // ver migration_rls.sql. Distinto de DATABASE_URL (superuser, só pra migrations).
+    rlsUrl: process.env.DATABASE_RLS_URL || '',
     ssl: process.env.DB_SSL ? process.env.DB_SSL === 'true' : true,
   },
 

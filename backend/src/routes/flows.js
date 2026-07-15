@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 
 export const flowsRouter = Router()
@@ -25,15 +25,30 @@ const updateSchema = createSchema.partial().extend({
   edges:  z.array(z.any()).optional(),
 })
 
+// Colunas jsonb — precisam de ::jsonb + JSON.stringify no INSERT/UPDATE.
+const JSONB_COLUMNS = new Set(['nodes', 'edges'])
+const ARRAY_COLUMNS = new Set(['trigger_keywords'])
+
+function columnPlaceholder(col, i) {
+  if (JSONB_COLUMNS.has(col)) return `$${i}::jsonb`
+  if (ARRAY_COLUMNS.has(col)) return `$${i}::text[]`
+  return `$${i}`
+}
+function columnValue(col, value) {
+  return JSONB_COLUMNS.has(col) ? JSON.stringify(value) : value
+}
+
 // GET /api/flows
 flowsRouter.get('/', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('flows')
-        .select('id, name, status, channel_id, trigger_keywords, timeout_minutes, nodes, edges, updated_at')
-        .eq('tenant_id', req.user.tenantId)
-        .order('updated_at', { ascending: false })
-    )
+    const rows = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `SELECT id, name, status, channel_id, trigger_keywords, timeout_minutes, nodes, edges, updated_at
+         FROM flows WHERE tenant_id = $1 ORDER BY updated_at DESC`,
+        [req.user.tenantId]
+      )
+      return r.rows
+    })
     res.json({ flows: rows || [] })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -43,12 +58,15 @@ flowsRouter.get('/', async (req, res) => {
 // GET /api/flows/:id
 flowsRouter.get('/:id', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('flows').select('*')
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows?.length) return res.status(404).json({ error: 'Fluxo não encontrado.' })
-    res.json({ flow: rows[0] })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT * FROM flows WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [req.params.id, req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!row) return res.status(404).json({ error: 'Fluxo não encontrado.' })
+    res.json({ flow: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -60,20 +78,26 @@ flowsRouter.post('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const { name, channel_id, trigger_keywords, timeout_minutes, fallback_text } = parsed.data
   try {
-    const rows = unwrap(
-      await supabase.from('flows').insert({
-        tenant_id:        req.user.tenantId,
-        name:             name.trim(),
-        channel_id:       channel_id || null,
-        trigger_keywords: trigger_keywords || [],
-        timeout_minutes:  timeout_minutes || 30,
-        fallback_text:    fallback_text || null,
-        nodes:            DEFAULT_NODES(),
-        edges:            [],
-        updated_at:       new Date().toISOString(),
-      }).select()
-    )
-    res.status(201).json({ flow: rows[0] })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `INSERT INTO flows (tenant_id, name, channel_id, trigger_keywords, timeout_minutes, fallback_text, nodes, edges, updated_at)
+         VALUES ($1, $2, $3, $4::text[], $5, $6, $7::jsonb, $8::jsonb, $9)
+         RETURNING *`,
+        [
+          req.user.tenantId,
+          name.trim(),
+          channel_id || null,
+          trigger_keywords || [],
+          timeout_minutes || 30,
+          fallback_text || null,
+          JSON.stringify(DEFAULT_NODES()),
+          JSON.stringify([]),
+          new Date().toISOString(),
+        ]
+      )
+      return r.rows[0]
+    })
+    res.status(201).json({ flow: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -95,12 +119,24 @@ flowsRouter.patch('/:id', async (req, res) => {
     if (nodes            !== undefined) update.nodes            = nodes
     if (edges            !== undefined) update.edges            = edges
 
-    const rows = unwrap(
-      await supabase.from('flows')
-        .update(update).eq('id', req.params.id).eq('tenant_id', req.user.tenantId).select()
-    )
-    if (!rows?.length) return res.status(404).json({ error: 'Fluxo não encontrado.' })
-    res.json({ flow: rows[0] })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const setClauses = []
+      const values = []
+      let i = 1
+      for (const [key, value] of Object.entries(update)) {
+        setClauses.push(`${key} = ${columnPlaceholder(key, i)}`)
+        values.push(columnValue(key, value))
+        i++
+      }
+      values.push(req.params.id, req.user.tenantId)
+      const r = await client.query(
+        `UPDATE flows SET ${setClauses.join(', ')} WHERE id = $${i} AND tenant_id = $${i + 1} RETURNING *`,
+        values
+      )
+      return r.rows[0]
+    })
+    if (!row) return res.status(404).json({ error: 'Fluxo não encontrado.' })
+    res.json({ flow: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -109,9 +145,8 @@ flowsRouter.patch('/:id', async (req, res) => {
 // DELETE /api/flows/:id
 flowsRouter.delete('/:id', async (req, res) => {
   try {
-    unwrap(
-      await supabase.from('flows')
-        .delete().eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
+    await withTenant(req.user.tenantId, (client) =>
+      client.query('DELETE FROM flows WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
     res.json({ deleted: true })
   } catch (e) {
@@ -122,14 +157,15 @@ flowsRouter.delete('/:id', async (req, res) => {
 // GET /api/flows/:id/sessions — sessões ativas de um fluxo
 flowsRouter.get('/:id/sessions', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('flow_sessions')
-        .select('id, lead_id, current_node_id, variables, status, last_activity_at, created_at')
-        .eq('flow_id', req.params.id)
-        .eq('tenant_id', req.user.tenantId)
-        .order('last_activity_at', { ascending: false })
-        .limit(50)
-    )
+    const rows = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `SELECT id, lead_id, current_node_id, variables, status, last_activity_at, created_at
+         FROM flow_sessions WHERE flow_id = $1 AND tenant_id = $2
+         ORDER BY last_activity_at DESC LIMIT 50`,
+        [req.params.id, req.user.tenantId]
+      )
+      return r.rows
+    })
     res.json({ sessions: rows || [] })
   } catch (e) {
     res.status(500).json({ error: e.message })

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, user: null }))
 
@@ -10,12 +10,8 @@ vi.mock('../../middleware/auth.js', () => ({
   requireTenant: (req, res, next) => next(),
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 const { labelsRouter } = await import('../labels.js')
@@ -27,22 +23,23 @@ function buildApp() {
   return app
 }
 
-let supabaseMock
-function setSupabase(responses) {
-  supabaseMock = createSupabaseMock(responses)
-  mockState.box.supabase = supabaseMock.supabase
-  return supabaseMock
+let rlsMock
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
 }
-function insertCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'insert') }
+function insertCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql)) }
 
 describe('routes/labels', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockState.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }
+    setRls()
   })
 
   it('GET / lista as etiquetas do tenant', async () => {
-    setSupabase({ labels: [{ data: [{ id: 'l1', name: 'VIP', color: '#FF0000' }], error: null }] })
+    rlsMock.queueRows([{ id: 'l1', name: 'VIP', color: '#FF0000' }])
     const app = buildApp()
     const res = await request(app).get('/api/labels')
     expect(res.status).toBe(200)
@@ -56,15 +53,16 @@ describe('routes/labels', () => {
   })
 
   it('POST / usa a cor padrão quando não informada', async () => {
-    setSupabase({ labels: [{ data: { id: 'l1', name: 'VIP', color: '#6366F1' }, error: null }] })
+    rlsMock.queueRows([{ id: 'l1', name: 'VIP', color: '#6366F1' }])
     const app = buildApp()
     const res = await request(app).post('/api/labels').send({ name: 'VIP' })
     expect(res.status).toBe(201)
-    expect(insertCallsFor('labels')[0].args[0].color).toBe('#6366F1')
+    const insertCall = insertCallsMatching(/INSERT INTO labels/)[0]
+    expect(insertCall.params[2]).toBe('#6366F1')
   })
 
   it('PATCH /:id atualiza a etiqueta', async () => {
-    setSupabase({ labels: [{ data: { id: 'l1', name: 'Novo nome', color: '#6366F1' }, error: null }] })
+    rlsMock.queueRows([{ id: 'l1', name: 'Novo nome', color: '#6366F1' }])
     const app = buildApp()
     const res = await request(app).patch('/api/labels/l1').send({ name: 'Novo nome' })
     expect(res.status).toBe(200)
@@ -72,7 +70,7 @@ describe('routes/labels', () => {
   })
 
   it('DELETE /:id remove a etiqueta', async () => {
-    setSupabase({})
+    rlsMock.queueRows([])
     const app = buildApp()
     const res = await request(app).delete('/api/labels/l1')
     expect(res.status).toBe(200)

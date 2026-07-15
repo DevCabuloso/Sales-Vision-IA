@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {} }))
 
@@ -10,12 +10,8 @@ vi.mock('../../middleware/auth.js', () => ({
   requireTenant: (req, res, next) => next(),
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 const { businessHoursRouter, isWithinBusinessHours, getTenantTimezone, getOffMessage } = await import('../business-hours.js')
@@ -27,9 +23,9 @@ function buildApp() {
   return app
 }
 
-function setSupabase(responses) {
-  const mock = createSupabaseMock(responses)
-  mockState.box.supabase = mock.supabase
+function setRls() {
+  const mock = createRlsMock()
+  mockState.box.withTenant = mock.withTenant
   return mock
 }
 
@@ -40,7 +36,7 @@ describe('routes/business-hours', () => {
 
   describe('GET / e PUT /', () => {
     it('GET / retorna a configuração padrão quando o tenant não tem uma salva', async () => {
-      setSupabase({ business_hours: [{ data: [], error: null }] })
+      setRls().queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/business-hours')
       expect(res.body.config.enabled).toBe(false)
@@ -48,14 +44,14 @@ describe('routes/business-hours', () => {
     })
 
     it('GET / retorna a configuração salva quando existe', async () => {
-      setSupabase({ business_hours: [{ data: [{ enabled: true, timezone: 'America/Sao_Paulo' }], error: null }] })
+      setRls().queueRows([{ enabled: true, timezone: 'America/Sao_Paulo' }])
       const app = buildApp()
       const res = await request(app).get('/api/business-hours')
       expect(res.body.config.enabled).toBe(true)
     })
 
     it('PUT / salva a configuração com defaults para campos omitidos', async () => {
-      setSupabase({ business_hours: [{ data: { enabled: true, timezone: 'America/Sao_Paulo' }, error: null }] })
+      setRls().queueRows([{ enabled: true, timezone: 'America/Sao_Paulo' }])
       const app = buildApp()
       const res = await request(app).put('/api/business-hours').send({ enabled: true })
       expect(res.status).toBe(200)
@@ -76,7 +72,7 @@ describe('routes/business-hours', () => {
     })
 
     it('PUT / aceita um schedule válido', async () => {
-      setSupabase({ business_hours: [{ data: { enabled: true }, error: null }] })
+      setRls().queueRows([{ enabled: true }])
       const app = buildApp()
       const res = await request(app).put('/api/business-hours')
         .send({ schedule: { 1: { open: true, start: '08:00', end: '18:00' } } })
@@ -90,87 +86,81 @@ describe('routes/business-hours', () => {
     })
 
     it('retorna true quando o horário comercial está desabilitado', async () => {
-      setSupabase({ business_hours: [{ data: [{ enabled: false }], error: null }] })
+      setRls().queueRows([{ enabled: false }])
       expect(await isWithinBusinessHours('tenant-1')).toBe(true)
     })
 
     it('retorna true quando não há configuração salva', async () => {
-      setSupabase({ business_hours: [{ data: [], error: null }] })
+      setRls().queueRows([])
       expect(await isWithinBusinessHours('tenant-1')).toBe(true)
     })
 
     it('retorna true dentro do horário configurado', async () => {
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-01-07T10:00:00.000Z')) // quarta-feira, 10h UTC
-      setSupabase({
-        business_hours: [{ data: [{
-          enabled: true, timezone: 'UTC',
-          schedule: { 3: { open: true, start: '08:00', end: '18:00' } },
-        }], error: null }],
-      })
+      setRls().queueRows([{
+        enabled: true, timezone: 'UTC',
+        schedule: { 3: { open: true, start: '08:00', end: '18:00' } },
+      }])
       expect(await isWithinBusinessHours('tenant-1')).toBe(true)
     })
 
     it('retorna false fora do horário configurado', async () => {
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-01-07T22:00:00.000Z')) // quarta-feira, 22h UTC
-      setSupabase({
-        business_hours: [{ data: [{
-          enabled: true, timezone: 'UTC',
-          schedule: { 3: { open: true, start: '08:00', end: '18:00' } },
-        }], error: null }],
-      })
+      setRls().queueRows([{
+        enabled: true, timezone: 'UTC',
+        schedule: { 3: { open: true, start: '08:00', end: '18:00' } },
+      }])
       expect(await isWithinBusinessHours('tenant-1')).toBe(false)
     })
 
     it('retorna false quando o dia está marcado como fechado', async () => {
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-01-04T10:00:00.000Z')) // domingo, 10h UTC
-      setSupabase({
-        business_hours: [{ data: [{
-          enabled: true, timezone: 'UTC',
-          schedule: { 0: { open: false, start: '08:00', end: '12:00' } },
-        }], error: null }],
-      })
+      setRls().queueRows([{
+        enabled: true, timezone: 'UTC',
+        schedule: { 0: { open: false, start: '08:00', end: '12:00' } },
+      }])
       expect(await isWithinBusinessHours('tenant-1')).toBe(false)
     })
 
     it('retorna true (fail-open) quando a consulta falha', async () => {
-      setSupabase({ business_hours: [{ data: null, error: { message: 'erro' } }] })
+      setRls().queueError(new Error('erro'))
       expect(await isWithinBusinessHours('tenant-1')).toBe(true)
     })
   })
 
   describe('getTenantTimezone', () => {
     it('retorna o fuso salvo', async () => {
-      setSupabase({ business_hours: [{ data: [{ timezone: 'America/Bahia' }], error: null }] })
+      setRls().queueRows([{ timezone: 'America/Bahia' }])
       expect(await getTenantTimezone('tenant-1')).toBe('America/Bahia')
     })
 
     it('retorna o fuso padrão quando não há configuração', async () => {
-      setSupabase({ business_hours: [{ data: [], error: null }] })
+      setRls().queueRows([])
       expect(await getTenantTimezone('tenant-1')).toBe('America/Sao_Paulo')
     })
 
     it('retorna o fuso padrão em caso de erro', async () => {
-      setSupabase({ business_hours: [{ data: null, error: { message: 'erro' } }] })
+      setRls().queueError(new Error('erro'))
       expect(await getTenantTimezone('tenant-1')).toBe('America/Sao_Paulo')
     })
   })
 
   describe('getOffMessage', () => {
     it('retorna a mensagem salva', async () => {
-      setSupabase({ business_hours: [{ data: [{ off_message: 'Voltamos amanhã!' }], error: null }] })
+      setRls().queueRows([{ off_message: 'Voltamos amanhã!' }])
       expect(await getOffMessage('tenant-1')).toBe('Voltamos amanhã!')
     })
 
     it('retorna a mensagem padrão quando não há configuração', async () => {
-      setSupabase({ business_hours: [{ data: [], error: null }] })
+      setRls().queueRows([])
       expect(await getOffMessage('tenant-1')).toBe('Estamos fora do horário de atendimento. Retornaremos em breve!')
     })
 
     it('retorna a mensagem padrão em caso de erro', async () => {
-      setSupabase({ business_hours: [{ data: null, error: { message: 'erro' } }] })
+      setRls().queueError(new Error('erro'))
       expect(await getOffMessage('tenant-1')).toBe('Estamos fora do horário de atendimento.')
     })
   })

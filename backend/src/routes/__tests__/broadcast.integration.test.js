@@ -1,11 +1,13 @@
 // Teste de integração: campanha criada -> contatos importados -> /send (dispara o
 // processBroadcast REAL, que chama um sendText mockado) -> webhook de ACK da Evolution
 // batendo no MESMO wa_message_id -> prova que broadcast_contacts/broadcast_campaigns
-// fecham o ciclo de contagem corretamente, cruzando routes/broadcast.js e routes/webhooks.js.
+// fecham o ciclo de contagem corretamente, cruzando routes/broadcast.js (client RLS) e
+// routes/webhooks.js (client service_role, pré-auth — não migrado pra RLS).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, user: null, sendText: null }))
 
@@ -23,10 +25,15 @@ vi.mock('../../db/supabase.js', () => ({
   },
 }))
 
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
+}))
+
 vi.mock('../../config/index.js', () => ({
   config: {
     meta: { graphVersion: 'v21.0', verifyToken: 'sdr-verify', appSecret: '' },
     evolution: { apiUrl: '', apiKey: '', webhookSecret: '' },
+    db: { rlsUrl: '' },
   },
 }))
 
@@ -60,15 +67,22 @@ function buildApp() {
 const flush = (ms = 150) => new Promise((r) => setTimeout(r, ms))
 
 let supabaseMock
+let rlsMock
 function setSupabase(responses) {
   supabaseMock = createSupabaseMock(responses)
   mockState.box.supabase = supabaseMock.supabase
   return supabaseMock
 }
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
+}
 
 function callsFor(table, method) {
   return supabaseMock.calls.filter((c) => c.table === table && (!method || c.method === method))
 }
+function rlsUpdatesMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^UPDATE/.test(c.sql)) }
 
 describe('broadcast + webhooks (integração: campanha -> envio -> ACK fecha o ciclo)', () => {
   beforeEach(() => {
@@ -80,23 +94,30 @@ describe('broadcast + webhooks (integração: campanha -> envio -> ACK fecha o c
   it('cria campanha, importa contato, envia (sendText mockado) e a ACK "delivered" da Evolution atualiza contato e contadores da campanha', async () => {
     const app = buildApp()
 
+    // ── lado RLS (routes/broadcast.js): fila única em ordem de chamada ──
+    setRls()
+    rlsMock.queueRows([{ id: 'camp-int-1', status: 'draft' }])                    // 1) insert da campanha
+    rlsMock.queueRows([])                                                          // 2) insere o contato importado
+    rlsMock.queueRows([{                                                           // 3) /send: busca a campanha
+      id: 'camp-int-1', status: 'draft', content: 'Confira nossa promoção!',
+      min_interval_seconds: 0.001, max_interval_seconds: 0.001,
+    }])
+    rlsMock.queueRows([])                                                          // 4) /send: marca "sending"
+    rlsMock.queueRows([{ id: 'contact-int-1', phone: '11988887777', name: 'Lead Um' }]) // 5) processBroadcast: contatos pendentes
+    rlsMock.queueRows([{ status: 'sending' }])                                     // 6) processBroadcast: checagem no idx 0
+    rlsMock.queueRows([])                                                          // 7) processBroadcast: marca "sent" com wa_message_id
+    rlsMock.queueRows([{ status: 'sending' }])                                     // 8) processBroadcast: checagem final
+    rlsMock.queueRows([])                                                          // 9) processBroadcast: marca "completed"
+
+    // ── lado service_role (routes/webhooks.js, não migrado — pré-auth) ──
     setSupabase({
-      broadcast_campaigns: [
-        { data: { id: 'camp-int-1', status: 'draft' }, error: null }, // 1) insert da campanha
-        { data: [{ id: 'camp-int-1', status: 'draft', content: 'Confira nossa promoção!', min_interval_seconds: 0.001, max_interval_seconds: 0.001 }], error: null }, // 2) /send: busca a campanha
-        { data: [{}], error: null }, // 3) /send: marca "sending"
-        { data: { status: 'sending' }, error: null }, // 4) processBroadcast: checagem no idx 0
-        { data: { status: 'sending' }, error: null }, // 5) processBroadcast: checagem final
-        { data: [{}], error: null }, // 6) processBroadcast: marca "completed"
-        { data: [{}], error: null }, // 7) webhook ACK: delivered_count/read_count
-      ],
       broadcast_contacts: [
-        { data: null, error: null }, // insert do contato importado
-        { data: [{ id: 'contact-int-1', phone: '11988887777', name: 'Lead Um' }], error: null }, // processBroadcast: contatos pendentes
-        { data: [{}], error: null }, // processBroadcast: marca "sent" com wa_message_id
         { data: [{ campaign_id: 'camp-int-1' }], error: null }, // webhook ACK: update casando wa_message_id -> campaign_id
         { data: null, error: null, count: 1 }, // recomputeBroadcastCounts: COUNT delivered+read
         { data: null, error: null, count: 0 }, // recomputeBroadcastCounts: COUNT read
+      ],
+      broadcast_campaigns: [
+        { data: [{}], error: null }, // recomputeBroadcastCounts: update dos contadores
       ],
       channels: [
         { data: [{ tenant_id: 'tenant-bcast-1' }], error: null }, // resolveEvolutionTenant pela instância
@@ -126,9 +147,10 @@ describe('broadcast + webhooks (integração: campanha -> envio -> ACK fecha o c
     await flush() // deixa o processBroadcast (fire-and-forget) terminar
 
     expect(mockState.sendText).toHaveBeenCalledWith('tenant-bcast-1', '11988887777', 'Confira nossa promoção!')
-    const sentUpdate = callsFor('broadcast_contacts', 'update').find((c) => c.args[0]?.status === 'sent')
-    expect(sentUpdate.args[0]).toMatchObject({ status: 'sent', wa_message_id: 'wa-ack-1' })
-    const completedUpdate = callsFor('broadcast_campaigns', 'update').find((c) => c.args[0]?.status === 'completed')
+    const sentUpdate = rlsUpdatesMatching(/broadcast_contacts/).find((c) => c.sql.includes("'sent'"))
+    expect(sentUpdate).toBeTruthy()
+    expect(sentUpdate.params).toContain('wa-ack-1')
+    const completedUpdate = rlsUpdatesMatching(/broadcast_campaigns/).find((c) => c.sql.includes("'completed'"))
     expect(completedUpdate).toBeTruthy()
 
     // ── passo 4: a Evolution manda o webhook de ACK (messages.update) para o MESMO wa_message_id ──

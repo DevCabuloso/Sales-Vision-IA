@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, user: null, hashPassword: null, logUsage: null }))
 
@@ -17,6 +18,10 @@ vi.mock('../../db/supabase.js', () => ({
     if (error) throw new Error(error.message)
     return data
   },
+}))
+
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 vi.mock('../../services/auth.js', () => ({
@@ -37,12 +42,18 @@ function buildApp() {
 }
 
 let supabaseMock
+let rlsMock
 function setSupabase(responses) {
   supabaseMock = createSupabaseMock(responses)
   mockState.box.supabase = supabaseMock.supabase
   return supabaseMock
 }
-function insertCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'insert') }
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
+}
+function insertCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^INSERT/.test(c.sql)) }
 
 describe('routes/operators', () => {
   beforeEach(() => {
@@ -50,10 +61,12 @@ describe('routes/operators', () => {
     mockState.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }
     mockState.hashPassword = vi.fn().mockResolvedValue('hashed-pw')
     mockState.logUsage = vi.fn().mockResolvedValue(undefined)
+    setSupabase({})
+    setRls()
   })
 
   it('GET / lista operadores excluindo o owner', async () => {
-    setSupabase({ users: [{ data: [{ id: 'u1', name: 'Ana', role: 'agent' }], error: null }] })
+    rlsMock.queueRows([{ id: 'u1', name: 'Ana', role: 'agent' }])
     const app = buildApp()
     const res = await request(app).get('/api/operators')
     expect(res.body.operators).toHaveLength(1)
@@ -74,14 +87,12 @@ describe('routes/operators', () => {
   })
 
   it('GET /dashboard agrega métricas de uso por operador', async () => {
-    setSupabase({
-      users: [{ data: [{ id: 'u1', name: 'Ana', email: 'ana@ex.com', role: 'agent', active: true }], error: null }],
-      usage_events: [{ data: [
-        { user_id: 'u1', event_type: 'message_sent' },
-        { user_id: 'u1', event_type: 'message_sent' },
-        { user_id: 'u1', event_type: 'lead_created' },
-      ], error: null }],
-    })
+    rlsMock.queueRows([{ id: 'u1', name: 'Ana', email: 'ana@ex.com', role: 'agent', active: true }])
+    rlsMock.queueRows([
+      { user_id: 'u1', event_type: 'message_sent' },
+      { user_id: 'u1', event_type: 'message_sent' },
+      { user_id: 'u1', event_type: 'lead_created' },
+    ])
     const app = buildApp()
     const res = await request(app).get('/api/operators/dashboard')
     expect(res.body.metrics[0]).toMatchObject({ messages_sent: 2, leads_handled: 1, appointments: 0, takeovers: 0 })
@@ -107,7 +118,7 @@ describe('routes/operators', () => {
       expect(res.status).toBe(400)
     })
 
-    it('retorna 409 quando o e-mail já está cadastrado', async () => {
+    it('retorna 409 quando o e-mail já está cadastrado (checagem global, entre tenants)', async () => {
       setSupabase({ users: [{ data: [{ id: 'existing' }], error: null }] })
       const app = buildApp()
       const res = await request(app).post('/api/operators').send({ name: 'Bia', email: 'bia@ex.com', password: 'senha123' })
@@ -115,15 +126,17 @@ describe('routes/operators', () => {
     })
 
     it('cria o operador com as permissões padrão de admin quando role=admin', async () => {
-      setSupabase({ users: [{ data: [], error: null }, { data: { id: 'u1', role: 'admin' }, error: null }] })
+      setSupabase({ users: [{ data: [], error: null }] })
+      rlsMock.queueRows([{ id: 'u1', role: 'admin' }])
       const app = buildApp()
       const res = await request(app).post('/api/operators').send({ name: 'Bia', email: 'BIA@ex.com', password: 'senha123', role: 'admin' })
 
       expect(res.status).toBe(201)
-      const insert = insertCallsFor('users')[0]
-      expect(insert.args[0].email).toBe('bia@ex.com')
-      expect(insert.args[0].permissions.broadcast).toBe(true)
-      expect(insert.args[0].password_hash).toBe('hashed-pw')
+      const insert = insertCallsMatching(/INSERT INTO users/)[0]
+      expect(insert.params).toContain('bia@ex.com')
+      expect(insert.params).toContain('hashed-pw')
+      const perms = JSON.parse(insert.params.find((p) => typeof p === 'string' && p.includes('broadcast')))
+      expect(perms.broadcast).toBe(true)
     })
   })
 
@@ -143,14 +156,14 @@ describe('routes/operators', () => {
     })
 
     it('força as permissões padrão quando o role muda para admin', async () => {
-      setSupabase({ users: [{ data: { id: 'u1', role: 'admin' }, error: null }] })
+      rlsMock.queueRows([{ id: 'u1', role: 'admin' }])
       const app = buildApp()
       const res = await request(app).patch('/api/operators/u1').send({ role: 'admin' })
       expect(res.status).toBe(200)
     })
 
     it('registra um evento de auditoria quando role/permissions/is_restricted/active mudam', async () => {
-      setSupabase({ users: [{ data: { id: 'u1', role: 'admin' }, error: null }] })
+      rlsMock.queueRows([{ id: 'u1', role: 'admin' }])
       const app = buildApp()
       const res = await request(app).patch('/api/operators/u1').send({ role: 'admin' })
       expect(res.status).toBe(200)
@@ -162,7 +175,7 @@ describe('routes/operators', () => {
 
     it('invalida o cache de req.user do operador quando role/permissions/is_restricted/active mudam', async () => {
       mockState.invalidateUserCache = vi.fn()
-      setSupabase({ users: [{ data: { id: 'u1', role: 'agent' }, error: null }] })
+      rlsMock.queueRows([{ id: 'u1', role: 'agent' }])
       const app = buildApp()
       await request(app).patch('/api/operators/u1').send({ is_restricted: true, permissions: { chat: false } })
       expect(mockState.invalidateUserCache).toHaveBeenCalledWith('u1')
@@ -170,14 +183,14 @@ describe('routes/operators', () => {
 
     it('não invalida o cache quando só campos não sensíveis mudam', async () => {
       mockState.invalidateUserCache = vi.fn()
-      setSupabase({ users: [{ data: { id: 'u1', role: 'agent' }, error: null }] })
+      rlsMock.queueRows([{ id: 'u1', role: 'agent' }])
       const app = buildApp()
       await request(app).patch('/api/operators/u1').send({ phone: '11999999999' })
       expect(mockState.invalidateUserCache).not.toHaveBeenCalled()
     })
 
     it('não registra evento de auditoria quando só campos não sensíveis mudam (ex.: nome)', async () => {
-      setSupabase({ users: [{ data: { id: 'u1', name: 'Novo' }, error: null }] })
+      rlsMock.queueRows([{ id: 'u1', name: 'Novo' }])
       const app = buildApp()
       const res = await request(app).patch('/api/operators/u1').send({ name: 'Novo' })
       expect(res.status).toBe(200)
@@ -193,7 +206,6 @@ describe('routes/operators', () => {
     })
 
     it('reseta a senha com sucesso e registra um evento de auditoria', async () => {
-      setSupabase({})
       const app = buildApp()
       const res = await request(app).post('/api/operators/u1/reset-password').send({ password: 'novasenha123' })
       expect(res.status).toBe(200)
@@ -210,7 +222,6 @@ describe('routes/operators', () => {
     })
 
     it('exclui outro operador com sucesso', async () => {
-      setSupabase({})
       const app = buildApp()
       const res = await request(app).delete('/api/operators/u2')
       expect(res.status).toBe(200)
@@ -218,7 +229,6 @@ describe('routes/operators', () => {
 
     it('invalida o cache de req.user do operador excluído', async () => {
       mockState.invalidateUserCache = vi.fn()
-      setSupabase({})
       const app = buildApp()
       await request(app).delete('/api/operators/u2')
       expect(mockState.invalidateUserCache).toHaveBeenCalledWith('u2')

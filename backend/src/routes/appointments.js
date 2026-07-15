@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { createEvent, cancelEvent, listEvents, updateEvent } from '../services/googleCalendar.js'
 import { logUsage } from '../services/usage.js'
@@ -13,13 +13,15 @@ appointmentsRouter.get('/', async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000)
   const offset = parseInt(req.query.offset, 10) || 0
 
-  const rows = unwrap(
-    await supabase.from('appointments')
-      .select('id, lead_id, lead_name, title, provider, external_id, start_time, end_time, meeting_link, status')
-      .eq('tenant_id', req.user.tenantId)
-      .order('start_time', { ascending: false })
-      .range(offset, offset + limit - 1)
-  )
+  const rows = await withTenant(req.user.tenantId, async (client) => {
+    const r = await client.query(
+      `SELECT id, lead_id, lead_name, title, provider, external_id, start_time, end_time, meeting_link, status
+       FROM appointments WHERE tenant_id = $1
+       ORDER BY start_time DESC LIMIT $2 OFFSET $3`,
+      [req.user.tenantId, limit, offset]
+    )
+    return r.rows
+  })
   res.json({ appointments: rows, limit, offset })
 })
 
@@ -38,46 +40,38 @@ appointmentsRouter.post('/sync', async (req, res) => {
       showDeleted: true,
     })
 
-    // busca external_ids já existentes para não duplicar
-    const existing = unwrap(
-      await supabase.from('appointments').select('id, external_id, status')
-        .eq('tenant_id', req.user.tenantId).not('external_id', 'is', null)
-    )
-    const existingMap = Object.fromEntries(existing.map((r) => [r.external_id, r]))
+    const synced = await withTenant(req.user.tenantId, async (client) => {
+      // busca external_ids já existentes para não duplicar
+      const existingR = await client.query(
+        "SELECT id, external_id, status FROM appointments WHERE tenant_id = $1 AND external_id IS NOT NULL",
+        [req.user.tenantId]
+      )
+      const existingMap = Object.fromEntries(existingR.rows.map((r) => [r.external_id, r]))
 
-    let synced = 0
-    for (const ev of events) {
-      if (!ev.externalId) continue
-      const status = ev.status === 'cancelled' ? 'cancelled' : 'scheduled'
+      let synced = 0
+      for (const ev of events) {
+        if (!ev.externalId) continue
+        const status = ev.status === 'cancelled' ? 'cancelled' : 'scheduled'
 
-      if (existingMap[ev.externalId]) {
-        // atualiza dados que podem ter mudado
-        unwrap(
-          await supabase.from('appointments').update({
-            title: ev.title || '(sem título)',
-            start_time: ev.start,
-            end_time: ev.end,
-            meeting_link: ev.meetingLink || null,
-            status,
-          }).eq('id', existingMap[ev.externalId].id)
-        )
-      } else {
-        // insere novo evento vindo do Google Calendar
-        unwrap(
-          await supabase.from('appointments').insert({
-            tenant_id: req.user.tenantId,
-            title: ev.title || '(sem título)',
-            provider: 'google',
-            external_id: ev.externalId,
-            start_time: ev.start,
-            end_time: ev.end,
-            meeting_link: ev.meetingLink || null,
-            status,
-          })
-        )
+        if (existingMap[ev.externalId]) {
+          // atualiza dados que podem ter mudado
+          await client.query(
+            `UPDATE appointments SET title = $1, start_time = $2, end_time = $3, meeting_link = $4, status = $5
+             WHERE id = $6`,
+            [ev.title || '(sem título)', ev.start, ev.end, ev.meetingLink || null, status, existingMap[ev.externalId].id]
+          )
+        } else {
+          // insere novo evento vindo do Google Calendar
+          await client.query(
+            `INSERT INTO appointments (tenant_id, title, provider, external_id, start_time, end_time, meeting_link, status)
+             VALUES ($1, $2, 'google', $3, $4, $5, $6, $7)`,
+            [req.user.tenantId, ev.title || '(sem título)', ev.externalId, ev.start, ev.end, ev.meetingLink || null, status]
+          )
+        }
+        synced++
       }
-      synced++
-    }
+      return synced
+    })
 
     res.json({ synced })
   } catch (e) {
@@ -114,20 +108,15 @@ appointmentsRouter.post('/', async (req, res) => {
       start: d.start,
       end: d.end,
     })
-    const row = unwrap(
-      await supabase.from('appointments').insert({
-        tenant_id: req.user.tenantId,
-        lead_id: d.leadId || null,
-        lead_name: d.leadName || null,
-        title: d.title,
-        provider: 'google',
-        external_id: ev.externalId,
-        start_time: d.start,
-        end_time: d.end,
-        meeting_link: ev.meetingLink,
-        status: 'scheduled',
-      }).select().single()
-    )
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `INSERT INTO appointments (tenant_id, lead_id, lead_name, title, provider, external_id, start_time, end_time, meeting_link, status)
+         VALUES ($1, $2, $3, $4, 'google', $5, $6, $7, $8, 'scheduled')
+         RETURNING *`,
+        [req.user.tenantId, d.leadId || null, d.leadName || null, d.title, ev.externalId, d.start, d.end, ev.meetingLink]
+      )
+      return r.rows[0]
+    })
     await logUsage(req.user.tenantId, req.user.id, 'appointment_created')
     res.status(201).json({ appointment: row, meetingLink: ev.meetingLink })
   } catch (e) {
@@ -147,12 +136,15 @@ appointmentsRouter.patch('/:id', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Dados inválidos.' })
   const d = parsed.data
 
-  const rows = unwrap(
-    await supabase.from('appointments').select('external_id, status')
-      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-  )
-  if (!rows.length) return res.status(404).json({ error: 'Reunião não encontrada.' })
-  if (rows[0].status === 'cancelled') return res.status(400).json({ error: 'Não é possível reagendar uma reunião cancelada.' })
+  const current = await withTenant(req.user.tenantId, async (client) => {
+    const r = await client.query(
+      'SELECT external_id, status FROM appointments WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+      [req.params.id, req.user.tenantId]
+    )
+    return r.rows[0]
+  })
+  if (!current) return res.status(404).json({ error: 'Reunião não encontrada.' })
+  if (current.status === 'cancelled') return res.status(400).json({ error: 'Não é possível reagendar uma reunião cancelada.' })
 
   const patch = { updated_at: new Date().toISOString() }
   if (d.title) patch.title = d.title
@@ -160,14 +152,23 @@ appointmentsRouter.patch('/:id', async (req, res) => {
   if (d.end) patch.end_time = d.end
 
   try {
-    if (rows[0].external_id) {
-      const ev = await updateEvent(req.user.tenantId, rows[0].external_id, { summary: d.title, start: d.start, end: d.end })
+    if (current.external_id) {
+      const ev = await updateEvent(req.user.tenantId, current.external_id, { summary: d.title, start: d.start, end: d.end })
       if (ev.meetingLink) patch.meeting_link = ev.meetingLink
     }
-    const row = unwrap(
-      await supabase.from('appointments').update(patch)
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).select().single()
-    )
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const columns = Object.keys(patch)
+      const setClauses = columns.map((c, i) => `${c} = $${i + 1}`)
+      const values = columns.map((c) => patch[c])
+      values.push(req.params.id, req.user.tenantId)
+      const r = await client.query(
+        `UPDATE appointments SET ${setClauses.join(', ')}
+         WHERE id = $${columns.length + 1} AND tenant_id = $${columns.length + 2}
+         RETURNING *`,
+        values
+      )
+      return r.rows[0]
+    })
     res.json({ appointment: row })
   } catch (e) {
     res.status(502).json({ error: 'Falha ao reagendar evento: ' + e.message })
@@ -176,22 +177,27 @@ appointmentsRouter.patch('/:id', async (req, res) => {
 
 // ─── POST /api/appointments/:id/cancel ───
 appointmentsRouter.post('/:id/cancel', async (req, res) => {
-  const rows = unwrap(
-    await supabase.from('appointments').select('external_id')
-      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-  )
-  if (!rows.length) return res.status(404).json({ error: 'Reunião não encontrada.' })
+  const current = await withTenant(req.user.tenantId, async (client) => {
+    const r = await client.query(
+      'SELECT external_id FROM appointments WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+      [req.params.id, req.user.tenantId]
+    )
+    return r.rows[0]
+  })
+  if (!current) return res.status(404).json({ error: 'Reunião não encontrada.' })
 
-  if (rows[0].external_id) {
+  if (current.external_id) {
     try {
-      await cancelEvent(req.user.tenantId, rows[0].external_id)
+      await cancelEvent(req.user.tenantId, current.external_id)
     } catch (e) {
       console.warn('[appts] falha ao cancelar no Google:', e.message)
     }
   }
-  unwrap(
-    await supabase.from('appointments').update({ status: 'cancelled' })
-      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
+  await withTenant(req.user.tenantId, (client) =>
+    client.query(
+      "UPDATE appointments SET status = 'cancelled' WHERE id = $1 AND tenant_id = $2",
+      [req.params.id, req.user.tenantId]
+    )
   )
   res.json({ cancelled: true })
 })

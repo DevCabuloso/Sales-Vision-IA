@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({
   box: {}, user: null, logUsage: null, uploadChatMedia: null, getTenantTimezone: null,
@@ -15,12 +15,8 @@ vi.mock('../../middleware/auth.js', () => ({
   requirePermission: (...keys) => { mockState.permCalls.push(keys); return (req, res, next) => next() },
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 vi.mock('../../services/usage.js', () => ({
@@ -56,15 +52,15 @@ function buildApp() {
   return app
 }
 
-let supabaseMock
-function setSupabase(responses) {
-  supabaseMock = createSupabaseMock(responses)
-  mockState.box.supabase = supabaseMock.supabase
-  return supabaseMock
+let rlsMock
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
 }
-function updateCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'update') }
-function insertCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'insert') }
-function deleteCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'delete') }
+function updateCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^UPDATE/.test(c.sql)) }
+function insertCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^INSERT/.test(c.sql)) }
+function deleteCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql) && /^DELETE/.test(c.sql)) }
 
 describe('routes/chat', () => {
   beforeEach(() => {
@@ -79,6 +75,7 @@ describe('routes/chat', () => {
     mockState.editMessage = vi.fn().mockResolvedValue({ ok: true })
     mockState.deleteMessage = vi.fn().mockResolvedValue({ ok: true })
     mockState.markSentByPlatform = vi.fn()
+    setRls()
   })
 
   it('exige a permissão "chat" (enforcement de operador restrito) em toda a rota', () => {
@@ -87,11 +84,9 @@ describe('routes/chat', () => {
 
   describe('GET / (listar conversas)', () => {
     it('manager vê todas as conversas sem filtro adicional', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', is_group: false, assigned_to: null, conversation_status: 'pending', queue_id: null, updated_at: '2026-01-01' }], error: null }],
-        messages: [{ data: [{ lead_id: 'lead-1', text: 'Oi', role: 'lead', created_at: '2026-01-01' }], error: null }],
-        channels: [{ data: [], error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', is_group: false, assigned_to: null, conversation_status: 'pending', queue_id: null, updated_at: '2026-01-01' }])
+      rlsMock.queueRows([{ lead_id: 'lead-1', text: 'Oi', role: 'lead', created_at: '2026-01-01' }])
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/chat')
       expect(res.status).toBe(200)
@@ -101,19 +96,15 @@ describe('routes/chat', () => {
 
     it('operador não-manager só vê tickets pendentes sem fila atribuída (quando show_unassigned_tickets é true) ou atribuídos a ele', async () => {
       mockState.user = { id: 'user-2', tenantId: 'tenant-1', role: 'agent', name: 'Operador' }
-      setSupabase({
-        leads: [{
-          data: [
-            { id: 'lead-A', is_group: false, assigned_to: null, conversation_status: 'pending', queue_id: null, updated_at: '2026-01-01' },
-            { id: 'lead-B', is_group: false, assigned_to: 'outro-user', conversation_status: 'pending', queue_id: 'queue-x', updated_at: '2026-01-01' },
-            { id: 'lead-C', is_group: false, assigned_to: 'user-2', conversation_status: 'open', queue_id: null, updated_at: '2026-01-01' },
-          ], error: null,
-        }],
-        messages: [{ data: [], error: null }],
-        channels: [{ data: [], error: null }],
-        queue_operators: [{ data: [], error: null }],
-        tenants: [{ data: [{ op_settings: {} }], error: null }],
-      })
+      rlsMock.queueRows([
+        { id: 'lead-A', is_group: false, assigned_to: null, conversation_status: 'pending', queue_id: null, updated_at: '2026-01-01' },
+        { id: 'lead-B', is_group: false, assigned_to: 'outro-user', conversation_status: 'pending', queue_id: 'queue-x', updated_at: '2026-01-01' },
+        { id: 'lead-C', is_group: false, assigned_to: 'user-2', conversation_status: 'open', queue_id: null, updated_at: '2026-01-01' },
+      ])
+      rlsMock.queueRows([])
+      rlsMock.queueRows([])
+      rlsMock.queueRows([])
+      rlsMock.queueRows([{ op_settings: {} }])
       const app = buildApp()
       const res = await request(app).get('/api/chat')
       const ids = res.body.leads.map((l) => l.id)
@@ -122,24 +113,23 @@ describe('routes/chat', () => {
       expect(ids).not.toContain('lead-B') // pendente com fila que não é minha
     })
 
-    it('aceita limit/offset e reflete na resposta e no range da query', async () => {
-      setSupabase({
-        leads: [{ data: [], error: null }],
-      })
+    it('aceita limit/offset e reflete na resposta e nos parâmetros da query', async () => {
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/chat').query({ limit: '20', offset: '40' })
       expect(res.status).toBe(200)
       expect(res.body).toMatchObject({ limit: 20, offset: 40 })
-      const rangeCall = supabaseMock.calls.find((c) => c.table === 'leads' && c.method === 'range')
-      expect(rangeCall.args).toEqual([40, 59])
+      const call = rlsMock.calls.find((c) => /FROM leads/.test(c.sql))
+      expect(call.params.slice(-2)).toEqual([20, 40])
     })
 
     it('usa limit=300 e offset=0 por padrão, e limita o teto a 1000', async () => {
-      setSupabase({ leads: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const defaultRes = await request(app).get('/api/chat')
       expect(defaultRes.body).toMatchObject({ limit: 300, offset: 0 })
 
+      rlsMock.queueRows([])
       const cappedRes = await request(app).get('/api/chat').query({ limit: '5000' })
       expect(cappedRes.body.limit).toBe(1000)
     })
@@ -153,24 +143,23 @@ describe('routes/chat', () => {
     })
 
     it('cria/atualiza o lead, registra o log do ticket e envia a mensagem inicial', async () => {
-      setSupabase({
-        leads: [{ data: { id: 'lead-1', name: 'Ana', phone: '5511988887777', stage: 'Novo Lead', conversation_status: 'open', assigned_to: 'user-1' }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', name: 'Ana', phone: '5511988887777', stage: 'Novo Lead', conversation_status: 'open', assigned_to: 'user-1' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/start').send({ phone: '(11) 98888-7777', name: 'Ana', message: 'Oi, tudo bem?' })
 
       expect(res.status).toBe(201)
-      expect(insertCallsFor('ticket_logs')[0].args[0]).toMatchObject({ action: 'opened' })
-      expect(insertCallsFor('messages')[0].args[0]).toMatchObject({ role: 'agent', text: 'Oi, tudo bem?' })
+      const ticketInsert = insertCallsMatching(/INSERT INTO ticket_logs/)[0]
+      expect(ticketInsert.params).toContain('opened')
+      const msgInsert = insertCallsMatching(/INSERT INTO messages/)[0]
+      expect(msgInsert.sql).toContain("'agent'")
+      expect(msgInsert.params).toContain('Oi, tudo bem?')
       expect(mockState.sendText).toHaveBeenCalledWith('tenant-1', '11988887777', 'Oi, tudo bem?')
     })
   })
 
   describe('GET /:leadId/messages', () => {
     it('retorna as mensagens em ordem cronológica (mais antiga primeiro) por padrão', async () => {
-      setSupabase({
-        messages: [{ data: [{ id: 3, text: 'terceira' }, { id: 2, text: 'segunda' }, { id: 1, text: 'primeira' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 3, text: 'terceira' }, { id: 2, text: 'segunda' }, { id: 1, text: 'primeira' }])
       const app = buildApp()
       const res = await request(app).get('/api/chat/lead-1/messages')
       expect(res.body.messages.map((m) => m.id)).toEqual([1, 2, 3])
@@ -179,24 +168,22 @@ describe('routes/chat', () => {
 
   describe('POST /:leadId/messages', () => {
     it('retorna 404 quando o lead não existe', async () => {
-      setSupabase({ leads: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-x/messages').send({ text: 'Oi' })
       expect(res.status).toBe(404)
     })
 
     it('retorna 403 quando o ticket não está aberto', async () => {
-      setSupabase({ leads: [{ data: [{ id: 'lead-1', phone: '5511988887777', conversation_status: 'pending' }], error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', phone: '5511988887777', conversation_status: 'pending' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages').send({ text: 'Oi' })
       expect(res.status).toBe(403)
     })
 
     it('envia a mensagem, marca como enviada pela plataforma e atualiza o wa_message_id', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', phone: '5511988887777', human_takeover: true, conversation_status: 'open' }], error: null }],
-        messages: [{ data: { id: 10, text: 'Olá!' }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', phone: '5511988887777', human_takeover: true, conversation_status: 'open' }])
+      rlsMock.queueRows([{ id: 10, text: 'Olá!' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages').send({ text: 'Olá!' })
 
@@ -204,32 +191,29 @@ describe('routes/chat', () => {
       expect(mockState.markSentByPlatform).toHaveBeenCalledWith('tenant-1', '5511988887777', 'Olá!')
       expect(mockState.sendText).toHaveBeenCalledWith('tenant-1', '5511988887777', 'Olá!', expect.any(Object))
       // envia ANTES de persistir — o wa_message_id/send_status já vêm no próprio insert, sem update posterior
-      const insertCall = insertCallsFor('messages').find((c) => c.args[0]?.wa_message_id === 'wa-1')
-      expect(insertCall).toBeTruthy()
-      expect(insertCall.args[0].send_status).toBe('sent')
-      expect(updateCallsFor('messages')).toHaveLength(0)
+      const insertCall = insertCallsMatching(/INSERT INTO messages/)[0]
+      expect(insertCall.params).toContain('wa-1')
+      expect(insertCall.params).toContain('sent')
+      expect(updateCallsMatching(/messages/)).toHaveLength(0)
       expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'message_sent', { by: 'agent' })
     })
 
     it('persiste a mensagem com send_status "failed" quando o envio ao WhatsApp falha (sem sumir com o texto digitado)', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', phone: '5511988887777', human_takeover: true, conversation_status: 'open' }], error: null }],
-        messages: [{ data: { id: 11, text: 'Olá!', send_status: 'failed' }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', phone: '5511988887777', human_takeover: true, conversation_status: 'open' }])
+      rlsMock.queueRows([{ id: 11, text: 'Olá!', send_status: 'failed' }])
       mockState.sendText.mockRejectedValue(new Error('Evolution indisponível'))
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages').send({ text: 'Olá!' })
 
       expect(res.status).toBe(201)
-      const insertCall = insertCallsFor('messages')[0]
-      expect(insertCall.args[0]).toMatchObject({ send_status: 'failed', send_error: 'Evolution indisponível', wa_message_id: null })
+      const insertCall = insertCallsMatching(/INSERT INTO messages/)[0]
+      expect(insertCall.params).toContain('failed')
+      expect(insertCall.params).toContain('Evolution indisponível')
     })
 
     it('não tenta enviar via WhatsApp quando o lead não tem telefone', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', phone: null, conversation_status: 'open' }], error: null }],
-        messages: [{ data: { id: 11, text: 'Olá!' }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', phone: null, conversation_status: 'open' }])
+      rlsMock.queueRows([{ id: 11, text: 'Olá!' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages').send({ text: 'Olá!' })
       expect(res.status).toBe(201)
@@ -239,34 +223,30 @@ describe('routes/chat', () => {
 
   describe('PATCH /:leadId/messages/:messageId (editar)', () => {
     it('retorna 404 quando a mensagem não existe', async () => {
-      setSupabase({ messages: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).patch('/api/chat/lead-1/messages/1').send({ text: 'novo texto' })
       expect(res.status).toBe(404)
     })
 
     it('retorna 403 quando a mensagem não foi enviada pela plataforma (role != agent)', async () => {
-      setSupabase({ messages: [{ data: [{ id: 1, role: 'lead', provider: 'evolution', wa_message_id: 'wa-1' }], error: null }] })
+      rlsMock.queueRows([{ id: 1, role: 'lead', provider: 'evolution', wa_message_id: 'wa-1' }])
       const app = buildApp()
       const res = await request(app).patch('/api/chat/lead-1/messages/1').send({ text: 'novo texto' })
       expect(res.status).toBe(403)
     })
 
     it('retorna 400 quando o provider não é evolution', async () => {
-      setSupabase({ messages: [{ data: [{ id: 1, role: 'agent', provider: 'meta_whatsapp', wa_message_id: 'wa-1' }], error: null }] })
+      rlsMock.queueRows([{ id: 1, role: 'agent', provider: 'meta_whatsapp', wa_message_id: 'wa-1' }])
       const app = buildApp()
       const res = await request(app).patch('/api/chat/lead-1/messages/1').send({ text: 'novo texto' })
       expect(res.status).toBe(400)
     })
 
     it('edita a mensagem com sucesso quando todas as condições são atendidas', async () => {
-      setSupabase({
-        messages: [
-          { data: [{ id: 1, role: 'agent', provider: 'evolution', wa_message_id: 'wa-1', wa_remote_jid: null }], error: null },
-          { data: { id: 1, text: 'texto editado' }, error: null },
-        ],
-        leads: [{ data: [{ wa_remote_jid: '5511988887777@s.whatsapp.net' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 1, role: 'agent', provider: 'evolution', wa_message_id: 'wa-1', wa_remote_jid: null }])
+      rlsMock.queueRows([{ wa_remote_jid: '5511988887777@s.whatsapp.net' }])
+      rlsMock.queueRows([{ id: 1, text: 'texto editado' }])
       const app = buildApp()
       const res = await request(app).patch('/api/chat/lead-1/messages/1').send({ text: 'texto editado' })
 
@@ -275,10 +255,8 @@ describe('routes/chat', () => {
     })
 
     it('mapeia a limitação conhecida de remoteJid/LID para 400', async () => {
-      setSupabase({
-        messages: [{ data: [{ id: 1, role: 'agent', provider: 'evolution', wa_message_id: 'wa-1', wa_remote_jid: '5511@lid' }], error: null }],
-        leads: [{ data: [{ wa_remote_jid: '5511@lid' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 1, role: 'agent', provider: 'evolution', wa_message_id: 'wa-1', wa_remote_jid: '5511@lid' }])
+      rlsMock.queueRows([{ wa_remote_jid: '5511@lid' }])
       mockState.editMessage.mockRejectedValue(new Error('Invalid remoteJid'))
       const app = buildApp()
       const res = await request(app).patch('/api/chat/lead-1/messages/1').send({ text: 'x' })
@@ -288,7 +266,7 @@ describe('routes/chat', () => {
 
   describe('DELETE /:leadId/messages/:messageId (apagar)', () => {
     it('é idempotente quando a mensagem já foi apagada', async () => {
-      setSupabase({ messages: [{ data: [{ id: 1, deleted_at: '2026-01-01T00:00:00Z' }], error: null }] })
+      rlsMock.queueRows([{ id: 1, deleted_at: '2026-01-01T00:00:00Z' }])
       const app = buildApp()
       const res = await request(app).delete('/api/chat/lead-1/messages/1')
       expect(res.status).toBe(200)
@@ -296,17 +274,15 @@ describe('routes/chat', () => {
     })
 
     it('apaga a mensagem no WhatsApp e faz o soft-delete local', async () => {
-      setSupabase({
-        messages: [{ data: [{ id: 1, role: 'agent', provider: 'evolution', wa_message_id: 'wa-1', wa_remote_jid: '5511@s.whatsapp.net', deleted_at: null }], error: null }],
-        leads: [{ data: [{ wa_remote_jid: '5511@s.whatsapp.net' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 1, role: 'agent', provider: 'evolution', wa_message_id: 'wa-1', wa_remote_jid: '5511@s.whatsapp.net', deleted_at: null }])
+      rlsMock.queueRows([{ wa_remote_jid: '5511@s.whatsapp.net' }])
       const app = buildApp()
       const res = await request(app).delete('/api/chat/lead-1/messages/1')
 
       expect(res.status).toBe(200)
       expect(mockState.deleteMessage).toHaveBeenCalledWith('tenant-1', { waMessageId: 'wa-1', remoteJid: '5511@s.whatsapp.net' })
-      const softDelete = updateCallsFor('messages')[0]
-      expect(softDelete.args[0]).toMatchObject({ text: '', media_url: null })
+      const softDelete = updateCallsMatching(/messages/)[0]
+      expect(softDelete.sql).toContain('deleted_at')
     })
   })
 
@@ -318,23 +294,23 @@ describe('routes/chat', () => {
     })
 
     it('transfere para humano: atualiza lead, loga uso e encerra sessão de fluxo ativa', async () => {
-      setSupabase({ leads: [{ data: { id: 'lead-1', human_takeover: true }, error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', human_takeover: true }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/transfer').send({ human_takeover: true })
 
       expect(res.status).toBe(200)
       expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'human_takeover', { lead_id: 'lead-1' })
-      const flowUpdate = updateCallsFor('flow_sessions').find((c) => c.args[0]?.status === 'transferred')
+      const flowUpdate = updateCallsMatching(/flow_sessions/).find((c) => c.sql.includes("'transferred'"))
       expect(flowUpdate).toBeTruthy()
     })
 
     it('devolve para a IA: não loga uso nem encerra sessão de fluxo', async () => {
-      setSupabase({ leads: [{ data: { id: 'lead-1', human_takeover: false }, error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', human_takeover: false }])
       const app = buildApp()
       await request(app).post('/api/chat/lead-1/transfer').send({ human_takeover: false })
 
       expect(mockState.logUsage).not.toHaveBeenCalled()
-      expect(updateCallsFor('flow_sessions').length).toBe(0)
+      expect(updateCallsMatching(/flow_sessions/).length).toBe(0)
     })
   })
 
@@ -347,14 +323,14 @@ describe('routes/chat', () => {
     })
 
     it('manager exclui a conversa e todos os registros relacionados', async () => {
-      setSupabase({ leads: [{ data: [{ id: 'lead-1' }], error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1' }])
       const app = buildApp()
       const res = await request(app).delete('/api/chat/lead-1')
 
       expect(res.status).toBe(200)
-      expect(deleteCallsFor('messages').length).toBe(1)
-      expect(deleteCallsFor('ticket_logs').length).toBe(1)
-      expect(deleteCallsFor('leads').length).toBe(1)
+      expect(deleteCallsMatching(/messages/).length).toBe(1)
+      expect(deleteCallsMatching(/ticket_logs/).length).toBe(1)
+      expect(deleteCallsMatching(/leads/).length).toBe(1)
     })
   })
 
@@ -366,47 +342,37 @@ describe('routes/chat', () => {
     })
 
     it('retorna 409 quando já existe um acompanhamento ativo', async () => {
-      setSupabase({
-        followup_enrollments: [{ data: [{ id: 'enr-existing', sequence_id: 'seq-1', status: 'active', started_at: '2026-01-01T00:00:00.000Z' }], error: null }],
-        followup_sequences: [{ data: [{ name: 'Seq X' }], error: null }],
-        followup_enrollment_messages: [{ data: [{ order_index: 0, status: 'sent', send_at: '2026-01-01T00:00:00.000Z' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 'enr-existing', sequence_id: 'seq-1', status: 'active', started_at: '2026-01-01T00:00:00.000Z' }])
+      rlsMock.queueRows([{ name: 'Seq X' }])
+      rlsMock.queueRows([{ order_index: 0, status: 'sent', send_at: '2026-01-01T00:00:00.000Z' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/followup/start').send({ sequence_id: 'seq-1' })
       expect(res.status).toBe(409)
     })
 
     it('inicia um novo acompanhamento e materializa as mensagens da sequência', async () => {
-      setSupabase({
-        followup_enrollments: [
-          { data: [], error: null },
-          { data: { id: 'enr-1', sequence_id: 'seq-1' }, error: null },
-          { data: [{ id: 'enr-1', sequence_id: 'seq-1', status: 'active', started_at: '2026-01-01T00:00:00.000Z' }], error: null },
-        ],
-        leads: [{ data: [{ id: 'lead-1' }], error: null }],
-        followup_sequences: [
-          { data: [{ id: 'seq-1', name: 'Sequência Pós-Venda', time_mode: 'default', default_send_time: '09:00' }], error: null },
-          { data: [{ name: 'Sequência Pós-Venda' }], error: null },
-        ],
-        followup_steps: [{ data: [{ id: 'step-1', order_index: 0, delay_days: 0, text: 'Oi! Passando para saber se ficou alguma dúvida.' }], error: null }],
-        followup_enrollment_messages: [
-          { data: [{ id: 'fm-1' }], error: null },
-          { data: [{ order_index: 0, status: 'pending', send_at: '2026-01-01T00:00:00.000Z' }], error: null },
-        ],
-      })
+      rlsMock.queueRows([]) // loadActiveFollowup#1: sem enrollment ativo
+      rlsMock.queueRows([{ id: 'lead-1' }]) // lead existe
+      rlsMock.queueRows([{ id: 'seq-1', name: 'Sequência Pós-Venda', time_mode: 'default', default_send_time: '09:00' }]) // sequência
+      rlsMock.queueRows([{ id: 'enr-1', sequence_id: 'seq-1' }]) // insert enrollment
+      rlsMock.queueRows([{ id: 'step-1', order_index: 0, delay_days: 0, text: 'Oi! Passando para saber se ficou alguma dúvida.' }]) // followup_steps
+      rlsMock.queueRows([{ id: 'fm-1' }]) // insert enrollment_messages
+      rlsMock.queueRows([{ id: 'enr-1', sequence_id: 'seq-1', status: 'active', started_at: '2026-01-01T00:00:00.000Z' }]) // loadActiveFollowup#2
+      rlsMock.queueRows([{ name: 'Sequência Pós-Venda' }])
+      rlsMock.queueRows([{ order_index: 0, status: 'pending', send_at: '2026-01-01T00:00:00.000Z' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/followup/start').send({ sequence_id: 'seq-1' })
 
       expect(res.status).toBe(201)
       expect(res.body.followup).toMatchObject({ id: 'enr-1', sequence_name: 'Sequência Pós-Venda', status: 'active', total_steps: 1, sent_count: 0 })
-      const materializeInsert = insertCallsFor('followup_enrollment_messages')[0]
-      expect(materializeInsert.args[0]).toHaveLength(1)
+      const materializeInsert = insertCallsMatching(/INSERT INTO followup_enrollment_messages/)[0]
+      expect(materializeInsert).toBeTruthy()
     })
   })
 
   describe('GET /operators', () => {
     it('lista os operadores ativos do tenant', async () => {
-      setSupabase({ users: [{ data: [{ id: 'u1', name: 'Ana', email: 'ana@ex.com', role: 'agent' }], error: null }] })
+      rlsMock.queueRows([{ id: 'u1', name: 'Ana', email: 'ana@ex.com', role: 'agent' }])
       const app = buildApp()
       const res = await request(app).get('/api/chat/operators')
       expect(res.status).toBe(200)
@@ -416,7 +382,7 @@ describe('routes/chat', () => {
 
   describe('GET /:leadId/logs', () => {
     it('lista os logs do ticket', async () => {
-      setSupabase({ ticket_logs: [{ data: [{ id: 'log-1', action: 'opened' }], error: null }] })
+      rlsMock.queueRows([{ id: 'log-1', action: 'opened' }])
       const app = buildApp()
       const res = await request(app).get('/api/chat/lead-1/logs')
       expect(res.status).toBe(200)
@@ -433,25 +399,23 @@ describe('routes/chat', () => {
     })
 
     it('GET retorna 404 quando a conversa não existe', async () => {
-      setSupabase({ leads: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/chat/lead-x/group-access')
       expect(res.status).toBe(404)
     })
 
     it('GET retorna 400 quando a conversa não é um grupo', async () => {
-      setSupabase({ leads: [{ data: [{ id: 'lead-1', is_group: false }], error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', is_group: false }])
       const app = buildApp()
       const res = await request(app).get('/api/chat/lead-1/group-access')
       expect(res.status).toBe(400)
     })
 
     it('GET lista operadores do tenant e quem já tem acesso ao grupo', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', is_group: true }], error: null }],
-        users: [{ data: [{ id: 'u1', name: 'Ana', email: 'ana@ex.com' }], error: null }],
-        whatsapp_group_access: [{ data: [{ user_id: 'u1' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', is_group: true }])
+      rlsMock.queueRows([{ id: 'u1', name: 'Ana', email: 'ana@ex.com' }])
+      rlsMock.queueRows([{ user_id: 'u1' }])
       const app = buildApp()
       const res = await request(app).get('/api/chat/lead-1/group-access')
       expect(res.status).toBe(200)
@@ -459,23 +423,19 @@ describe('routes/chat', () => {
     })
 
     it('PUT exige um array de user_ids', async () => {
-      setSupabase({ leads: [{ data: [{ id: 'lead-1', is_group: true }], error: null }] })
       const app = buildApp()
       const res = await request(app).put('/api/chat/lead-1/group-access').send({})
       expect(res.status).toBe(400)
     })
 
     it('PUT substitui a lista de acesso do grupo', async () => {
-      setSupabase({ leads: [{ data: [{ id: 'lead-1', is_group: true }], error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', is_group: true }])
       const app = buildApp()
       const res = await request(app).put('/api/chat/lead-1/group-access').send({ user_ids: ['u1', 'u2'] })
       expect(res.status).toBe(200)
-      expect(deleteCallsFor('whatsapp_group_access')).toHaveLength(1)
-      const insert = insertCallsFor('whatsapp_group_access')[0]
-      expect(insert.args[0]).toEqual([
-        { tenant_id: 'tenant-1', lead_id: 'lead-1', user_id: 'u1' },
-        { tenant_id: 'tenant-1', lead_id: 'lead-1', user_id: 'u2' },
-      ])
+      expect(deleteCallsMatching(/whatsapp_group_access/)).toHaveLength(1)
+      const insert = insertCallsMatching(/INSERT INTO whatsapp_group_access/)[0]
+      expect(insert.params).toEqual(['tenant-1', 'lead-1', 'u1', 'tenant-1', 'lead-1', 'u2'])
     })
   })
 
@@ -487,24 +447,22 @@ describe('routes/chat', () => {
     })
 
     it('retorna 404 quando o lead não existe', async () => {
-      setSupabase({ leads: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/media').attach('file', Buffer.from('img'), { filename: 'foto.png', contentType: 'image/png' })
       expect(res.status).toBe(404)
     })
 
     it('retorna 403 quando o ticket não está aberto', async () => {
-      setSupabase({ leads: [{ data: [{ id: 'lead-1', conversation_status: 'pending' }], error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', conversation_status: 'pending' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/media').attach('file', Buffer.from('img'), { filename: 'foto.png', contentType: 'image/png' })
       expect(res.status).toBe(403)
     })
 
     it('sobe a mídia, salva a mensagem e envia via WhatsApp', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', phone: '5511988887777', conversation_status: 'open', human_takeover: true }], error: null }],
-        messages: [{ data: { id: 20 }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', phone: '5511988887777', conversation_status: 'open', human_takeover: true }])
+      rlsMock.queueRows([{ id: 20 }])
       const app = buildApp()
       const res = await request(app)
         .post('/api/chat/lead-1/media')
@@ -514,22 +472,20 @@ describe('routes/chat', () => {
       expect(res.status).toBe(201)
       expect(mockState.uploadChatMedia).toHaveBeenCalled()
       expect(mockState.sendMedia).toHaveBeenCalledWith('tenant-1', '5511988887777', expect.objectContaining({ filename: 'foto.png', caption: 'Segue o catálogo' }))
-      const insert = insertCallsFor('messages')[0]
-      expect(insert.args[0]).toMatchObject({ media_type: 'image', media_mimetype: 'image/png' })
+      const insert = insertCallsMatching(/INSERT INTO messages/)[0]
+      expect(insert.params).toContain('image')
+      expect(insert.params).toContain('image/png')
     })
 
     it('rejeita tipo de arquivo não permitido', async () => {
-      setSupabase({ leads: [{ data: [{ id: 'lead-1', conversation_status: 'open' }], error: null }] })
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/media').attach('file', Buffer.from('x'), { filename: 'virus.exe', contentType: 'application/x-msdownload' })
       expect(res.status).toBe(400)
     })
 
     it('salva a duração do áudio quando enviada pelo frontend', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', phone: '5511988887777', conversation_status: 'open', human_takeover: true }], error: null }],
-        messages: [{ data: { id: 21 }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', phone: '5511988887777', conversation_status: 'open', human_takeover: true }])
+      rlsMock.queueRows([{ id: 21 }])
       const app = buildApp()
       const res = await request(app)
         .post('/api/chat/lead-1/media')
@@ -537,15 +493,14 @@ describe('routes/chat', () => {
         .attach('file', Buffer.from('audiobytes'), { filename: 'audio.webm', contentType: 'audio/webm' })
 
       expect(res.status).toBe(201)
-      const insert = insertCallsFor('messages')[0]
-      expect(insert.args[0]).toMatchObject({ media_type: 'audio', media_duration_seconds: 10 })
+      const insert = insertCallsMatching(/INSERT INTO messages/)[0]
+      expect(insert.params).toContain('audio')
+      expect(insert.params).toContain(10)
     })
 
     it('ignora duração ausente, inválida ou fora do plausível', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', conversation_status: 'open' }], error: null }],
-        messages: [{ data: { id: 22 }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', conversation_status: 'open' }])
+      rlsMock.queueRows([{ id: 22 }])
       const app = buildApp()
       const res = await request(app)
         .post('/api/chat/lead-1/media')
@@ -553,15 +508,14 @@ describe('routes/chat', () => {
         .attach('file', Buffer.from('audiobytes'), { filename: 'audio.webm', contentType: 'audio/webm' })
 
       expect(res.status).toBe(201)
-      const insert = insertCallsFor('messages')[0]
-      expect(insert.args[0]).toMatchObject({ media_type: 'audio', media_duration_seconds: null })
+      const insert = insertCallsMatching(/INSERT INTO messages/)[0]
+      expect(insert.params).toContain('audio')
+      expect(insert.params).not.toContain(-5)
     })
 
     it('ignora duração enviada para tipos de mídia que não são áudio', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', conversation_status: 'open' }], error: null }],
-        messages: [{ data: { id: 23 }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', conversation_status: 'open' }])
+      rlsMock.queueRows([{ id: 23 }])
       const app = buildApp()
       const res = await request(app)
         .post('/api/chat/lead-1/media')
@@ -569,8 +523,9 @@ describe('routes/chat', () => {
         .attach('file', Buffer.from('img'), { filename: 'foto.png', contentType: 'image/png' })
 
       expect(res.status).toBe(201)
-      const insert = insertCallsFor('messages')[0]
-      expect(insert.args[0]).toMatchObject({ media_type: 'image', media_duration_seconds: null })
+      const insert = insertCallsMatching(/INSERT INTO messages/)[0]
+      expect(insert.params).toContain('image')
+      expect(insert.params).not.toContain(10)
     })
   })
 
@@ -582,32 +537,30 @@ describe('routes/chat', () => {
     })
 
     it('retorna 404 quando o lead não existe', async () => {
-      setSupabase({ leads: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/location').send({ latitude: 1, longitude: 2 })
       expect(res.status).toBe(404)
     })
 
     it('retorna 403 quando o ticket não está aberto', async () => {
-      setSupabase({ leads: [{ data: [{ id: 'lead-1', conversation_status: 'pending' }], error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', conversation_status: 'pending' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/location').send({ latitude: 1, longitude: 2 })
       expect(res.status).toBe(403)
     })
 
     it('salva e envia a localização', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1', phone: '5511988887777', conversation_status: 'open' }], error: null }],
-        messages: [{ data: { id: 30 }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1', phone: '5511988887777', conversation_status: 'open' }])
+      rlsMock.queueRows([{ id: 30 }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/location').send({ latitude: -25.4, longitude: -49.2 })
 
       expect(res.status).toBe(201)
       expect(mockState.sendLocation).toHaveBeenCalledWith('tenant-1', '5511988887777', { latitude: -25.4, longitude: -49.2 })
-      const insertCall = insertCallsFor('messages').find((c) => c.args[0]?.wa_message_id === 'wa-3')
-      expect(insertCall).toBeTruthy()
-      expect(insertCall.args[0].send_status).toBe('sent')
+      const insertCall = insertCallsMatching(/INSERT INTO messages/)[0]
+      expect(insertCall.params).toContain('wa-3')
+      expect(insertCall.params).toContain('sent')
     })
   })
 
@@ -619,57 +572,46 @@ describe('routes/chat', () => {
     })
 
     it('retorna 404 quando a mensagem original não existe', async () => {
-      setSupabase({ messages: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages/1/forward').send({ toLeadId: 'lead-2' })
       expect(res.status).toBe(404)
     })
 
     it('retorna 404 quando o lead de destino não existe', async () => {
-      setSupabase({
-        messages: [{ data: [{ id: 1, text: 'Oi', deleted_at: null }], error: null }],
-        leads: [{ data: [], error: null }],
-      })
+      rlsMock.queueRows([{ id: 1, text: 'Oi', deleted_at: null }])
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages/1/forward').send({ toLeadId: 'lead-x' })
       expect(res.status).toBe(404)
     })
 
     it('retorna 403 quando o ticket de destino não está aberto', async () => {
-      setSupabase({
-        messages: [{ data: [{ id: 1, text: 'Oi', deleted_at: null }], error: null }],
-        leads: [{ data: [{ id: 'lead-2', conversation_status: 'pending' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 1, text: 'Oi', deleted_at: null }])
+      rlsMock.queueRows([{ id: 'lead-2', conversation_status: 'pending' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages/1/forward').send({ toLeadId: 'lead-2' })
       expect(res.status).toBe(403)
     })
 
     it('encaminha texto simples via sendText', async () => {
-      setSupabase({
-        messages: [
-          { data: [{ id: 1, text: 'Olá, tudo bem?', deleted_at: null }], error: null },
-          { data: { id: 40 }, error: null },
-        ],
-        leads: [{ data: [{ id: 'lead-2', phone: '5511977776666', conversation_status: 'open', human_takeover: false }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 1, text: 'Olá, tudo bem?', deleted_at: null }])
+      rlsMock.queueRows([{ id: 'lead-2', phone: '5511977776666', conversation_status: 'open', human_takeover: false }])
+      rlsMock.queueRows([{ id: 40 }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages/1/forward').send({ toLeadId: 'lead-2' })
 
       expect(res.status).toBe(201)
       expect(mockState.sendText).toHaveBeenCalledWith('tenant-1', '5511977776666', 'Olá, tudo bem?')
-      const insert = insertCallsFor('messages')[0]
-      expect(insert.args[0]).toMatchObject({ forwarded_from_id: 1, lead_id: 'lead-2' })
+      const insert = insertCallsMatching(/INSERT INTO messages/)[0]
+      expect(insert.params).toContain(1) // forwarded_from_id
+      expect(insert.params).toContain('lead-2')
     })
 
     it('encaminha localização via sendLocation', async () => {
-      setSupabase({
-        messages: [
-          { data: [{ id: 1, text: 'Localização compartilhada', location_lat: -25.4, location_lng: -49.2, deleted_at: null }], error: null },
-          { data: { id: 41 }, error: null },
-        ],
-        leads: [{ data: [{ id: 'lead-2', phone: '5511977776666', conversation_status: 'open' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 1, text: 'Localização compartilhada', location_lat: -25.4, location_lng: -49.2, deleted_at: null }])
+      rlsMock.queueRows([{ id: 'lead-2', phone: '5511977776666', conversation_status: 'open' }])
+      rlsMock.queueRows([{ id: 41 }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages/1/forward').send({ toLeadId: 'lead-2' })
 
@@ -678,13 +620,9 @@ describe('routes/chat', () => {
     })
 
     it('encaminha mídia buscando o media_url via safeFetch e reenviando via sendMedia', async () => {
-      setSupabase({
-        messages: [
-          { data: [{ id: 1, text: '[imagem]', media_url: 'https://cdn.exemplo.com/foto.png', media_mimetype: 'image/png', media_filename: 'foto.png', deleted_at: null }], error: null },
-          { data: { id: 42 }, error: null },
-        ],
-        leads: [{ data: [{ id: 'lead-2', phone: '5511977776666', conversation_status: 'open' }], error: null }],
-      })
+      rlsMock.queueRows([{ id: 1, text: '[imagem]', media_url: 'https://cdn.exemplo.com/foto.png', media_mimetype: 'image/png', media_filename: 'foto.png', deleted_at: null }])
+      rlsMock.queueRows([{ id: 'lead-2', phone: '5511977776666', conversation_status: 'open' }])
+      rlsMock.queueRows([{ id: 42 }])
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 200, arrayBuffer: async () => new TextEncoder().encode('imgbytes').buffer }))
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/messages/1/forward').send({ toLeadId: 'lead-2' })
@@ -697,17 +635,16 @@ describe('routes/chat', () => {
 
   describe('ciclo de vida do ticket', () => {
     it('POST /:leadId/transfer-to transfere para outro operador e registra o log', async () => {
-      setSupabase({
-        users: [{ data: [{ id: 'u2', name: 'Bia', email: 'bia@ex.com' }], error: null }],
-        leads: [{ data: { id: 'lead-1', conversation_status: 'open', assigned_to: 'u2' }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'u2', name: 'Bia', email: 'bia@ex.com' }])
+      rlsMock.queueRows([{ id: 'lead-1', conversation_status: 'open', assigned_to: 'u2' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/transfer-to').send({ userId: 'u2' })
 
       expect(res.status).toBe(200)
       expect(res.body.to).toMatchObject({ id: 'u2', name: 'Bia' })
-      const logEvent = insertCallsFor('ticket_logs')[0]
-      expect(logEvent.args[0]).toMatchObject({ action: 'transferred', to_user_id: 'u2' })
+      const logEvent = insertCallsMatching(/INSERT INTO ticket_logs/)[0]
+      expect(logEvent.params).toContain('transferred')
+      expect(logEvent.params).toContain('u2')
     })
 
     it('POST /:leadId/transfer-to exige userId', async () => {
@@ -717,54 +654,55 @@ describe('routes/chat', () => {
     })
 
     it('POST /:leadId/transfer-to retorna 404 quando o operador não existe', async () => {
-      setSupabase({ users: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/transfer-to').send({ userId: 'u-x' })
       expect(res.status).toBe(404)
     })
 
     it('POST /:leadId/attend assume o atendimento e loga a abertura', async () => {
-      setSupabase({ leads: [{ data: { id: 'lead-1', conversation_status: 'open', assigned_to: 'user-1' }, error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', conversation_status: 'open', assigned_to: 'user-1' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/attend')
       expect(res.status).toBe(200)
-      const logEvent = insertCallsFor('ticket_logs')[0]
-      expect(logEvent.args[0]).toMatchObject({ action: 'opened' })
+      const logEvent = insertCallsMatching(/INSERT INTO ticket_logs/)[0]
+      expect(logEvent.params).toContain('opened')
     })
 
     it('POST /:leadId/reopen reabre o ticket e loga', async () => {
-      setSupabase({ leads: [{ data: { id: 'lead-1', conversation_status: 'open' }, error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', conversation_status: 'open' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/reopen')
       expect(res.status).toBe(200)
-      const logEvent = insertCallsFor('ticket_logs')[0]
-      expect(logEvent.args[0]).toMatchObject({ action: 'reopened' })
+      const logEvent = insertCallsMatching(/INSERT INTO ticket_logs/)[0]
+      expect(logEvent.params).toContain('reopened')
     })
 
     it('POST /:leadId/return-to-queue devolve pra fila (limpa assigned_to e human_takeover)', async () => {
-      setSupabase({ leads: [{ data: { id: 'lead-1', conversation_status: 'pending' }, error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', conversation_status: 'pending' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/return-to-queue')
       expect(res.status).toBe(200)
-      const leadUpdate = updateCallsFor('leads')[0]
-      expect(leadUpdate.args[0]).toMatchObject({ conversation_status: 'pending', human_takeover: false, assigned_to: null })
-      const logEvent = insertCallsFor('ticket_logs')[0]
-      expect(logEvent.args[0]).toMatchObject({ action: 'pending' })
+      const leadUpdate = updateCallsMatching(/leads/)[0]
+      expect(leadUpdate.sql).toContain("conversation_status = 'pending'")
+      expect(leadUpdate.sql).toContain('assigned_to = NULL')
+      const logEvent = insertCallsMatching(/INSERT INTO ticket_logs/)[0]
+      expect(logEvent.params).toContain('pending')
     })
 
     it('POST /:leadId/resolve finaliza o atendimento e loga o fechamento', async () => {
-      setSupabase({ leads: [{ data: { id: 'lead-1', conversation_status: 'resolved' }, error: null }] })
+      rlsMock.queueRows([{ id: 'lead-1', conversation_status: 'resolved' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/resolve')
       expect(res.status).toBe(200)
-      const logEvent = insertCallsFor('ticket_logs')[0]
-      expect(logEvent.args[0]).toMatchObject({ action: 'closed' })
+      const logEvent = insertCallsMatching(/INSERT INTO ticket_logs/)[0]
+      expect(logEvent.params).toContain('closed')
     })
   })
 
   describe('mensagens agendadas', () => {
     it('GET /:leadId/schedule lista as pendentes', async () => {
-      setSupabase({ scheduled_messages: [{ data: [{ id: 's1', text: 'Lembrete', status: 'pending' }], error: null }] })
+      rlsMock.queueRows([{ id: 's1', text: 'Lembrete', status: 'pending' }])
       const app = buildApp()
       const res = await request(app).get('/api/chat/lead-1/schedule')
       expect(res.status).toBe(200)
@@ -778,7 +716,7 @@ describe('routes/chat', () => {
     })
 
     it('POST /:leadId/schedule retorna 404 quando o lead não existe', async () => {
-      setSupabase({ leads: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const futureDate = new Date(Date.now() + 86400000).toISOString()
       const res = await request(app).post('/api/chat/lead-1/schedule').send({ text: 'Oi', send_at: futureDate })
@@ -786,10 +724,8 @@ describe('routes/chat', () => {
     })
 
     it('POST /:leadId/schedule agenda a mensagem', async () => {
-      setSupabase({
-        leads: [{ data: [{ id: 'lead-1' }], error: null }],
-        scheduled_messages: [{ data: { id: 's1', text: 'Oi' }, error: null }],
-      })
+      rlsMock.queueRows([{ id: 'lead-1' }])
+      rlsMock.queueRows([{ id: 's1', text: 'Oi' }])
       const app = buildApp()
       const futureDate = new Date(Date.now() + 86400000).toISOString()
       const res = await request(app).post('/api/chat/lead-1/schedule').send({ text: 'Oi', send_at: futureDate })
@@ -797,90 +733,82 @@ describe('routes/chat', () => {
     })
 
     it('DELETE /:leadId/schedule/:id retorna 404 quando não existe', async () => {
-      setSupabase({ scheduled_messages: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).delete('/api/chat/lead-1/schedule/s1')
       expect(res.status).toBe(404)
     })
 
     it('DELETE /:leadId/schedule/:id retorna 400 quando já foi processado', async () => {
-      setSupabase({ scheduled_messages: [{ data: [{ status: 'sent' }], error: null }] })
+      rlsMock.queueRows([{ status: 'sent' }])
       const app = buildApp()
       const res = await request(app).delete('/api/chat/lead-1/schedule/s1')
       expect(res.status).toBe(400)
     })
 
     it('DELETE /:leadId/schedule/:id cancela o agendamento pendente', async () => {
-      setSupabase({ scheduled_messages: [{ data: [{ status: 'pending' }], error: null }] })
+      rlsMock.queueRows([{ status: 'pending' }])
       const app = buildApp()
       const res = await request(app).delete('/api/chat/lead-1/schedule/s1')
       expect(res.status).toBe(200)
-      const update = updateCallsFor('scheduled_messages')[0]
-      expect(update.args[0]).toEqual({ status: 'cancelled' })
+      const update = updateCallsMatching(/scheduled_messages/)[0]
+      expect(update.sql).toContain("'cancelled'")
     })
   })
 
   describe('acompanhamentos — cancelar/finalizar/reiniciar', () => {
     it('POST /:leadId/followup/:enrollmentId/cancel retorna 404 quando não há acompanhamento ativo', async () => {
-      setSupabase({ followup_enrollments: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/followup/enr-1/cancel')
       expect(res.status).toBe(404)
     })
 
     it('POST /:leadId/followup/:enrollmentId/cancel cancela e marca as mensagens pendentes como canceladas', async () => {
-      setSupabase({ followup_enrollments: [{ data: [{ id: 'enr-1' }], error: null }] })
+      rlsMock.queueRows([{ id: 'enr-1' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/followup/enr-1/cancel')
       expect(res.status).toBe(200)
       expect(res.body.cancelled).toBe(true)
-      const enrollmentUpdate = updateCallsFor('followup_enrollments').find((c) => c.args[0]?.status === 'cancelled')
+      const enrollmentUpdate = updateCallsMatching(/followup_enrollments\b/).find((c) => c.params.includes('cancelled'))
       expect(enrollmentUpdate).toBeTruthy()
-      const msgsUpdate = updateCallsFor('followup_enrollment_messages').find((c) => c.args[0]?.status === 'cancelled')
+      const msgsUpdate = updateCallsMatching(/followup_enrollment_messages/).find((c) => c.sql.includes("'cancelled'"))
       expect(msgsUpdate).toBeTruthy()
     })
 
     it('POST /:leadId/followup/:enrollmentId/finish finaliza o acompanhamento', async () => {
-      setSupabase({ followup_enrollments: [{ data: [{ id: 'enr-1' }], error: null }] })
+      rlsMock.queueRows([{ id: 'enr-1' }])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/followup/enr-1/finish')
       expect(res.status).toBe(200)
       expect(res.body.finished).toBe(true)
-      const enrollmentUpdate = updateCallsFor('followup_enrollments').find((c) => c.args[0]?.status === 'completed')
+      const enrollmentUpdate = updateCallsMatching(/followup_enrollments\b/).find((c) => c.params.includes('completed'))
       expect(enrollmentUpdate).toBeTruthy()
     })
 
     it('POST /:leadId/followup/:enrollmentId/restart retorna 404 quando o acompanhamento não existe', async () => {
-      setSupabase({ followup_enrollments: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/followup/enr-1/restart')
       expect(res.status).toBe(404)
     })
 
     it('POST /:leadId/followup/:enrollmentId/restart para o atual e cria um novo enrollment', async () => {
-      setSupabase({
-        followup_enrollments: [
-          { data: [{ sequence_id: 'seq-1' }], error: null }, // busca sequence_id do enrollment atual
-          { data: [{ id: 'enr-1' }], error: null }, // stopEnrollment: confirma que está ativo
-          { data: { id: 'enr-2', sequence_id: 'seq-1' }, error: null }, // insert do novo enrollment
-          { data: [{ id: 'enr-2', sequence_id: 'seq-1', status: 'active', started_at: '2026-01-01T00:00:00.000Z' }], error: null }, // loadActiveFollowup final
-        ],
-        followup_sequences: [
-          { data: [{ id: 'seq-1', name: 'Seq X', time_mode: 'default', default_send_time: '09:00' }], error: null },
-          { data: [{ name: 'Seq X' }], error: null },
-        ],
-        followup_steps: [{ data: [], error: null }],
-        followup_enrollment_messages: [
-          { data: [], error: null },
-        ],
-      })
+      rlsMock.queueRows([{ sequence_id: 'seq-1' }]) // busca sequence_id do enrollment atual
+      rlsMock.queueRows([{ id: 'seq-1', name: 'Seq X', time_mode: 'default', default_send_time: '09:00' }]) // sequência
+      rlsMock.queueRows([{ id: 'enr-1' }]) // stopEnrollment: confirma que está ativo
+      rlsMock.queueRows([{ id: 'enr-2', sequence_id: 'seq-1' }]) // insert do novo enrollment
+      rlsMock.queueRows([]) // followup_steps vazio
+      rlsMock.queueRows([{ id: 'enr-2', sequence_id: 'seq-1', status: 'active', started_at: '2026-01-01T00:00:00.000Z' }]) // loadActiveFollowup final
+      rlsMock.queueRows([{ name: 'Seq X' }])
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/chat/lead-1/followup/enr-1/restart')
       expect(res.status).toBe(201)
-      const cancelledUpdate = updateCallsFor('followup_enrollments').find((c) => c.args[0]?.status === 'cancelled')
+      const cancelledUpdate = updateCallsMatching(/followup_enrollments\b/).find((c) => c.params.includes('cancelled'))
       expect(cancelledUpdate).toBeTruthy()
-      const newInsert = insertCallsFor('followup_enrollments')[0]
-      expect(newInsert.args[0]).toMatchObject({ sequence_id: 'seq-1' })
+      const newInsert = insertCallsMatching(/INSERT INTO followup_enrollments/)[0]
+      expect(newInsert.params).toContain('seq-1')
     })
   })
 })

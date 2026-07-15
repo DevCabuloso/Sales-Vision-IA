@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 
 export const reportsRouter = Router()
@@ -26,30 +26,64 @@ reportsRouter.get('/daily', async (req, res) => {
   const { start, end } = dayRangeUtc(dateStr)
 
   try {
-    const [users, ticketLogs, leadsToday, messagesToday, apptsToday, usageEvents, stageCountRows] = await Promise.all([
-      supabase.from('users').select('id, name, email, role')
-        .eq('tenant_id', tenantId).neq('role', 'owner'),
-      supabase.from('ticket_logs').select('lead_id, user_id, user_name, action, to_user_id, to_user_name, created_at')
-        .eq('tenant_id', tenantId).gte('created_at', start).lt('created_at', end)
-        .order('created_at', { ascending: true }),
-      supabase.from('leads').select('id, name, phone, stage, score, created_at')
-        .eq('tenant_id', tenantId).gte('created_at', start).lt('created_at', end),
-      supabase.from('messages').select('role, created_at')
-        .eq('tenant_id', tenantId).gte('created_at', start).lt('created_at', end),
-      supabase.from('appointments').select('id, lead_id, lead_name, start_time')
-        .eq('tenant_id', tenantId).gte('created_at', start).lt('created_at', end),
-      supabase.from('usage_events').select('user_id, event_type, meta, created_at')
-        .eq('tenant_id', tenantId).gte('created_at', start).lt('created_at', end),
-      // GROUP BY feito no banco (RPC) em vez de buscar até 20.000 linhas de
-      // `stage` e agregar em JS a cada chamada.
-      supabase.rpc('leads_stage_counts', { p_tenant_id: tenantId }),
-    ]).then((rs) => rs.map(unwrap))
+    const { users, ticketLogs, leadsToday, messagesToday, apptsToday, usageEvents, stageCountRows, touchedLeads } =
+      await withTenant(tenantId, async (client) => {
+        const [usersR, ticketLogsR, leadsTodayR, messagesTodayR, apptsTodayR, usageEventsR, stageCountR] = await Promise.all([
+          client.query(
+            "SELECT id, name, email, role FROM users WHERE tenant_id = $1 AND role != 'owner'",
+            [tenantId]
+          ),
+          client.query(
+            `SELECT lead_id, user_id, user_name, action, to_user_id, to_user_name, created_at
+             FROM ticket_logs WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3
+             ORDER BY created_at ASC`,
+            [tenantId, start, end]
+          ),
+          client.query(
+            `SELECT id, name, phone, stage, score, created_at
+             FROM leads WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3`,
+            [tenantId, start, end]
+          ),
+          client.query(
+            'SELECT role, created_at FROM messages WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3',
+            [tenantId, start, end]
+          ),
+          client.query(
+            `SELECT id, lead_id, lead_name, start_time
+             FROM appointments WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3`,
+            [tenantId, start, end]
+          ),
+          client.query(
+            `SELECT user_id, event_type, meta, created_at
+             FROM usage_events WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3`,
+            [tenantId, start, end]
+          ),
+          // GROUP BY feito no banco (RPC) em vez de buscar até 20.000 linhas de
+          // `stage` e agregar em JS a cada chamada.
+          client.query('SELECT * FROM leads_stage_counts($1)', [tenantId]),
+        ])
 
-    // leads tocados hoje via ticket_logs podem ter sido criados em dias anteriores
-    const touchedIds = [...new Set(ticketLogs.map((l) => l.lead_id).filter(Boolean))]
-    const touchedLeads = touchedIds.length
-      ? unwrap(await supabase.from('leads').select('id, name, phone, stage').eq('tenant_id', tenantId).in('id', touchedIds))
-      : []
+        // leads tocados hoje via ticket_logs podem ter sido criados em dias anteriores
+        const touchedIds = [...new Set(ticketLogsR.rows.map((l) => l.lead_id).filter(Boolean))]
+        const touchedLeadsR = touchedIds.length
+          ? await client.query(
+              'SELECT id, name, phone, stage FROM leads WHERE tenant_id = $1 AND id = ANY($2::uuid[])',
+              [tenantId, touchedIds]
+            )
+          : { rows: [] }
+
+        return {
+          users: usersR.rows,
+          ticketLogs: ticketLogsR.rows,
+          leadsToday: leadsTodayR.rows,
+          messagesToday: messagesTodayR.rows,
+          apptsToday: apptsTodayR.rows,
+          usageEvents: usageEventsR.rows,
+          stageCountRows: stageCountR.rows,
+          touchedLeads: touchedLeadsR.rows,
+        }
+      })
+
     const leadById = new Map([...touchedLeads, ...leadsToday].map((l) => [l.id, l]))
 
     // ── agregação por usuário ──

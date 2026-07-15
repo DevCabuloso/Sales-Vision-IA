@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { chat } from '../services/ai/openai.js'
 
@@ -20,20 +20,24 @@ const DEFAULT_CATEGORIES = ['Marketing', 'Utilidade']
 // GET /api/templates/categories
 templatesRouter.get('/categories', async (req, res) => {
   try {
-    let rows = unwrap(
-      await supabase.from('template_categories').select('id, name')
-        .eq('tenant_id', req.user.tenantId)
-        .order('name')
-    )
-    // tenant novo sem nenhuma categoria ainda — semeia as padrão na hora
-    if (!rows.length) {
-      const seeded = unwrap(
-        await supabase.from('template_categories')
-          .insert(DEFAULT_CATEGORIES.map((name) => ({ tenant_id: req.user.tenantId, name })))
-          .select('id, name')
+    const rows = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT id, name FROM template_categories WHERE tenant_id = $1 ORDER BY name',
+        [req.user.tenantId]
       )
-      rows = seeded
-    }
+      // tenant novo sem nenhuma categoria ainda — semeia as padrão na hora
+      if (r.rows.length) return r.rows
+      const values = []
+      const placeholders = DEFAULT_CATEGORIES.map((name, i) => {
+        values.push(req.user.tenantId, name)
+        return `($${i * 2 + 1}, $${i * 2 + 2})`
+      })
+      const seeded = await client.query(
+        `INSERT INTO template_categories (tenant_id, name) VALUES ${placeholders.join(', ')} RETURNING id, name`,
+        values
+      )
+      return seeded.rows
+    })
     res.json({ categories: rows })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -47,15 +51,16 @@ templatesRouter.post('/categories', async (req, res) => {
   const parsed = categorySchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   try {
-    const row = unwrap(
-      await supabase.from('template_categories').insert({
-        tenant_id: req.user.tenantId,
-        name: parsed.data.name.trim(),
-      }).select('id, name').single()
-    )
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'INSERT INTO template_categories (tenant_id, name) VALUES ($1, $2) RETURNING id, name',
+        [req.user.tenantId, parsed.data.name.trim()]
+      )
+      return r.rows[0]
+    })
     res.status(201).json({ category: row })
   } catch (e) {
-    if (e.message.includes('23505')) return res.status(409).json({ error: 'Já existe uma categoria com esse nome.' })
+    if (e.code === '23505') return res.status(409).json({ error: 'Já existe uma categoria com esse nome.' })
     res.status(500).json({ error: e.message })
   }
 })
@@ -63,8 +68,9 @@ templatesRouter.post('/categories', async (req, res) => {
 // DELETE /api/templates/categories/:id
 templatesRouter.delete('/categories/:id', async (req, res) => {
   try {
-    await supabase.from('template_categories').delete()
-      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
+    await withTenant(req.user.tenantId, (client) =>
+      client.query('DELETE FROM template_categories WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
+    )
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -74,11 +80,13 @@ templatesRouter.delete('/categories/:id', async (req, res) => {
 // GET /api/templates
 templatesRouter.get('/', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('templates').select('*')
-        .eq('tenant_id', req.user.tenantId)
-        .order('created_at', { ascending: false })
-    )
+    const rows = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT * FROM templates WHERE tenant_id = $1 ORDER BY created_at DESC',
+        [req.user.tenantId]
+      )
+      return r.rows
+    })
     res.json({ templates: rows })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -91,12 +99,13 @@ templatesRouter.post('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
   try {
-    const row = unwrap(
-      await supabase.from('templates').insert({
-        tenant_id: req.user.tenantId,
-        ...parsed.data,
-      }).select('*').single()
-    )
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'INSERT INTO templates (tenant_id, name, category, content) VALUES ($1, $2, $3, $4) RETURNING *',
+        [req.user.tenantId, parsed.data.name, parsed.data.category, parsed.data.content]
+      )
+      return r.rows[0]
+    })
     res.status(201).json({ template: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -109,12 +118,19 @@ templatesRouter.patch('/:id', async (req, res) => {
   if (!partial.success) return res.status(400).json({ error: partial.error.issues[0].message })
 
   try {
-    const row = unwrap(
-      await supabase.from('templates').update({
-        ...partial.data,
-        updated_at: new Date().toISOString(),
-      }).eq('id', req.params.id).eq('tenant_id', req.user.tenantId).select('*').single()
-    )
+    const update = { ...partial.data, updated_at: new Date().toISOString() }
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const columns = Object.keys(update)
+      const setClauses = columns.map((c, i) => `${c} = $${i + 1}`)
+      const values = columns.map((c) => update[c])
+      values.push(req.params.id, req.user.tenantId)
+      const r = await client.query(
+        `UPDATE templates SET ${setClauses.join(', ')}
+         WHERE id = $${columns.length + 1} AND tenant_id = $${columns.length + 2} RETURNING *`,
+        values
+      )
+      return r.rows[0]
+    })
     res.json({ template: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -124,8 +140,9 @@ templatesRouter.patch('/:id', async (req, res) => {
 // DELETE /api/templates/:id
 templatesRouter.delete('/:id', async (req, res) => {
   try {
-    await supabase.from('templates').delete()
-      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
+    await withTenant(req.user.tenantId, (client) =>
+      client.query('DELETE FROM templates WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
+    )
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -135,21 +152,20 @@ templatesRouter.delete('/:id', async (req, res) => {
 // POST /api/templates/:id/duplicate
 templatesRouter.post('/:id/duplicate', async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('templates').select('*')
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Template não encontrado.' })
-
-    const src = rows[0]
-    const row = unwrap(
-      await supabase.from('templates').insert({
-        tenant_id: req.user.tenantId,
-        name: `${src.name} (cópia)`,
-        category: src.category,
-        content: src.content,
-      }).select('*').single()
-    )
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        'SELECT * FROM templates WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [req.params.id, req.user.tenantId]
+      )
+      const src = r.rows[0]
+      if (!src) return null
+      const dupR = await client.query(
+        'INSERT INTO templates (tenant_id, name, category, content) VALUES ($1, $2, $3, $4) RETURNING *',
+        [req.user.tenantId, `${src.name} (cópia)`, src.category, src.content]
+      )
+      return dupR.rows[0]
+    })
+    if (!row) return res.status(404).json({ error: 'Template não encontrado.' })
     res.status(201).json({ template: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -161,12 +177,13 @@ templatesRouter.post('/:id/test', async (req, res) => {
   const { context = '' } = req.body
 
   try {
-    const [tplRows, cfgRows] = await Promise.all([
-      supabase.from('templates').select('*').eq('id', req.params.id).eq('tenant_id', req.user.tenantId).limit(1),
-      supabase.from('ai_configs').select('*').eq('tenant_id', req.user.tenantId).limit(1),
-    ])
-    const tpl = unwrap(tplRows)[0]
-    const cfg = unwrap(cfgRows)[0]
+    const { tpl, cfg } = await withTenant(req.user.tenantId, async (client) => {
+      const [tplR, cfgR] = await Promise.all([
+        client.query('SELECT * FROM templates WHERE id = $1 AND tenant_id = $2 LIMIT 1', [req.params.id, req.user.tenantId]),
+        client.query('SELECT * FROM ai_configs WHERE tenant_id = $1 LIMIT 1', [req.user.tenantId]),
+      ])
+      return { tpl: tplR.rows[0], cfg: cfgR.rows[0] }
+    })
     if (!tpl) return res.status(404).json({ error: 'Template não encontrado.' })
 
     const messages = []

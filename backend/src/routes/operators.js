@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant, invalidateUserCache } from '../middleware/auth.js'
 import { hashPassword } from '../services/auth.js'
 import { passwordSchema } from '../utils/passwordSchema.js'
@@ -37,12 +38,13 @@ const SELECT_COLS = 'id, name, email, phone, role, active, is_restricted, permis
 // GET /api/operators
 operatorsRouter.get('/', requireAdmin, async (req, res) => {
   try {
-    const users = unwrap(
-      await supabase.from('users').select(SELECT_COLS)
-        .eq('tenant_id', req.user.tenantId)
-        .neq('role', 'owner')
-        .order('created_at', { ascending: false })
-    )
+    const users = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `SELECT ${SELECT_COLS} FROM users WHERE tenant_id = $1 AND role != 'owner' ORDER BY created_at DESC`,
+        [req.user.tenantId]
+      )
+      return r.rows
+    })
     res.json({ operators: users })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -52,20 +54,24 @@ operatorsRouter.get('/', requireAdmin, async (req, res) => {
 // GET /api/operators/dashboard
 operatorsRouter.get('/dashboard', requireAdmin, async (req, res) => {
   try {
-    const users = unwrap(
-      await supabase.from('users').select('id, name, email, role, active')
-        .eq('tenant_id', req.user.tenantId).neq('role', 'owner')
-    )
+    const { users, events } = await withTenant(req.user.tenantId, async (client) => {
+      const from = new Date()
+      from.setDate(from.getDate() - 30)
 
-    const from = new Date()
-    from.setDate(from.getDate() - 30)
-
-    const events = unwrap(
-      await supabase.from('usage_events').select('user_id, event_type, created_at')
-        .eq('tenant_id', req.user.tenantId)
-        .gte('created_at', from.toISOString())
-        .in('event_type', ['message_sent', 'lead_created', 'appointment_created', 'human_takeover'])
-    )
+      const [usersR, eventsR] = await Promise.all([
+        client.query(
+          "SELECT id, name, email, role, active FROM users WHERE tenant_id = $1 AND role != 'owner'",
+          [req.user.tenantId]
+        ),
+        client.query(
+          `SELECT user_id, event_type, created_at FROM usage_events
+           WHERE tenant_id = $1 AND created_at >= $2
+           AND event_type = ANY($3::text[])`,
+          [req.user.tenantId, from.toISOString(), ['message_sent', 'lead_created', 'appointment_created', 'human_takeover']]
+        ),
+      ])
+      return { users: usersR.rows, events: eventsR.rows }
+    })
 
     const metrics = users.map((u) => {
       const userEvents = events.filter((e) => e.user_id === u.id)
@@ -91,6 +97,10 @@ operatorsRouter.post('/', requireAdmin, async (req, res) => {
   if (!parsed.data.password) return res.status(400).json({ error: 'Senha obrigatória.' })
 
   try {
+    // Checagem GLOBAL (todos os tenants) — users.email tem UNIQUE constraint
+    // no banco sem escopo de tenant, então precisa do client service_role
+    // (RLS restringiria essa leitura só ao tenant atual, mascarando conflito
+    // com e-mail de outro cliente até o INSERT falhar de forma menos clara).
     const existing = unwrap(
       await supabase.from('users').select('id').eq('email', parsed.data.email).limit(1)
     )
@@ -100,19 +110,25 @@ operatorsRouter.post('/', requireAdmin, async (req, res) => {
       ? DEFAULT_PERMISSIONS
       : (parsed.data.permissions ?? DEFAULT_PERMISSIONS)
 
-    const row = unwrap(
-      await supabase.from('users').insert({
-        tenant_id:     req.user.tenantId,
-        name:          parsed.data.name,
-        email:         parsed.data.email.toLowerCase(),
-        password_hash: await hashPassword(parsed.data.password),
-        role:          parsed.data.role,
-        active:        parsed.data.active,
-        phone:         parsed.data.phone || null,
-        is_restricted: parsed.data.is_restricted ?? false,
-        permissions:   perms,
-      }).select(SELECT_COLS).single()
-    )
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `INSERT INTO users (tenant_id, name, email, password_hash, role, active, phone, is_restricted, permissions)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+         RETURNING ${SELECT_COLS}`,
+        [
+          req.user.tenantId,
+          parsed.data.name,
+          parsed.data.email.toLowerCase(),
+          await hashPassword(parsed.data.password),
+          parsed.data.role,
+          parsed.data.active,
+          parsed.data.phone || null,
+          parsed.data.is_restricted ?? false,
+          JSON.stringify(perms),
+        ]
+      )
+      return r.rows[0]
+    })
     res.status(201).json({ operator: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -130,16 +146,26 @@ operatorsRouter.patch('/:id', requireAdmin, async (req, res) => {
 
     if (update.email) {
       update.email = update.email.toLowerCase()
-      const existing = await supabase.from('users').select('id').eq('email', update.email).neq('id', req.params.id).limit(1)
-      if (existing.data?.length) return res.status(409).json({ error: 'Este e-mail já está em uso.' })
+      // Mesma checagem global do POST / — ver comentário acima.
+      const existing = unwrap(
+        await supabase.from('users').select('id').eq('email', update.email).neq('id', req.params.id).limit(1)
+      )
+      if (existing.length) return res.status(409).json({ error: 'Este e-mail já está em uso.' })
     }
 
-    const row = unwrap(
-      await supabase.from('users').update(update)
-        .eq('id', req.params.id).eq('tenant_id', req.user.tenantId)
-        .neq('role', 'owner')
-        .select(SELECT_COLS).single()
-    )
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const columns = Object.keys(update)
+      const setClauses = columns.map((c, i) => c === 'permissions' ? `${c} = $${i + 1}::jsonb` : `${c} = $${i + 1}`)
+      const values = columns.map((c) => c === 'permissions' ? JSON.stringify(update[c]) : update[c])
+      values.push(req.params.id, req.user.tenantId)
+      const r = await client.query(
+        `UPDATE users SET ${setClauses.join(', ')}
+         WHERE id = $${columns.length + 1} AND tenant_id = $${columns.length + 2} AND role != 'owner'
+         RETURNING ${SELECT_COLS}`,
+        values
+      )
+      return r.rows[0]
+    })
 
     // Evento de segurança/auditoria: mudança de permissão/role/status de outro
     // usuário é sensível o bastante para registrar quem mudou o quê, mesmo sem
@@ -173,8 +199,13 @@ operatorsRouter.post('/:id/reset-password', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: parsed.error.issues[0].message })
   }
   try {
-    await supabase.from('users').update({ password_hash: await hashPassword(parsed.data.password) })
-      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).neq('role', 'owner')
+    const passwordHash = await hashPassword(parsed.data.password)
+    await withTenant(req.user.tenantId, (client) =>
+      client.query(
+        "UPDATE users SET password_hash = $1 WHERE id = $2 AND tenant_id = $3 AND role != 'owner'",
+        [passwordHash, req.params.id, req.user.tenantId]
+      )
+    )
     await logUsage(req.user.tenantId, req.user.id, 'operator_password_reset', { targetUserId: req.params.id })
     res.json({ reset: true })
   } catch (e) {
@@ -188,8 +219,12 @@ operatorsRouter.delete('/:id', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Você não pode se excluir.' })
   }
   try {
-    await supabase.from('users').delete()
-      .eq('id', req.params.id).eq('tenant_id', req.user.tenantId).neq('role', 'owner')
+    await withTenant(req.user.tenantId, (client) =>
+      client.query(
+        "DELETE FROM users WHERE id = $1 AND tenant_id = $2 AND role != 'owner'",
+        [req.params.id, req.user.tenantId]
+      )
+    )
     invalidateUserCache(req.params.id)
     res.json({ deleted: true })
   } catch (e) {

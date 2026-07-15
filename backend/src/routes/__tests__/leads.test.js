@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
-import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
+import { createRlsMock } from '../../test-utils/rlsMock.js'
 
 const mockState = vi.hoisted(() => ({ box: {}, analyzeLead: null, logUsage: null, permCalls: [] }))
 
@@ -11,12 +11,8 @@ vi.mock('../../middleware/auth.js', () => ({
   requirePermission: (...keys) => { mockState.permCalls.push(keys); return (req, res, next) => next() },
 }))
 
-vi.mock('../../db/supabase.js', () => ({
-  get supabase() { return mockState.box.supabase },
-  unwrap: ({ data, error }) => {
-    if (error) throw new Error(error.message)
-    return data
-  },
+vi.mock('../../db/rls.js', () => ({
+  withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
 vi.mock('../../services/ai/analyze.js', () => ({
@@ -36,13 +32,13 @@ function buildApp() {
   return app
 }
 
-let supabaseMock
-function setSupabase(responses) {
-  supabaseMock = createSupabaseMock(responses)
-  mockState.box.supabase = supabaseMock.supabase
-  return supabaseMock
+let rlsMock
+function setRls() {
+  rlsMock = createRlsMock()
+  mockState.box.withTenant = rlsMock.withTenant
+  return rlsMock
 }
-function insertCallsFor(table) { return supabaseMock.calls.filter((c) => c.table === table && c.method === 'insert') }
+function insertCallsMatching(pattern) { return rlsMock.calls.filter((c) => pattern.test(c.sql)) }
 const flush = () => new Promise((r) => setTimeout(r, 10))
 
 describe('routes/leads', () => {
@@ -50,6 +46,7 @@ describe('routes/leads', () => {
     vi.clearAllMocks()
     mockState.analyzeLead = vi.fn()
     mockState.logUsage = vi.fn().mockResolvedValue(undefined)
+    setRls()
   })
 
   it('exige a permissão "leads" ou "kanban" (enforcement de operador restrito) em toda a rota', () => {
@@ -58,7 +55,7 @@ describe('routes/leads', () => {
 
   describe('GET /', () => {
     it('lista os leads do tenant com limit/offset', async () => {
-      setSupabase({ leads: [{ data: [{ id: 'l1', name: 'Ana' }], error: null }] })
+      rlsMock.queueRows([{ id: 'l1', name: 'Ana' }])
       const app = buildApp()
       const res = await request(app).get('/api/leads').query({ limit: 10, offset: 0 })
       expect(res.body.leads).toHaveLength(1)
@@ -66,7 +63,7 @@ describe('routes/leads', () => {
     })
 
     it('limita o "limit" em no máximo 1000', async () => {
-      setSupabase({ leads: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).get('/api/leads').query({ limit: 5000 })
       expect(res.body.limit).toBe(1000)
@@ -83,36 +80,30 @@ describe('routes/leads', () => {
     })
 
     it('retorna 403 quando o limite de leads do plano foi atingido', async () => {
-      setSupabase({
-        leads: [{ data: null, error: null, count: 1000 }],
-        tenants: [{ data: [{ max_leads: 1000 }], error: null }],
-      })
+      rlsMock.queueRows([{ count: 1000 }])
+      rlsMock.queueRows([{ max_leads: 1000 }])
       const app = buildApp()
       const res = await request(app).post('/api/leads').send({ phone: '11988887777' })
       expect(res.status).toBe(403)
     })
 
     it('cria o lead e registra o uso quando dentro do limite', async () => {
-      setSupabase({
-        leads: [
-          { data: null, error: null, count: 3 },
-          { data: { id: 'l1', phone: '11988887777', stage: 'Novo Lead' }, error: null },
-        ],
-        tenants: [{ data: [{ max_leads: 1000 }], error: null }],
-      })
+      rlsMock.queueRows([{ count: 3 }])
+      rlsMock.queueRows([{ max_leads: 1000 }])
+      rlsMock.queueRows([{ id: 'l1', phone: '11988887777', stage: 'Novo Lead' }])
       const app = buildApp()
       const res = await request(app).post('/api/leads').send({ phone: '(11) 98888-7777' })
 
       expect(res.status).toBe(201)
-      expect(insertCallsFor('leads')[0].args[0].phone).toBe('11988887777')
+      const insertCall = insertCallsMatching(/INSERT INTO leads/)[0]
+      expect(insertCall.params[2]).toBe('11988887777')
       expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'lead_created', { phone: '(11) 98888-7777' })
     })
 
     it('retorna 409 quando já existe lead com o telefone (violação de unicidade)', async () => {
-      setSupabase({
-        leads: [{ data: null, error: null, count: 0 }, { data: null, error: { message: 'duplicate', code: '23505' } }],
-        tenants: [{ data: [{ max_leads: 1000 }], error: null }],
-      })
+      rlsMock.queueRows([{ count: 0 }])
+      rlsMock.queueRows([{ max_leads: 1000 }])
+      rlsMock.queueError(Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' }))
       const app = buildApp()
       const res = await request(app).post('/api/leads').send({ phone: '11988887777' })
       expect(res.status).toBe(409)
@@ -127,92 +118,88 @@ describe('routes/leads', () => {
     })
 
     it('retorna 404 quando o lead não existe', async () => {
-      setSupabase({ leads: [{ data: [{ stage: 'Novo Lead' }], error: null }, { data: [], error: null }] })
+      rlsMock.queueRows([{ stage: 'Novo Lead' }])
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).patch('/api/leads/l-x').send({ stage: 'Qualificado' })
       expect(res.status).toBe(404)
     })
 
     it('atualiza o lead e registra o histórico quando o estágio muda', async () => {
-      setSupabase({
-        leads: [{ data: [{ stage: 'Novo Lead' }], error: null }, { data: [{ id: 'l1', stage: 'Qualificado' }], error: null }],
-      })
+      rlsMock.queueRows([{ stage: 'Novo Lead' }])
+      rlsMock.queueRows([{ id: 'l1', stage: 'Qualificado' }])
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).patch('/api/leads/l1').send({ stage: 'Qualificado' })
       expect(res.status).toBe(200)
       await flush()
-      const historyInsert = insertCallsFor('lead_stage_history')[0]
-      expect(historyInsert.args[0]).toMatchObject({ from_stage: 'Novo Lead', to_stage: 'Qualificado' })
+      const historyInsert = insertCallsMatching(/INSERT INTO lead_stage_history/)[0]
+      expect(historyInsert.params).toEqual(['tenant-1', 'l1', 'Novo Lead', 'Qualificado', 'user-1'])
     })
 
     it('não registra histórico quando o estágio não muda', async () => {
-      setSupabase({
-        leads: [{ data: [{ stage: 'Qualificado' }], error: null }, { data: [{ id: 'l1', stage: 'Qualificado' }], error: null }],
-      })
+      rlsMock.queueRows([{ stage: 'Qualificado' }])
+      rlsMock.queueRows([{ id: 'l1', stage: 'Qualificado' }])
       const app = buildApp()
       await request(app).patch('/api/leads/l1').send({ score: 80 })
       await flush()
-      expect(insertCallsFor('lead_stage_history').length).toBe(0)
+      expect(insertCallsMatching(/INSERT INTO lead_stage_history/).length).toBe(0)
     })
   })
 
   it('DELETE /:id remove o lead', async () => {
-    setSupabase({})
+    rlsMock.queueRows([])
     const app = buildApp()
     const res = await request(app).delete('/api/leads/l1')
     expect(res.status).toBe(200)
   })
 
   it('GET /:id/history retorna o histórico de estágio', async () => {
-    setSupabase({ lead_stage_history: [{ data: [{ from_stage: 'Novo Lead', to_stage: 'Qualificado' }], error: null }] })
+    rlsMock.queueRows([{ from_stage: 'Novo Lead', to_stage: 'Qualificado' }])
     const app = buildApp()
     const res = await request(app).get('/api/leads/l1/history')
     expect(res.body.history).toHaveLength(1)
   })
 
   it('GET /:id/messages retorna as mensagens do lead', async () => {
-    setSupabase({ messages: [{ data: [{ role: 'lead', text: 'oi' }], error: null }] })
+    rlsMock.queueRows([{ role: 'lead', text: 'oi' }])
     const app = buildApp()
     const res = await request(app).get('/api/leads/l1/messages')
     expect(res.body.messages).toHaveLength(1)
   })
 
   it('GET /:id/messages busca desc+limit e devolve em ordem cronológica (proteção contra query sem limite)', async () => {
-    setSupabase({
-      messages: [{ data: [{ role: 'ai', text: 'segunda' }, { role: 'lead', text: 'primeira' }], error: null }],
-    })
+    rlsMock.queueRows([{ role: 'ai', text: 'segunda' }, { role: 'lead', text: 'primeira' }])
     const app = buildApp()
     const res = await request(app).get('/api/leads/l1/messages')
     expect(res.body.messages).toEqual([{ role: 'lead', text: 'primeira' }, { role: 'ai', text: 'segunda' }])
-    const orderCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'order')
-    expect(orderCall.args[1]).toEqual({ ascending: false })
-    const limitCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'limit')
-    expect(limitCall.args[0]).toBe(500)
+    const call = rlsMock.calls.find((c) => /FROM messages/.test(c.sql))
+    expect(call.sql).toMatch(/ORDER BY created_at DESC/)
+    expect(call.params[2]).toBe(500)
   })
 
   it('GET /:id/messages respeita ?limit= dentro do teto de 500', async () => {
-    setSupabase({ messages: [{ data: [], error: null }] })
+    rlsMock.queueRows([])
     const app = buildApp()
     await request(app).get('/api/leads/l1/messages').query({ limit: 10000 })
-    const limitCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'limit')
-    expect(limitCall.args[0]).toBe(500)
+    const call = rlsMock.calls.find((c) => /FROM messages/.test(c.sql))
+    expect(call.params[2]).toBe(500)
   })
 
   describe('POST /:id/analyze', () => {
     it('retorna 404 quando o lead não existe', async () => {
-      setSupabase({ messages: [{ data: [], error: null }], leads: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       mockState.analyzeLead.mockResolvedValue({ score: 50, intention: 'x', stage: 'Em Qualificação', interests: [] })
+      rlsMock.queueRows([])
       const app = buildApp()
       const res = await request(app).post('/api/leads/l-x/analyze')
       expect(res.status).toBe(404)
     })
 
     it('atualiza o lead com a análise da IA', async () => {
-      setSupabase({
-        messages: [{ data: [{ role: 'lead', text: 'quero comprar' }], error: null }],
-        leads: [{ data: [{ id: 'l1', score: 90, stage: 'Qualificado' }], error: null }],
-      })
+      rlsMock.queueRows([{ role: 'lead', text: 'quero comprar' }])
       mockState.analyzeLead.mockResolvedValue({ score: 90, intention: 'Quer comprar', stage: 'Qualificado', interests: ['plano-pro'] })
+      rlsMock.queueRows([{ id: 'l1', score: 90, stage: 'Qualificado' }])
       const app = buildApp()
       const res = await request(app).post('/api/leads/l1/analyze')
       expect(res.status).toBe(200)
@@ -220,7 +207,7 @@ describe('routes/leads', () => {
     })
 
     it('retorna 502 quando a análise de IA falha', async () => {
-      setSupabase({ messages: [{ data: [], error: null }] })
+      rlsMock.queueRows([])
       mockState.analyzeLead.mockRejectedValue(new Error('OpenAI erro 500'))
       const app = buildApp()
       const res = await request(app).post('/api/leads/l1/analyze')
@@ -228,19 +215,16 @@ describe('routes/leads', () => {
     })
 
     it('busca desc+limit e analisa em ordem cronológica (proteção contra query sem limite)', async () => {
-      setSupabase({
-        messages: [{ data: [{ role: 'ai', text: 'segunda' }, { role: 'lead', text: 'primeira' }], error: null }],
-        leads: [{ data: [{ id: 'l1', score: 50 }], error: null }],
-      })
+      rlsMock.queueRows([{ role: 'ai', text: 'segunda' }, { role: 'lead', text: 'primeira' }])
       mockState.analyzeLead.mockResolvedValue({ score: 50, intention: 'x', stage: 'y', interests: [] })
+      rlsMock.queueRows([{ id: 'l1', score: 50 }])
       const app = buildApp()
       await request(app).post('/api/leads/l1/analyze')
 
       expect(mockState.analyzeLead).toHaveBeenCalledWith([{ role: 'lead', text: 'primeira' }, { role: 'ai', text: 'segunda' }])
-      const orderCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'order')
-      expect(orderCall.args[1]).toEqual({ ascending: false })
-      const limitCall = supabaseMock.calls.find((c) => c.table === 'messages' && c.method === 'limit')
-      expect(limitCall.args[0]).toBe(500)
+      const call = rlsMock.calls.find((c) => /FROM messages/.test(c.sql))
+      expect(call.sql).toMatch(/ORDER BY created_at DESC/)
+      expect(call.params[2]).toBe(500)
     })
   })
 })

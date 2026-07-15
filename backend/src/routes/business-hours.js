@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 
 export const businessHoursRouter = Router()
@@ -31,8 +31,11 @@ const DEFAULT_SCHEDULE = {
 
 businessHoursRouter.get('/', async (req, res) => {
   try {
-    const rows = unwrap(await supabase.from('business_hours').select('*').eq('tenant_id', req.user.tenantId).limit(1))
-    res.json({ config: rows[0] || { enabled: false, timezone: 'America/Sao_Paulo', schedule: DEFAULT_SCHEDULE, off_message: 'Estamos fora do horário de atendimento. Retornaremos em breve!' } })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query('SELECT * FROM business_hours WHERE tenant_id = $1 LIMIT 1', [req.user.tenantId])
+      return r.rows[0]
+    })
+    res.json({ config: row || { enabled: false, timezone: 'America/Sao_Paulo', schedule: DEFAULT_SCHEDULE, off_message: 'Estamos fora do horário de atendimento. Retornaremos em breve!' } })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
@@ -41,12 +44,18 @@ businessHoursRouter.put('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const { enabled, timezone, schedule, off_message } = parsed.data
   try {
-    const row = unwrap(
-      await supabase.from('business_hours').upsert(
-        { tenant_id: req.user.tenantId, enabled: !!enabled, timezone: timezone || 'America/Sao_Paulo', schedule: schedule || DEFAULT_SCHEDULE, off_message: off_message || '' },
-        { onConflict: 'tenant_id' }
-      ).select('*').single()
-    )
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `INSERT INTO business_hours (tenant_id, enabled, timezone, schedule, off_message)
+         VALUES ($1, $2, $3, $4::jsonb, $5)
+         ON CONFLICT (tenant_id) DO UPDATE SET
+           enabled = EXCLUDED.enabled, timezone = EXCLUDED.timezone,
+           schedule = EXCLUDED.schedule, off_message = EXCLUDED.off_message
+         RETURNING *`,
+        [req.user.tenantId, !!enabled, timezone || 'America/Sao_Paulo', JSON.stringify(schedule || DEFAULT_SCHEDULE), off_message || '']
+      )
+      return r.rows[0]
+    })
     res.json({ config: row })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
@@ -54,8 +63,10 @@ businessHoursRouter.put('/', async (req, res) => {
 /** Utilitário exportado para o orchestrator verificar horário */
 export async function isWithinBusinessHours(tenantId) {
   try {
-    const rows = unwrap(await supabase.from('business_hours').select('enabled, timezone, schedule').eq('tenant_id', tenantId).limit(1))
-    const cfg = rows[0]
+    const cfg = await withTenant(tenantId, async (client) => {
+      const r = await client.query('SELECT enabled, timezone, schedule FROM business_hours WHERE tenant_id = $1 LIMIT 1', [tenantId])
+      return r.rows[0]
+    })
     if (!cfg || !cfg.enabled) return true
     const now = new Date(new Date().toLocaleString('en-US', { timeZone: cfg.timezone || 'America/Sao_Paulo' }))
     const day = now.getDay()
@@ -71,14 +82,20 @@ export async function isWithinBusinessHours(tenantId) {
 /** Fuso horário operacional do tenant (usado também pelo agendamento de acompanhamentos) */
 export async function getTenantTimezone(tenantId) {
   try {
-    const rows = unwrap(await supabase.from('business_hours').select('timezone').eq('tenant_id', tenantId).limit(1))
-    return rows[0]?.timezone || 'America/Sao_Paulo'
+    const row = await withTenant(tenantId, async (client) => {
+      const r = await client.query('SELECT timezone FROM business_hours WHERE tenant_id = $1 LIMIT 1', [tenantId])
+      return r.rows[0]
+    })
+    return row?.timezone || 'America/Sao_Paulo'
   } catch { return 'America/Sao_Paulo' }
 }
 
 export async function getOffMessage(tenantId) {
   try {
-    const rows = unwrap(await supabase.from('business_hours').select('off_message').eq('tenant_id', tenantId).limit(1))
-    return rows[0]?.off_message || 'Estamos fora do horário de atendimento. Retornaremos em breve!'
+    const row = await withTenant(tenantId, async (client) => {
+      const r = await client.query('SELECT off_message FROM business_hours WHERE tenant_id = $1 LIMIT 1', [tenantId])
+      return r.rows[0]
+    })
+    return row?.off_message || 'Estamos fora do horário de atendimento. Retornaremos em breve!'
   } catch { return 'Estamos fora do horário de atendimento.' }
 }

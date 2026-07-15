@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import jwt from 'jsonwebtoken'
 import { config } from '../config/index.js'
-import { supabase, unwrap } from '../db/supabase.js'
+import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { getAuthUrl, handleCallback, disconnect } from '../services/googleCalendar.js'
 import { saveCredentials, getCredentials, disconnectProvider } from '../services/integrations.js'
@@ -18,11 +18,14 @@ export const integrationsRouter = Router()
 // GET /api/integrations/google/setup → { configured, clientId }
 integrationsRouter.get('/google/setup', requireAuth, requireTenant, async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('integrations').select('meta')
-        .eq('tenant_id', req.user.tenantId).eq('provider', 'google_calendar').limit(1)
-    )
-    const setup = rows?.[0]?.meta?.setup
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        "SELECT meta FROM integrations WHERE tenant_id = $1 AND provider = 'google_calendar' LIMIT 1",
+        [req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    const setup = row?.meta?.setup
     res.json({
       configured: !!(setup?.client_id && setup?.client_secret_enc),
       clientId: setup?.client_id || null,
@@ -43,21 +46,23 @@ integrationsRouter.post('/google/setup', requireAuth, requireTenant, async (req,
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const { clientId, clientSecret } = parsed.data
 
-  const rows = unwrap(
-    await supabase.from('integrations').select('meta, status')
-      .eq('tenant_id', req.user.tenantId).eq('provider', 'google_calendar').limit(1)
-  )
-  const existingMeta = rows?.[0]?.meta || {}
+  await withTenant(req.user.tenantId, async (client) => {
+    const r = await client.query(
+      "SELECT meta, status FROM integrations WHERE tenant_id = $1 AND provider = 'google_calendar' LIMIT 1",
+      [req.user.tenantId]
+    )
+    const existing = r.rows[0]
+    const existingMeta = existing?.meta || {}
+    const newMeta = { ...existingMeta, setup: { client_id: clientId, client_secret_enc: encrypt(clientSecret) } }
 
-  unwrap(
-    await supabase.from('integrations').upsert({
-      tenant_id: req.user.tenantId,
-      provider: 'google_calendar',
-      status: rows?.[0]?.status || 'disconnected',
-      meta: { ...existingMeta, setup: { client_id: clientId, client_secret_enc: encrypt(clientSecret) } },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'tenant_id,provider' })
-  )
+    await client.query(
+      `INSERT INTO integrations (tenant_id, provider, status, meta, updated_at)
+       VALUES ($1, 'google_calendar', $2, $3::jsonb, $4)
+       ON CONFLICT (tenant_id, provider) DO UPDATE SET
+         status = EXCLUDED.status, meta = EXCLUDED.meta, updated_at = EXCLUDED.updated_at`,
+      [req.user.tenantId, existing?.status || 'disconnected', JSON.stringify(newMeta), new Date().toISOString()]
+    )
+  })
 
   res.json({ saved: true })
 })
@@ -96,12 +101,15 @@ integrationsRouter.get('/google/callback', async (req, res) => {
 
 // GET /api/integrations/google/status → { connected, email }
 integrationsRouter.get('/google/status', requireAuth, requireTenant, async (req, res) => {
-  const rows = unwrap(
-    await supabase.from('integrations').select('status, meta')
-      .eq('tenant_id', req.user.tenantId).eq('provider', 'google_calendar').limit(1)
-  )
-  if (!rows.length || rows[0].status !== 'connected') return res.json({ connected: false })
-  res.json({ connected: true, email: rows[0].meta?.email || null })
+  const row = await withTenant(req.user.tenantId, async (client) => {
+    const r = await client.query(
+      "SELECT status, meta FROM integrations WHERE tenant_id = $1 AND provider = 'google_calendar' LIMIT 1",
+      [req.user.tenantId]
+    )
+    return r.rows[0]
+  })
+  if (!row || row.status !== 'connected') return res.json({ connected: false })
+  res.json({ connected: true, email: row.meta?.email || null })
 })
 
 // POST /api/integrations/google/disconnect
@@ -122,14 +130,17 @@ const metaSchema = z.object({
 // POST /api/integrations/meta/test — valida credenciais Meta
 integrationsRouter.post('/meta/test', requireAuth, requireTenant, async (req, res) => {
   try {
-    const rows = unwrap(
-      await supabase.from('integrations').select('credentials, meta')
-        .eq('tenant_id', req.user.tenantId).eq('provider', 'meta_whatsapp').limit(1)
-    )
-    if (!rows.length) return res.status(404).json({ error: 'Meta WhatsApp não configurado.' })
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        "SELECT credentials, meta FROM integrations WHERE tenant_id = $1 AND provider = 'meta_whatsapp' LIMIT 1",
+        [req.user.tenantId]
+      )
+      return r.rows[0]
+    })
+    if (!row) return res.status(404).json({ error: 'Meta WhatsApp não configurado.' })
     const { decryptJSON } = await import('../services/crypto.js')
-    const creds = decryptJSON(rows[0].credentials)
-    const meta  = rows[0].meta
+    const creds = decryptJSON(row.credentials)
+    const meta  = row.meta
 
     const r = await fetch(
       `https://graph.facebook.com/v21.0/${meta.phoneNumberId}?fields=display_phone_number,verified_name`,
@@ -183,10 +194,13 @@ integrationsRouter.post('/evolution/connect', requireAuth, requireTenant, async 
 
 // GET /api/integrations/status → status de todos os providers do tenant
 integrationsRouter.get('/status', requireAuth, requireTenant, async (req, res) => {
-  const rows = unwrap(
-    await supabase.from('integrations').select('provider, status, meta')
-      .eq('tenant_id', req.user.tenantId)
-  )
+  const rows = await withTenant(req.user.tenantId, async (client) => {
+    const r = await client.query(
+      'SELECT provider, status, meta FROM integrations WHERE tenant_id = $1',
+      [req.user.tenantId]
+    )
+    return r.rows
+  })
   res.json({ integrations: rows })
 })
 
