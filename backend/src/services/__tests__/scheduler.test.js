@@ -54,6 +54,7 @@ const emptyOtherQueues = {
   broadcast_campaigns: [{ data: [], error: null }],
   scheduled_messages: [{ data: [], error: null }],
   followup_enrollment_messages: [{ data: [], error: null }],
+  appointment_reminders: [{ data: [], error: null }],
 }
 
 describe('scheduler', () => {
@@ -287,6 +288,56 @@ describe('scheduler', () => {
         ...emptyOtherQueues,
         platform_settings: [{ data: [{ billing_reminder_days_before: 3, billing_reminder_time: '09:00' }], error: null }],
         tenants: [{ data: [{ id: 'tenant-1', name: 'Empresa X', next_billing_at: '2026-08-01T15:00:00.000Z', billing_notify_user_id: 'user-1' }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(insertCallsFor('notifications')).toHaveLength(0)
+    })
+  })
+
+  describe('lembretes de agendamento (appointment_reminders)', () => {
+    it('cria a notificação pro responsável e marca o lembrete como disparado', async () => {
+      setSupabase({
+        ...emptyOtherQueues,
+        appointment_reminders: [
+          { data: [{ id: 'rem-1', tenant_id: 'tenant-1', appointment_id: 'appt-1' }], error: null },
+          { data: { id: 'rem-1' }, error: null }, // claim
+        ],
+        appointments: [{ data: [{ tenant_id: 'tenant-1', title: 'Demo', lead_name: 'Ana', start_time: '2026-07-14T13:00:00.000Z', assignee_id: 'user-1', status: 'scheduled' }], error: null }],
+        notifications: [{ data: [{ id: 'notif-1' }], error: null }],
+      })
+
+      await runOneTick()
+
+      const insert = insertCallsFor('notifications')[0]
+      expect(insert.args[0]).toMatchObject({ tenant_id: 'tenant-1', user_id: 'user-1', type: 'appointment_reminder' })
+      const claimUpdate = updateCallsFor('appointment_reminders').find((c) => c.args[0]?.fired === true)
+      expect(claimUpdate).toBeTruthy()
+    })
+
+    it('não notifica quando o agendamento foi cancelado', async () => {
+      setSupabase({
+        ...emptyOtherQueues,
+        appointment_reminders: [
+          { data: [{ id: 'rem-2', tenant_id: 'tenant-1', appointment_id: 'appt-2' }], error: null },
+          { data: { id: 'rem-2' }, error: null },
+        ],
+        appointments: [{ data: [{ tenant_id: 'tenant-1', title: 'Demo', assignee_id: 'user-1', status: 'cancelled' }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(insertCallsFor('notifications')).toHaveLength(0)
+    })
+
+    it('não processa quando outro tick já reivindicou o lembrete', async () => {
+      setSupabase({
+        ...emptyOtherQueues,
+        appointment_reminders: [
+          { data: [{ id: 'rem-3', tenant_id: 'tenant-1', appointment_id: 'appt-3' }], error: null },
+          { data: null, error: null }, // claim falhou
+        ],
       })
 
       await runOneTick()

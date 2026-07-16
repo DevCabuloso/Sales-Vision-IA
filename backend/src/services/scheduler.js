@@ -5,6 +5,7 @@ import { logUsage } from './usage.js'
 import { processBroadcast } from '../routes/broadcast.js'
 import { safeFetch } from '../utils/ssrfGuard.js'
 import { createBillingReminderNotification } from './billingNotifications.js'
+import { createAppointmentReminderNotification } from './appointmentNotifications.js'
 
 const POLL_MS = 20_000
 
@@ -206,6 +207,41 @@ async function runDueBillingReminders() {
   }
 }
 
+// Lembretes de agendamento: cada linha de appointment_reminders due (fire_at
+// <= now, ainda não disparada) vira uma notificação no sino do responsável
+// pela reunião. Reivindica com o mesmo padrão "claimed" das outras filas
+// deste arquivo, pra não duplicar entre ticks concorrentes.
+async function runDueAppointmentReminders() {
+  const due = unwrap(
+    await supabase.from('appointment_reminders')
+      .select('id, tenant_id, appointment_id')
+      .eq('fired', false)
+      .lte('fire_at', new Date().toISOString())
+      .limit(50)
+  ) || []
+
+  for (const reminder of due) {
+    const { data: claimed } = await supabase.from('appointment_reminders')
+      .update({ fired: true })
+      .eq('id', reminder.id).eq('fired', false)
+      .select('id').single()
+    if (!claimed) continue
+
+    try {
+      const apptRows = unwrap(
+        await supabase.from('appointments')
+          .select('tenant_id, title, lead_name, start_time, timezone, assignee_id, status')
+          .eq('id', reminder.appointment_id).eq('tenant_id', reminder.tenant_id).limit(1)
+      ) || []
+      const appt = apptRows[0]
+      if (!appt || appt.status === 'cancelled') continue
+      await createAppointmentReminderNotification(appt)
+    } catch (e) {
+      console.error('[scheduler] falha ao criar lembrete de agendamento:', e.message)
+    }
+  }
+}
+
 let running = false
 async function tick() {
   if (running) return
@@ -215,6 +251,7 @@ async function tick() {
     await runDueScheduledMessages()
     await runDueFollowupMessages()
     await runDueBillingReminders()
+    await runDueAppointmentReminders()
   } catch (e) {
     console.error('[scheduler] erro no ciclo:', e.message)
   } finally {

@@ -62,11 +62,11 @@ export const api = {
   analyzeLead: (id) => http.post(`/leads/${id}/analyze`).then((r) => r.data),
 
   // appointments
-  listAppointments: () => http.get('/appointments').then((r) => r.data.appointments),
+  listAppointments: (params) => http.get('/appointments', { params }).then((r) => r.data.appointments),
   syncAppointments: () => http.post('/appointments/sync').then((r) => r.data),
   createAppointment: (payload) =>
     http.post('/appointments', payload).then((r) => r.data),
-  cancelAppointment: (id) => http.post(`/appointments/${id}/cancel`).then((r) => r.data),
+  cancelAppointment: (id, payload) => http.post(`/appointments/${id}/cancel`, payload).then((r) => r.data),
   rescheduleAppointment: (id, payload) => http.patch(`/appointments/${id}`, payload).then((r) => r.data),
 
   // google calendar

@@ -3,7 +3,9 @@ import express from 'express'
 import request from 'supertest'
 import { createRlsMock } from '../../test-utils/rlsMock.js'
 
-const mockState = vi.hoisted(() => ({ box: {}, createEvent: null, cancelEvent: null, listEvents: null, updateEvent: null, logUsage: null, permCalls: [] }))
+const mockState = vi.hoisted(() => ({
+  box: {}, createEvent: null, cancelEvent: null, listEvents: null, updateEvent: null, isConnected: null, logUsage: null, permCalls: [],
+}))
 
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }; next() },
@@ -20,6 +22,7 @@ vi.mock('../../services/googleCalendar.js', () => ({
   cancelEvent: (...args) => mockState.cancelEvent(...args),
   listEvents: (...args) => mockState.listEvents(...args),
   updateEvent: (...args) => mockState.updateEvent(...args),
+  isConnected: (...args) => mockState.isConnected(...args),
 }))
 
 vi.mock('../../services/usage.js', () => ({
@@ -49,8 +52,9 @@ describe('routes/appointments', () => {
     vi.clearAllMocks()
     mockState.createEvent = vi.fn()
     mockState.cancelEvent = vi.fn().mockResolvedValue({ cancelled: true })
-    mockState.listEvents = vi.fn()
+    mockState.listEvents = vi.fn().mockResolvedValue([])
     mockState.updateEvent = vi.fn()
+    mockState.isConnected = vi.fn().mockResolvedValue(false)
     mockState.logUsage = vi.fn().mockResolvedValue(undefined)
     setRls()
   })
@@ -59,23 +63,35 @@ describe('routes/appointments', () => {
     expect(mockState.permCalls).toContainEqual(['agenda'])
   })
 
-  it('GET / lista as reuniões do tenant paginando com limit/offset padrão (500/0)', async () => {
-    rlsMock.queueRows([{ id: 'a1', title: 'Demo' }])
-    const app = buildApp()
-    const res = await request(app).get('/api/appointments')
-    expect(res.body.appointments).toHaveLength(1)
-    expect(res.body).toMatchObject({ limit: 500, offset: 0 })
-    const call = rlsMock.calls.find((c) => /FROM appointments/.test(c.sql))
-    expect(call.params.slice(-2)).toEqual([500, 0])
-  })
+  describe('GET /', () => {
+    it('lista as reuniões do tenant paginando com limit/offset padrão (500/0)', async () => {
+      rlsMock.queueRows([{ id: 'a1', title: 'Demo' }])
+      const app = buildApp()
+      const res = await request(app).get('/api/appointments')
+      expect(res.body.appointments).toHaveLength(1)
+      expect(res.body).toMatchObject({ limit: 500, offset: 0 })
+      const call = rlsMock.calls.find((c) => /FROM appointments/.test(c.sql))
+      expect(call.params.slice(-2)).toEqual([500, 0])
+    })
 
-  it('GET / aceita limit/offset customizados via query, respeitando o teto de 1000', async () => {
-    rlsMock.queueRows([])
-    const app = buildApp()
-    const res = await request(app).get('/api/appointments?limit=99999&offset=20')
-    expect(res.body).toMatchObject({ limit: 1000, offset: 20 })
-    const call = rlsMock.calls.find((c) => /FROM appointments/.test(c.sql))
-    expect(call.params.slice(-2)).toEqual([1000, 20])
+    it('aceita limit/offset customizados via query, respeitando o teto de 1000', async () => {
+      rlsMock.queueRows([])
+      const app = buildApp()
+      const res = await request(app).get('/api/appointments?limit=99999&offset=20')
+      expect(res.body).toMatchObject({ limit: 1000, offset: 20 })
+      const call = rlsMock.calls.find((c) => /FROM appointments/.test(c.sql))
+      expect(call.params.slice(-2)).toEqual([1000, 20])
+    })
+
+    it('aceita from/to opcionais e os inclui como filtros de start_time', async () => {
+      rlsMock.queueRows([])
+      const app = buildApp()
+      await request(app).get('/api/appointments?from=2026-08-01&to=2026-08-31')
+      const call = rlsMock.calls.find((c) => /FROM appointments/.test(c.sql))
+      expect(call.sql).toContain('start_time >= $2')
+      expect(call.sql).toContain('start_time <= $3')
+      expect(call.params).toEqual(['tenant-1', '2026-08-01', '2026-08-31', 500, 0])
+    })
   })
 
   describe('POST /sync', () => {
@@ -131,32 +147,98 @@ describe('routes/appointments', () => {
     })
   })
 
-  describe('POST /', () => {
+  describe('POST / (criação local-first)', () => {
     it('rejeita payload inválido', async () => {
       const app = buildApp()
       const res = await request(app).post('/api/appointments').send({ title: '' })
       expect(res.status).toBe(400)
     })
 
-    it('cria o evento no Google e persiste o agendamento', async () => {
+    it('cria localmente quando o Google não está conectado (sem chamar createEvent)', async () => {
+      rlsMock.queueRows([{ id: 'a1', title: 'Demo', meeting_link: null }])
+      const app = buildApp()
+      const res = await request(app).post('/api/appointments').send({
+        title: 'Demo', start: '2026-01-01T10:00:00Z', end: '2026-01-01T10:30:00Z',
+      })
+      expect(res.status).toBe(201)
+      expect(mockState.createEvent).not.toHaveBeenCalled()
+      expect(res.body.appointment).toMatchObject({ id: 'a1' })
+      expect(res.body.occurrences).toBe(1)
+      expect(res.body.warning).toBeNull()
+      expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'appointment_created')
+      const insert = insertCallsMatching(/appointments/)[0]
+      expect(insert.params).toContain('local')
+    })
+
+    it('cria no Google quando conectado e persiste local com o meeting_link real', async () => {
+      mockState.isConnected.mockResolvedValue(true)
       mockState.createEvent.mockResolvedValue({ externalId: 'ext-1', meetingLink: 'https://meet/1' })
-      rlsMock.queueRows([{ id: 'a1', title: 'Demo' }])
+      rlsMock.queueRows([{ id: 'a1', title: 'Demo', meeting_link: 'https://meet/1' }])
       const app = buildApp()
       const res = await request(app).post('/api/appointments').send({
         title: 'Demo', start: '2026-01-01T10:00:00Z', end: '2026-01-01T10:30:00Z',
       })
       expect(res.status).toBe(201)
       expect(res.body.meetingLink).toBe('https://meet/1')
-      expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'appointment_created')
+      const insert = insertCallsMatching(/appointments/)[0]
+      expect(insert.params).toContain('google')
+      expect(insert.params).toContain('ext-1')
     })
 
-    it('retorna 502 quando falha ao criar o evento no Google', async () => {
-      mockState.createEvent.mockRejectedValue(new Error('Google Calendar não conectado para este cliente.'))
+    it('mantém o agendamento local quando a criação no Google falha (mesmo conectado)', async () => {
+      mockState.isConnected.mockResolvedValue(true)
+      mockState.createEvent.mockRejectedValue(new Error('falha de rede'))
+      rlsMock.queueRows([{ id: 'a1', title: 'Demo' }])
       const app = buildApp()
       const res = await request(app).post('/api/appointments').send({
         title: 'Demo', start: '2026-01-01T10:00:00Z', end: '2026-01-01T10:30:00Z',
       })
-      expect(res.status).toBe(502)
+      expect(res.status).toBe(201)
+      expect(res.body.warning).toMatch(/Google Calendar/)
+      const insert = insertCallsMatching(/appointments/)[0]
+      expect(insert.params).toContain('local')
+    })
+
+    it('materializa uma série recorrente localmente quando o Google não está conectado', async () => {
+      rlsMock.queueRows([{ id: 'a1', title: 'Demo' }])
+      rlsMock.queueRows([{ id: 'a2', title: 'Demo' }])
+      rlsMock.queueRows([{ id: 'a3', title: 'Demo' }])
+      const app = buildApp()
+      const res = await request(app).post('/api/appointments').send({
+        title: 'Demo', start: '2026-08-03T10:00:00Z', end: '2026-08-03T10:30:00Z',
+        recurrence: { freq: 'daily', count: 3 },
+      })
+      expect(res.status).toBe(201)
+      expect(res.body.occurrences).toBe(3)
+      expect(res.body.appointment.id).toBe('a1')
+      expect(insertCallsMatching(/appointments/)).toHaveLength(3)
+    })
+
+    it('série recorrente com Google conectado: cria o mestre no Google e localiza as instâncias via sync', async () => {
+      mockState.isConnected.mockResolvedValue(true)
+      mockState.createEvent.mockResolvedValue({ externalId: 'ext-master', meetingLink: 'https://meet/1', recurringEventId: 'ext-master' })
+      mockState.listEvents.mockResolvedValue([
+        { externalId: 'ext-inst-1', title: 'Demo', start: '2026-08-03T10:00:00Z', end: '2026-08-03T10:30:00Z', meetingLink: 'https://meet/1', status: 'confirmed', recurringEventId: 'ext-master' },
+      ])
+      // 1) sync: SELECT external_ids existentes
+      rlsMock.queueRows([])
+      // 2) sync: INSERT do evento expandido (retorno não é usado)
+      rlsMock.queueRows([])
+      // 3) UPDATE lead/color na série (retorno não é usado)
+      rlsMock.queueRows([])
+      // 4) SELECT * da série recém-sincronizada
+      rlsMock.queueRows([{ id: 'a1', google_recurring_event_id: 'ext-master', meeting_link: 'https://meet/1' }])
+
+      const app = buildApp()
+      const res = await request(app).post('/api/appointments').send({
+        title: 'Demo', start: '2026-08-03T10:00:00Z', end: '2026-08-03T10:30:00Z',
+        recurrence: { freq: 'daily', count: 5 },
+      })
+      expect(res.status).toBe(201)
+      expect(res.body.appointment).toMatchObject({ id: 'a1', google_recurring_event_id: 'ext-master' })
+      expect(mockState.createEvent).toHaveBeenCalled()
+      const [, opts] = mockState.createEvent.mock.calls[0]
+      expect(opts.recurrence).toBe('RRULE:FREQ=DAILY;COUNT=5')
     })
   })
 
@@ -208,6 +290,45 @@ describe('routes/appointments', () => {
       const res = await request(app).patch('/api/appointments/a1').send({ title: 'x' })
       expect(res.status).toBe(502)
     })
+
+    it('regressão: PATCH só com reminders (sem título/horário/etc) não gera UPDATE com SET vazio', async () => {
+      rlsMock.queueRows([{ id: 'a1', external_id: null, status: 'scheduled', start_time: '2026-01-01T10:00:00Z' }])
+      rlsMock.queueRows([{ id: 'a1', start_time: '2026-01-01T10:00:00Z' }]) // SELECT (sem UPDATE, patch vazio)
+      const app = buildApp()
+      const res = await request(app).patch('/api/appointments/a1').send({ reminders: [{ minutesBefore: 30 }] })
+      expect(res.status).toBe(200)
+      expect(updateCallsMatching(/appointments/)).toHaveLength(0)
+      const select = rlsMock.calls.find((c) => /^SELECT \* FROM appointments/.test(c.sql))
+      expect(select).toBeTruthy()
+    })
+
+    it('scope="following" atualiza esta e as próximas ocorrências da série local', async () => {
+      rlsMock.queueRows([{ id: 'a2', external_id: null, status: 'scheduled', recurrence_parent_id: 'a1', start_time: '2026-08-05T10:00:00Z' }])
+      rlsMock.queueRows([{ id: 'a2' }, { id: 'a3' }])
+      const app = buildApp()
+      const res = await request(app).patch('/api/appointments/a2').send({ title: 'Novo título', scope: 'following' })
+      expect(res.status).toBe(200)
+      expect(res.body.updated).toBe(2)
+      const update = updateCallsMatching(/appointments/)[0]
+      expect(update.sql).toContain('recurrence_parent_id')
+      expect(update.sql).toContain('start_time >=')
+    })
+
+    it('scope="all" atualiza toda a série local', async () => {
+      rlsMock.queueRows([{ id: 'a1', external_id: null, status: 'scheduled', recurrence_parent_id: null, start_time: '2026-08-03T10:00:00Z' }])
+      rlsMock.queueRows([{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }])
+      const app = buildApp()
+      const res = await request(app).patch('/api/appointments/a1').send({ color: 'blue', scope: 'all' })
+      expect(res.status).toBe(200)
+      expect(res.body.updated).toBe(3)
+    })
+
+    it('rejeita scope diferente de "this" quando a série está sincronizada com o Google', async () => {
+      rlsMock.queueRows([{ id: 'a1', external_id: 'ext-1', status: 'scheduled', google_recurring_event_id: 'ext-master', start_time: '2026-08-03T10:00:00Z' }])
+      const app = buildApp()
+      const res = await request(app).patch('/api/appointments/a1').send({ title: 'x', scope: 'all' })
+      expect(res.status).toBe(400)
+    })
   })
 
   describe('POST /:id/cancel', () => {
@@ -235,6 +356,32 @@ describe('routes/appointments', () => {
       const res = await request(app).post('/api/appointments/a1/cancel')
       expect(res.status).toBe(200)
       expect(res.body).toEqual({ cancelled: true })
+    })
+
+    it('scope="all" cancela toda a série local', async () => {
+      rlsMock.queueRows([{ external_id: null, recurrence_parent_id: null, start_time: '2026-08-03T10:00:00Z' }])
+      const app = buildApp()
+      const res = await request(app).post('/api/appointments/a1/cancel').send({ scope: 'all' })
+      expect(res.status).toBe(200)
+      const update = updateCallsMatching(/appointments/)[0]
+      expect(update.sql).toContain('recurrence_parent_id')
+      expect(update.sql).not.toContain('start_time >=')
+    })
+
+    it('scope="following" cancela esta e as próximas ocorrências', async () => {
+      rlsMock.queueRows([{ external_id: null, recurrence_parent_id: 'a1', start_time: '2026-08-05T10:00:00Z' }])
+      const app = buildApp()
+      const res = await request(app).post('/api/appointments/a2/cancel').send({ scope: 'following' })
+      expect(res.status).toBe(200)
+      const update = updateCallsMatching(/appointments/)[0]
+      expect(update.sql).toContain('start_time >=')
+    })
+
+    it('rejeita scope diferente de "this" quando é série do Google', async () => {
+      rlsMock.queueRows([{ external_id: 'ext-1', google_recurring_event_id: 'ext-master' }])
+      const app = buildApp()
+      const res = await request(app).post('/api/appointments/a1/cancel').send({ scope: 'all' })
+      expect(res.status).toBe(400)
     })
   })
 })

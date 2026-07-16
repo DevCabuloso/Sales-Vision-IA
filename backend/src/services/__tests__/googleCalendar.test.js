@@ -187,6 +187,29 @@ describe('googleCalendar service', () => {
       expect(result.meetingLink).toBe('https://meet.google.com/abc')
     })
 
+    it('createEvent aceita description/location/attendees com nome/recurrence/reminders e evento de dia inteiro', async () => {
+      setSupabase({ integrations: [{ data: [{ credentials: 'enc', meta: {}, status: 'connected' }], error: null }] })
+      const insert = vi.fn(async () => ({ data: { id: 'evt-3', status: 'confirmed', recurringEventId: undefined } }))
+      mockState.calendarFactory = vi.fn(() => ({ events: { insert } }))
+
+      const result = await gcal.createEvent('tenant-1', {
+        summary: 'Reunião recorrente', description: 'Pauta', location: 'Sala 2',
+        start: '2026-08-03', end: '2026-08-03', allDay: true,
+        attendees: [{ email: 'ana@ex.com', name: 'Ana' }],
+        recurrence: 'RRULE:FREQ=WEEKLY;BYDAY=MO', reminders: [{ method: 'popup', minutesBefore: 30 }],
+      })
+
+      const requestBody = insert.mock.calls[0][0].requestBody
+      expect(requestBody.description).toBe('Pauta')
+      expect(requestBody.location).toBe('Sala 2')
+      expect(requestBody.start).toEqual({ date: '2026-08-03' })
+      expect(requestBody.end).toEqual({ date: '2026-08-03' })
+      expect(requestBody.attendees).toEqual([{ email: 'ana@ex.com', displayName: 'Ana' }])
+      expect(requestBody.recurrence).toEqual(['RRULE:FREQ=WEEKLY;BYDAY=MO'])
+      expect(requestBody.reminders).toEqual({ useDefault: false, overrides: [{ method: 'popup', minutes: 30 }] })
+      expect(result.recurringEventId).toBe('evt-3') // sem recurringEventId na resposta, mas criou com recurrence → é o próprio mestre
+    })
+
     it('updateEvent envia apenas os campos fornecidos', async () => {
       setSupabase({ integrations: [{ data: [{ credentials: 'enc', meta: {}, status: 'connected' }], error: null }] })
       const patch = vi.fn(async () => ({ data: { id: 'evt-1', status: 'confirmed', hangoutLink: 'https://meet/xyz' } }))
@@ -198,12 +221,35 @@ describe('googleCalendar service', () => {
       expect(requestBody).toEqual({ start: { dateTime: new Date('2026-08-02T10:00:00Z').toISOString(), timeZone: 'America/Sao_Paulo' } })
     })
 
+    it('updateEvent envia description/location/attendees/reminders quando fornecidos', async () => {
+      setSupabase({ integrations: [{ data: [{ credentials: 'enc', meta: {}, status: 'connected' }], error: null }] })
+      const patch = vi.fn(async () => ({ data: { id: 'evt-1', status: 'confirmed' } }))
+      mockState.calendarFactory = vi.fn(() => ({ events: { patch } }))
+
+      await gcal.updateEvent('tenant-1', 'evt-1', {
+        description: 'Nova pauta', location: 'Sala 3', attendees: ['ana@ex.com'],
+        reminders: [{ method: 'email', minutesBefore: 60 }],
+      })
+
+      const requestBody = patch.mock.calls[0][0].requestBody
+      expect(requestBody.description).toBe('Nova pauta')
+      expect(requestBody.location).toBe('Sala 3')
+      expect(requestBody.attendees).toEqual([{ email: 'ana@ex.com' }])
+      expect(requestBody.reminders).toEqual({ useDefault: false, overrides: [{ method: 'email', minutes: 60 }] })
+      expect(requestBody.start).toBeUndefined()
+    })
+
     it('listEvents mapeia eventos, tratando eventos de dia inteiro (date) como meio-dia local', async () => {
       setSupabase({ integrations: [{ data: [{ credentials: 'enc', meta: {}, status: 'connected' }], error: null }] })
       const list = vi.fn(async () => ({
         data: {
           items: [
-            { id: 'evt-1', summary: 'Reunião', start: { dateTime: '2026-08-01T10:00:00Z' }, end: { dateTime: '2026-08-01T10:30:00Z' }, hangoutLink: 'https://meet/x', status: 'confirmed' },
+            {
+              id: 'evt-1', summary: 'Reunião', description: 'Pauta', location: 'Sala 1',
+              start: { dateTime: '2026-08-01T10:00:00Z' }, end: { dateTime: '2026-08-01T10:30:00Z' },
+              hangoutLink: 'https://meet/x', status: 'confirmed', recurringEventId: 'evt-master',
+              attendees: [{ email: 'me@ex.com', self: true, responseStatus: 'accepted' }, { email: 'ana@ex.com', displayName: 'Ana', responseStatus: 'needsAction' }],
+            },
             { id: 'evt-2', summary: 'Dia inteiro', start: { date: '2026-08-05' }, end: { date: '2026-08-06' }, status: 'confirmed' },
           ],
         },
@@ -213,9 +259,14 @@ describe('googleCalendar service', () => {
       const events = await gcal.listEvents('tenant-1', { timeMin: '2026-08-01T00:00:00Z' })
 
       expect(events).toHaveLength(2)
-      expect(events[0]).toMatchObject({ externalId: 'evt-1', title: 'Reunião', meetingLink: 'https://meet/x' })
+      expect(events[0]).toMatchObject({
+        externalId: 'evt-1', title: 'Reunião', description: 'Pauta', location: 'Sala 1',
+        meetingLink: 'https://meet/x', allDay: false, recurringEventId: 'evt-master',
+        guests: [{ email: 'ana@ex.com', name: 'Ana', status: 'needsAction' }],
+      })
       expect(events[1].start).toBe('2026-08-05T12:00:00')
       expect(events[1].meetingLink).toBeNull()
+      expect(events[1].allDay).toBe(true)
     })
 
     it('cancelEvent chama events.delete e retorna cancelled=true', async () => {
@@ -258,6 +309,22 @@ describe('googleCalendar service', () => {
 
       const update = updateCallsFor('integrations')[0]
       expect(update.args[0].credentials).toMatch(/^enc\(/)
+    })
+  })
+
+  describe('isConnected', () => {
+    it('retorna false sem tenantId, sem lançar', async () => {
+      expect(await gcal.isConnected(null)).toBe(false)
+    })
+
+    it('retorna false quando não há integração ou status != connected', async () => {
+      setSupabase({ integrations: [{ data: [], error: null }] })
+      expect(await gcal.isConnected('tenant-1')).toBe(false)
+    })
+
+    it('retorna true quando status é connected', async () => {
+      setSupabase({ integrations: [{ data: [{ status: 'connected' }], error: null }] })
+      expect(await gcal.isConnected('tenant-1')).toBe(true)
     })
   })
 

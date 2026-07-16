@@ -125,42 +125,80 @@ export async function getCalendarClient(tenantId) {
   return { calendar, calendarId };
 }
 
+/** Normaliza attendees pra sempre virar [{email, displayName?}]. */
+function normalizeAttendees(attendees = []) {
+  return attendees.map((a) => (typeof a === 'string' ? { email: a } : { email: a.email, displayName: a.name || a.displayName || undefined }));
+}
+
+/** Monta os campos start/end da API do Google, tratando evento de dia inteiro. */
+function buildTimeFields(start, end, timeZone, allDay) {
+  if (allDay) {
+    return {
+      start: { date: String(start).slice(0, 10) },
+      end: { date: String(end).slice(0, 10) },
+    };
+  }
+  return {
+    start: { dateTime: new Date(start).toISOString(), timeZone },
+    end: { dateTime: new Date(end).toISOString(), timeZone },
+  };
+}
+
 /** Cria um evento com Google Meet automático. */
-export async function createEvent(tenantId, { summary, description, start, end, attendees = [], timeZone = 'America/Sao_Paulo' }) {
+export async function createEvent(tenantId, {
+  summary, description, location, start, end, attendees = [], timeZone = 'America/Sao_Paulo',
+  allDay = false, recurrence = null, reminders = null,
+}) {
   const { calendar, calendarId } = await getCalendarClient(tenantId);
+  const requestBody = {
+    summary,
+    description,
+    location,
+    ...buildTimeFields(start, end, timeZone, allDay),
+    attendees: normalizeAttendees(attendees),
+    conferenceData: {
+      createRequest: {
+        requestId: `sdr-${Date.now()}`,
+        conferenceSolutionKey: { type: 'hangoutsMeet' },
+      },
+    },
+  };
+  if (recurrence) requestBody.recurrence = [recurrence];
+  if (reminders?.length) {
+    requestBody.reminders = { useDefault: false, overrides: reminders.map((r) => ({ method: r.method || 'popup', minutes: r.minutesBefore })) };
+  }
+
   const { data } = await calendar.events.insert({
     calendarId,
     conferenceDataVersion: 1,
     sendUpdates: 'all',
-    requestBody: {
-      summary,
-      description,
-      start: { dateTime: new Date(start).toISOString(), timeZone },
-      end: { dateTime: new Date(end).toISOString(), timeZone },
-      attendees: attendees.map((email) => ({ email })),
-      conferenceData: {
-        createRequest: {
-          requestId: `sdr-${Date.now()}`,
-          conferenceSolutionKey: { type: 'hangoutsMeet' },
-        },
-      },
-    },
+    requestBody,
   }, { timeout: GOOGLE_TIMEOUT_MS });
   return {
     externalId: data.id,
     htmlLink: data.htmlLink,
     meetingLink: data.hangoutLink || data.conferenceData?.entryPoints?.[0]?.uri || null,
     status: data.status,
+    recurringEventId: data.recurringEventId || (recurrence ? data.id : undefined),
   };
 }
 
-/** Atualiza horário (e opcionalmente título) de um evento existente. */
-export async function updateEvent(tenantId, externalId, { summary, start, end, timeZone = 'America/Sao_Paulo' } = {}) {
+/** Atualiza campos de um evento existente. */
+export async function updateEvent(tenantId, externalId, {
+  summary, description, location, start, end, attendees, timeZone = 'America/Sao_Paulo',
+  allDay = false, reminders,
+} = {}) {
   const { calendar, calendarId } = await getCalendarClient(tenantId);
   const requestBody = {};
   if (summary) requestBody.summary = summary;
-  if (start) requestBody.start = { dateTime: new Date(start).toISOString(), timeZone };
-  if (end) requestBody.end = { dateTime: new Date(end).toISOString(), timeZone };
+  if (description !== undefined) requestBody.description = description;
+  if (location !== undefined) requestBody.location = location;
+  if (start) requestBody.start = buildTimeFields(start, end || start, timeZone, allDay).start;
+  if (end) requestBody.end = buildTimeFields(start || end, end, timeZone, allDay).end;
+  if (attendees) requestBody.attendees = normalizeAttendees(attendees);
+  if (reminders?.length) {
+    requestBody.reminders = { useDefault: false, overrides: reminders.map((r) => ({ method: r.method || 'popup', minutes: r.minutesBefore })) };
+  }
   const { data } = await calendar.events.patch({
     calendarId,
     eventId: externalId,
@@ -172,6 +210,17 @@ export async function updateEvent(tenantId, externalId, { summary, start, end, t
     meetingLink: data.hangoutLink || data.conferenceData?.entryPoints?.[0]?.uri || null,
     status: data.status,
   };
+}
+
+/** Verifica, sem lançar erro, se o tenant tem o Google Calendar conectado. */
+export async function isConnected(tenantId) {
+  if (!tenantId) return false;
+  const rows = unwrap(
+    await supabase.from('integrations')
+      .select('status')
+      .eq('tenant_id', tenantId).eq('provider', 'google_calendar').limit(1)
+  );
+  return rows?.[0]?.status === 'connected';
 }
 
 /** Lista eventos num intervalo. */
@@ -189,11 +238,18 @@ export async function listEvents(tenantId, { timeMin, timeMax, maxResults = 50, 
   return (data.items || []).map((e) => ({
     externalId: e.id,
     title: e.summary,
+    description: e.description || null,
+    location: e.location || null,
+    allDay: !!e.start?.date,
     // bare date (all-day) → append T12:00:00 so JS parses as local noon, not UTC midnight
     start: e.start?.dateTime || (e.start?.date ? e.start.date + 'T12:00:00' : null),
     end:   e.end?.dateTime   || (e.end?.date   ? e.end.date   + 'T12:00:00' : null),
     meetingLink: e.hangoutLink || null,
     status: e.status,
+    recurringEventId: e.recurringEventId || null,
+    guests: (e.attendees || [])
+      .filter((a) => !a.self)
+      .map((a) => ({ email: a.email, name: a.displayName || undefined, status: a.responseStatus || 'needsAction' })),
   }));
 }
 
