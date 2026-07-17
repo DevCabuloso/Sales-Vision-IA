@@ -7,7 +7,7 @@ vi.mock('../../db/supabase.js', () => ({
   get supabase() { return mockState.box.supabase },
 }))
 
-const { logUsage } = await import('../usage.js')
+const { logUsage, logAudit } = await import('../usage.js')
 
 let supabaseMock
 function setSupabase(responses) {
@@ -47,5 +47,28 @@ describe('services/usage', () => {
     }
 
     await expect(logUsage('tenant-1', 'user-1', 'appointment_created')).resolves.toBeUndefined()
+  })
+
+  describe('logAudit', () => {
+    it('grava com event_type no formato audit.<entity>.<action> e meta { entityId, changes }', async () => {
+      setSupabase({ usage_events: [{ data: [{ id: 'ue-1' }], error: null }] })
+
+      await logAudit('tenant-1', 'user-1', 'lead', 'update', 'l1', { stage: 'Qualificado' })
+
+      const insert = supabaseMock.calls.find((c) => c.table === 'usage_events' && c.method === 'insert')
+      expect(insert.args[0]).toEqual({
+        tenant_id: 'tenant-1', user_id: 'user-1', event_type: 'audit.lead.update',
+        meta: { entityId: 'l1', changes: { stage: 'Qualificado' } },
+      })
+    })
+
+    it('usa {} como changes padrão quando não informado', async () => {
+      setSupabase({ usage_events: [{ data: [], error: null }] })
+
+      await logAudit('tenant-1', 'user-1', 'operator', 'delete', 'u1')
+
+      const insert = supabaseMock.calls.find((c) => c.table === 'usage_events' && c.method === 'insert')
+      expect(insert.args[0].meta).toEqual({ entityId: 'u1', changes: {} })
+    })
   })
 })

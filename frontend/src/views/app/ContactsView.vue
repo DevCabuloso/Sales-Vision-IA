@@ -27,7 +27,10 @@
               <span>{{ (item.name || item.phone).slice(0, 2).toUpperCase() }}</span>
             </div>
             <div>
-              <div class="text-body-2 font-weight-medium">{{ item.name || '—' }}</div>
+              <div class="text-body-2 font-weight-medium">
+                {{ item.name || '—' }}
+                <v-chip v-if="item.erased_at" size="x-small" color="warning" variant="tonal" class="ml-1">dados removidos</v-chip>
+              </div>
               <div class="text-caption font-mono" style="color:#9FB0BC">{{ item.phone }}</div>
             </div>
           </div>
@@ -50,8 +53,20 @@
         <template #item.actions="{ item }">
           <div class="d-flex ga-1 justify-end">
             <v-btn icon variant="text" size="small" color="success" :to="`/chat/${item.id}`" title="Chat"><v-icon icon="mdi-chat-outline" size="16" /></v-btn>
-            <v-btn icon variant="text" size="small" @click="openEdit(item)"><v-icon icon="mdi-pencil-outline" size="16" /></v-btn>
+            <v-btn icon variant="text" size="small" :disabled="!!item.erased_at" @click="openEdit(item)"><v-icon icon="mdi-pencil-outline" size="16" /></v-btn>
             <v-btn icon variant="text" size="small" color="error" @click="confirmDelete(item)"><v-icon icon="mdi-delete-outline" size="16" /></v-btn>
+            <v-menu location="bottom end">
+              <template #activator="{ props }">
+                <v-btn icon variant="text" size="small" v-bind="props" title="Mais ações"><v-icon icon="mdi-dots-vertical" size="16" /></v-btn>
+              </template>
+              <v-list density="compact" min-width="220" class="glass">
+                <v-list-item prepend-icon="mdi-shield-lock-outline" title="Exportar dados (LGPD)" @click="exportPrivacyData(item)" />
+                <v-list-item
+                  prepend-icon="mdi-shield-off-outline" title="Excluir dados (LGPD)"
+                  class="text-error" :disabled="!!item.erased_at" @click="confirmErase(item)"
+                />
+              </v-list>
+            </v-menu>
           </div>
         </template>
         <template #no-data>
@@ -119,6 +134,23 @@
       </v-card>
     </v-dialog>
 
+    <!-- Dialog: excluir dados (LGPD) -->
+    <v-dialog v-model="eraseDialog" max-width="440">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Excluir dados (LGPD)</v-card-title>
+        <v-card-text>
+          Isso anonimiza permanentemente nome, telefone, e-mail e o histórico de mensagens de
+          <strong>{{ eraseTarget?.name || eraseTarget?.phone }}</strong>. O registro não é apagado (fica só sem dados
+          pessoais), então relatórios continuam funcionando. <strong>Irreversível.</strong>
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="eraseDialog = false">Cancelar</v-btn>
+          <v-btn color="error" :loading="erasing" @click="doErase">Excluir dados</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Dialog: importar -->
     <v-dialog v-model="importDialog" max-width="460">
       <v-card class="glass pa-2" border>
@@ -159,8 +191,11 @@ const search = ref('')
 const formDialog = ref(false)
 const deleteDialog = ref(false)
 const importDialog = ref(false)
+const eraseDialog = ref(false)
+const erasing = ref(false)
 const editing = ref(null)
 const deleteTarget = ref(null)
+const eraseTarget = ref(null)
 const importFile = ref(null)
 const importResult = ref(null)
 const availableLabels = ref([])
@@ -230,6 +265,27 @@ async function deleteContact() {
   deleting.value = true
   try { await api.deleteContact(deleteTarget.value.id); contacts.value = contacts.value.filter((c) => c.id !== deleteTarget.value.id); deleteDialog.value = false; toast.success('Contato excluído.') }
   catch (e) { toast.error(e.message) } finally { deleting.value = false }
+}
+
+async function exportPrivacyData(item) {
+  try {
+    const r = await http.get(`/privacy/export/${item.id}`, { responseType: 'blob' })
+    const burl = URL.createObjectURL(r.data)
+    const a = document.createElement('a'); a.href = burl; a.download = `dados-lead-${item.id}.json`; document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(burl), 3000)
+  } catch (e) { toast.error('Erro ao exportar: ' + e.message) }
+}
+
+function confirmErase(item) { eraseTarget.value = item; eraseDialog.value = true }
+async function doErase() {
+  erasing.value = true
+  try {
+    await api.eraseLeadData(eraseTarget.value.id)
+    const idx = contacts.value.findIndex((c) => c.id === eraseTarget.value.id)
+    if (idx !== -1) contacts.value[idx] = { ...contacts.value[idx], name: '[dado removido - LGPD]', phone: '[dado removido - LGPD]', email: null, tags: null, erased_at: new Date().toISOString() }
+    eraseDialog.value = false
+    toast.success('Dados removidos.')
+  } catch (e) { toast.error(e.message) } finally { erasing.value = false }
 }
 
 async function exportContacts() {

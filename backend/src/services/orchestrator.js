@@ -3,6 +3,7 @@ import { runAgent } from './ai/agent.js'
 import { analyzeLead } from './ai/analyze.js'
 import * as whatsapp from './whatsapp/index.js'
 import { logUsage } from './usage.js'
+import { enqueueWebhookEvent } from './webhookDelivery.js'
 import { isWithinBusinessHours, getOffMessage } from '../routes/business-hours.js'
 import { uploadChatMedia } from './mediaStorage.js'
 import { decryptJSON } from './crypto.js'
@@ -266,6 +267,7 @@ export async function handleInboundMessage({
   const savedId = msgResult?.data?.[0]?.id || '(sem id)'
   console.log(`[orchestrator] mensagem salva: id=${savedId} lead_id=${lead.id} text="${finalText?.slice(0, 40)}"`)
   if (msgResult?.error) console.error('[orchestrator] ERRO ao salvar mensagem:', msgResult.error.message)
+  enqueueWebhookEvent(tenantId, 'message.received', { leadId: lead.id, phone: lead.phone, text: finalText, provider })
 
   // grupo: fica só no atendimento humano — mensagem já está salva/visível no
   // Chat, mas não passa por fluxo nem IA (evita a IA falando num grupo com

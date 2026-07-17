@@ -4,6 +4,7 @@ import { config } from '../config/index.js'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { getOrCreateChannelWebhookSecret } from '../utils/channelWebhookSecret.js'
+import { logAudit } from '../services/usage.js'
 
 export const channelsRouter = Router()
 
@@ -198,6 +199,7 @@ channelsRouter.patch('/:id/settings', requireAuth, requireTenant, async (req, re
       return r.rows[0]
     })
     if (!row) return res.status(404).json({ error: 'Canal não encontrado.' })
+    await logAudit(req.user.tenantId, req.user.id, 'channel', 'update', req.params.id, parsed.data)
     res.json({ channel: row })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
@@ -216,6 +218,7 @@ channelsRouter.patch('/:id', requireAuth, requireTenant, async (req, res) => {
       return r.rows[0]
     })
     if (!row) return res.status(404).json({ error: 'Canal não encontrado.' })
+    await logAudit(req.user.tenantId, req.user.id, 'channel', 'rename', req.params.id, { name })
     res.json({ channel: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -342,6 +345,7 @@ channelsRouter.post('/:id/disconnect', requireAuth, requireTenant, async (req, r
       )
     )
 
+    await logAudit(req.user.tenantId, req.user.id, 'channel', 'disconnect', req.params.id)
     res.json({ disconnected: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -370,6 +374,7 @@ channelsRouter.delete('/:id', requireAuth, requireTenant, async (req, res) => {
     await withTenant(req.user.tenantId, (client) =>
       client.query('DELETE FROM channels WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
+    await logAudit(req.user.tenantId, req.user.id, 'channel', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

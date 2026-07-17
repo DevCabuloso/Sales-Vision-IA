@@ -73,17 +73,31 @@ export function invalidateUserCache(userId) {
 /**
  * Bloqueia o acesso a uma área da plataforma (chat/kanban/contatos/leads/
  * agenda/templates/broadcast) quando o operador está marcado como restrito
- * (`is_restricted`) e não tem a permissão correspondente. Donos e admins do
- * tenant nunca são restringíveis por essa checagem — a restrição é uma
- * ferramenta do admin para limitar agentes, não algo que se autoaplica.
- * Aceita mais de uma chave (ex.: 'leads', 'kanban') quando a mesma rota
- * atende mais de uma tela do frontend — basta ter uma delas liberada.
+ * (`is_restricted`) e não tem a AÇÃO específica liberada naquela área. Donos
+ * e admins do tenant nunca são restringíveis por essa checagem — a restrição
+ * é uma ferramenta do admin para limitar agentes, não algo que se autoaplica.
+ *
+ * `areas` aceita uma string ou um array (ex.: ['leads', 'kanban']) quando a
+ * mesma rota atende mais de uma tela do frontend — basta uma delas liberar
+ * a ação. `action` é 'view' | 'create' | 'edit' | 'delete'.
+ *
+ * Compatibilidade: `permissions[area]` pode ainda estar no formato antigo
+ * (booleano único, pré-migration_permissions_by_action.sql) para um usuário
+ * criado bem no meio do deploy — nesse caso `true` libera qualquer ação.
  */
-export function requirePermission(...keys) {
+export function requirePermission(areas, action) {
+  const areaList = Array.isArray(areas) ? areas : [areas]
   return (req, res, next) => {
     if (!req.user?.isRestricted) return next()
     if (req.user.role === 'owner' || req.user.role === 'admin') return next()
-    if (keys.some((key) => req.user.permissions?.[key] === true)) return next()
+    const perms = req.user.permissions || {}
+    const allowed = areaList.some((area) => {
+      const areaPerms = perms[area]
+      if (areaPerms === true) return true
+      if (areaPerms && typeof areaPerms === 'object') return areaPerms[action] === true
+      return false
+    })
+    if (allowed) return next()
     return res.status(403).json({ error: 'Você não tem permissão para acessar esta área.' })
   }
 }

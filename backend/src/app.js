@@ -37,6 +37,9 @@ import { followupsRouter } from './routes/followups.js'
 import { billingRouter } from './routes/billing.js'
 import { supportRouter } from './routes/support.js'
 import { adminSupportRouter } from './routes/admin-support.js'
+import { auditRouter } from './routes/audit.js'
+import { privacyRouter } from './routes/privacy.js'
+import { webhookEndpointsRouter } from './routes/webhookEndpoints.js'
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -160,6 +163,9 @@ export function createApp() {
   app.use('/api/flows', flowsRouter)
   app.use('/api/followups', followupsRouter)
   app.use('/api/support', supportRouter)
+  app.use('/api/audit-log', auditRouter)
+  app.use('/api/privacy', privacyRouter)
+  app.use('/api/webhook-endpoints', webhookEndpointsRouter)
 
   // 404
   app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }))

@@ -19,6 +19,7 @@ export const messages = {
       configuracoes:'Configurações',
       atendimento:  'Atendimento',
       ajuda:        'Central de Ajuda',
+      auditoria:    'Auditoria',
     },
     settings: {
       title:        'Configurações',
@@ -74,6 +75,7 @@ export const messages = {
       configuracoes:'Settings',
       atendimento:  'Attendance',
       ajuda:        'Help Center',
+      auditoria:    'Audit Log',
     },
     settings: {
       title:        'Settings',
@@ -129,6 +131,7 @@ export const messages = {
       configuracoes:'Configuración',
       atendimento:  'Atención',
       ajuda:        'Centro de Ayuda',
+      auditoria:    'Auditoría',
     },
     settings: {
       title:        'Configuración',

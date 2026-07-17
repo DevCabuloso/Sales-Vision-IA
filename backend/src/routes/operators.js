@@ -5,7 +5,7 @@ import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant, invalidateUserCache } from '../middleware/auth.js'
 import { hashPassword } from '../services/auth.js'
 import { passwordSchema } from '../utils/passwordSchema.js'
-import { logUsage } from '../services/usage.js'
+import { logAudit } from '../services/usage.js'
 
 export const operatorsRouter = Router()
 operatorsRouter.use(requireAuth, requireTenant)
@@ -17,10 +17,22 @@ function requireAdmin(req, res, next) {
   next()
 }
 
+// Cada área controla 4 ações independentes (ver/criar/editar/excluir) — ver
+// middleware/auth.js requirePermission() e migration_permissions_by_action.sql
+// (conversão do formato antigo, boolean único por área).
+const FULL_ACCESS = { view: true, create: true, edit: true, delete: true }
+
 const DEFAULT_PERMISSIONS = {
-  chat: true, kanban: true, contatos: true,
-  leads: true, agenda: true, templates: true, broadcast: true,
+  chat: { ...FULL_ACCESS }, kanban: { ...FULL_ACCESS }, contatos: { ...FULL_ACCESS },
+  leads: { ...FULL_ACCESS }, agenda: { ...FULL_ACCESS }, templates: { ...FULL_ACCESS }, broadcast: { ...FULL_ACCESS },
 }
+
+const areaPermSchema = z.object({
+  view:   z.boolean().optional(),
+  create: z.boolean().optional(),
+  edit:   z.boolean().optional(),
+  delete: z.boolean().optional(),
+})
 
 const schema = z.object({
   name:          z.string().min(1).max(100),
@@ -30,7 +42,7 @@ const schema = z.object({
   active:        z.boolean().optional().default(true),
   phone:         z.string().max(30).optional().nullable(),
   is_restricted: z.boolean().optional().default(false),
-  permissions:   z.record(z.boolean()).optional(),
+  permissions:   z.record(areaPermSchema).optional(),
 })
 
 const SELECT_COLS = 'id, name, email, phone, role, active, is_restricted, permissions, last_login_at, created_at'
@@ -129,6 +141,7 @@ operatorsRouter.post('/', requireAdmin, async (req, res) => {
       )
       return r.rows[0]
     })
+    await logAudit(req.user.tenantId, req.user.id, 'operator', 'create', row.id, { role: row.role })
     res.status(201).json({ operator: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -175,10 +188,7 @@ operatorsRouter.patch('/:id', requireAdmin, async (req, res) => {
       if (key in update) sensitiveChange[key] = update[key]
     }
     if (Object.keys(sensitiveChange).length) {
-      await logUsage(req.user.tenantId, req.user.id, 'operator_permissions_changed', {
-        targetUserId: req.params.id,
-        changes: sensitiveChange,
-      })
+      await logAudit(req.user.tenantId, req.user.id, 'operator', 'update', req.params.id, sensitiveChange)
       // sem isso, requireAuth continuaria usando o req.user cacheado (role/
       // permissions/is_restricted antigos) por até 30s após a mudança.
       invalidateUserCache(req.params.id)
@@ -206,7 +216,7 @@ operatorsRouter.post('/:id/reset-password', requireAdmin, async (req, res) => {
         [passwordHash, req.params.id, req.user.tenantId]
       )
     )
-    await logUsage(req.user.tenantId, req.user.id, 'operator_password_reset', { targetUserId: req.params.id })
+    await logAudit(req.user.tenantId, req.user.id, 'operator', 'password_reset', req.params.id)
     res.json({ reset: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -226,6 +236,7 @@ operatorsRouter.delete('/:id', requireAdmin, async (req, res) => {
       )
     )
     invalidateUserCache(req.params.id)
+    await logAudit(req.user.tenantId, req.user.id, 'operator', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

@@ -191,6 +191,52 @@
       <v-alert v-if="notifsSaved" type="success" variant="tonal" density="compact" text="Preferências de notificação salvas!" class="mt-3" />
     </v-card>
 
+    <!-- ── 3b. Relatório semanal por e-mail ── -->
+    <template v-if="isAdmin">
+      <div class="section-label">Relatório Semanal por E-mail</div>
+      <v-card class="glass pa-6 mb-6" border>
+        <div class="d-flex align-center ga-3 mb-5">
+          <div class="cfg-icon" style="background:linear-gradient(135deg,#8B5CF6,#A78BFA)">
+            <v-icon icon="mdi-email-outline" color="white" size="20" />
+          </div>
+          <div class="flex-1">
+            <div class="text-subtitle-1 font-weight-bold">Relatório Semanal por E-mail</div>
+            <div class="text-caption" style="color:#9FB0BC">Resumo automático (leads, conversas, agendamentos) enviado por e-mail.</div>
+          </div>
+          <v-switch v-model="reportSchedule.active" color="primary" hide-details density="compact" />
+        </div>
+
+        <v-combobox
+          v-model="reportSchedule.recipients"
+          label="Destinatários (e-mails)"
+          multiple chips closable-chips density="compact" class="mb-3"
+          placeholder="Digite um e-mail e aperte Enter"
+        />
+        <v-row dense>
+          <v-col cols="12" sm="4">
+            <v-select v-model="reportSchedule.day_of_week" :items="weekDays" item-title="label" item-value="value" label="Dia da semana" density="compact" />
+          </v-col>
+          <v-col cols="6" sm="4">
+            <v-text-field v-model.number="reportSchedule.hour" type="number" :min="0" :max="23" label="Hora" density="compact" />
+          </v-col>
+          <v-col cols="6" sm="4">
+            <v-text-field v-model.number="reportSchedule.minute" type="number" :min="0" :max="59" label="Minuto" density="compact" />
+          </v-col>
+        </v-row>
+
+        <v-alert type="info" variant="tonal" density="compact" class="mb-3">
+          O envio depende de um servidor de e-mail (SMTP) configurado pelo administrador da plataforma no servidor.
+        </v-alert>
+
+        <div class="d-flex justify-end">
+          <v-btn color="primary" variant="tonal" size="small" :loading="savingReportSchedule" @click="saveReportSchedule">
+            <v-icon icon="mdi-content-save-outline" start size="16" /> Salvar
+          </v-btn>
+        </div>
+        <v-alert v-if="reportScheduleSaved" type="success" variant="tonal" density="compact" text="Configuração salva!" class="mt-3" />
+      </v-card>
+    </template>
+
     <!-- ── 4. Acesso Rápido ── -->
     <div class="section-label">Acesso Rápido</div>
     <v-card class="glass pa-6" border>
@@ -214,16 +260,17 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale.js'
-import { http } from '@/services/api'
+import { http, api } from '@/services/api'
 import { changePasswordSchema } from '@/schemas/auth'
 import { validateForm } from '@/composables/useZodValidation'
 
 const auth   = useAuthStore()
 const locale = useLocaleStore()
 const t = (k) => locale.t(k)
+const isAdmin = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'owner')
 
 // ── Senha ──
 const savingPw  = ref(false)
@@ -326,6 +373,35 @@ async function saveNotifications() {
     setTimeout(() => { notifsSaved.value = false }, 2500)
   } finally { savingNotifs.value = false }
 }
+
+// ── Relatório semanal por e-mail ──
+const savingReportSchedule = ref(false)
+const reportScheduleSaved = ref(false)
+const reportSchedule = reactive({ active: false, recipients: [], day_of_week: 1, hour: 8, minute: 0 })
+const weekDays = [
+  { label: 'Domingo', value: 0 }, { label: 'Segunda', value: 1 }, { label: 'Terça', value: 2 },
+  { label: 'Quarta', value: 3 }, { label: 'Quinta', value: 4 }, { label: 'Sexta', value: 5 }, { label: 'Sábado', value: 6 },
+]
+
+async function loadReportSchedule() {
+  if (!isAdmin.value) return
+  try {
+    const s = await api.getReportSchedule()
+    Object.assign(reportSchedule, { active: s.active, recipients: s.recipients || [], day_of_week: s.day_of_week, hour: s.hour, minute: s.minute })
+  } catch { /* */ }
+}
+
+async function saveReportSchedule() {
+  savingReportSchedule.value = true
+  try {
+    const s = await api.updateReportSchedule({ ...reportSchedule })
+    Object.assign(reportSchedule, { active: s.active, recipients: s.recipients || [], day_of_week: s.day_of_week, hour: s.hour, minute: s.minute })
+    reportScheduleSaved.value = true
+    setTimeout(() => { reportScheduleSaved.value = false }, 2500)
+  } finally { savingReportSchedule.value = false }
+}
+
+onMounted(loadReportSchedule)
 
 // ── Atalhos ──
 const configLinks = [

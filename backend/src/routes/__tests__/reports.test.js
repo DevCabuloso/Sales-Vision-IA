@@ -3,10 +3,10 @@ import express from 'express'
 import request from 'supertest'
 import { createRlsMock } from '../../test-utils/rlsMock.js'
 
-const mockState = vi.hoisted(() => ({ box: {} }))
+const mockState = vi.hoisted(() => ({ box: {}, user: { id: 'user-1', tenantId: 'tenant-1', role: 'admin' } }))
 
 vi.mock('../../middleware/auth.js', () => ({
-  requireAuth: (req, res, next) => { req.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }; next() },
+  requireAuth: (req, res, next) => { req.user = mockState.user; next() },
   requireTenant: (req, res, next) => next(),
 }))
 
@@ -18,6 +18,7 @@ const { reportsRouter } = await import('../reports.js')
 
 function buildApp() {
   const app = express()
+  app.use(express.json())
   app.use('/api/reports', reportsRouter)
   return app
 }
@@ -32,6 +33,7 @@ function setRls() {
 describe('routes/reports', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockState.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }
     setRls()
   })
 
@@ -104,5 +106,45 @@ describe('routes/reports', () => {
     expect(res.body.summary.newLeads).toBe(0)
     expect(res.body.byUser).toEqual([])
     expect(res.body.funnel).toEqual([])
+  })
+
+  describe('GET/PUT /schedule (relatório semanal por e-mail)', () => {
+    it('retorna 403 para quem não é admin/owner', async () => {
+      mockState.user = { id: 'user-2', tenantId: 'tenant-1', role: 'agent' }
+      const app = buildApp()
+      const res = await request(app).get('/api/reports/schedule')
+      expect(res.status).toBe(403)
+    })
+
+    it('GET retorna a configuração padrão quando o tenant ainda não tem uma salva', async () => {
+      rlsMock.queueRows([])
+      const app = buildApp()
+      const res = await request(app).get('/api/reports/schedule')
+      expect(res.status).toBe(200)
+      expect(res.body.schedule).toMatchObject({ active: false, recipients: [], day_of_week: 1, hour: 8, minute: 0 })
+    })
+
+    it('GET retorna a configuração salva', async () => {
+      rlsMock.queueRows([{ tenant_id: 'tenant-1', active: true, recipients: ['dono@ex.com'], day_of_week: 5, hour: 9, minute: 30, timezone: 'America/Sao_Paulo' }])
+      const app = buildApp()
+      const res = await request(app).get('/api/reports/schedule')
+      expect(res.body.schedule).toMatchObject({ active: true, recipients: ['dono@ex.com'], day_of_week: 5 })
+    })
+
+    it('PUT rejeita e-mail inválido em recipients', async () => {
+      const app = buildApp()
+      const res = await request(app).put('/api/reports/schedule').send({ recipients: ['não-é-email'] })
+      expect(res.status).toBe(400)
+    })
+
+    it('PUT salva a configuração via upsert', async () => {
+      rlsMock.queueRows([{ tenant_id: 'tenant-1', active: true, recipients: ['dono@ex.com'], day_of_week: 1, hour: 8, minute: 0, timezone: 'America/Sao_Paulo' }])
+      const app = buildApp()
+      const res = await request(app).put('/api/reports/schedule').send({ active: true, recipients: ['dono@ex.com'] })
+      expect(res.status).toBe(200)
+      expect(res.body.schedule.active).toBe(true)
+      const upsert = rlsMock.calls.find((c) => /INSERT INTO report_schedules/.test(c.sql))
+      expect(upsert.params[0]).toBe('tenant-1')
+    })
   })
 })

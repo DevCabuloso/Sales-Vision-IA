@@ -3,11 +3,12 @@ import { z } from 'zod'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { analyzeLead } from '../services/ai/analyze.js'
-import { logUsage } from '../services/usage.js'
+import { logUsage, logAudit } from '../services/usage.js'
+import { enqueueWebhookEvent } from '../services/webhookDelivery.js'
 import { normalizePhone } from '../utils/phone.js'
 
 export const leadsRouter = Router()
-leadsRouter.use(requireAuth, requireTenant, requirePermission('leads', 'kanban'))
+leadsRouter.use(requireAuth, requireTenant, requirePermission(['leads', 'kanban'], 'view'))
 
 // ─── GET /api/leads ───
 leadsRouter.get('/', async (req, res) => {
@@ -40,7 +41,7 @@ const createSchema = z.object({
   interests: z.array(z.string()).optional(),
 })
 
-leadsRouter.post('/', async (req, res) => {
+leadsRouter.post('/', requirePermission(['leads', 'kanban'], 'create'), async (req, res) => {
   const parsed = createSchema.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues[0].message })
@@ -81,6 +82,7 @@ leadsRouter.post('/', async (req, res) => {
       return insertRes.rows[0]
     })
     await logUsage(req.user.tenantId, req.user.id, 'lead_created', { phone: d.phone })
+    enqueueWebhookEvent(req.user.tenantId, 'lead.created', { leadId: lead.id, name: lead.name, phone: lead.phone, stage: lead.stage })
     res.status(201).json({ lead })
   } catch (e) {
     if (e.isLimitError) return res.status(403).json({ error: e.message })
@@ -103,7 +105,7 @@ const updateSchema = z.object({
 // stage (funil local) — só o nome da coluna difere do nome do campo no payload.
 const COLUMN_NAME = { crmStageId: 'crm_stage_id' }
 
-leadsRouter.patch('/:id', async (req, res) => {
+leadsRouter.patch('/:id', requirePermission(['leads', 'kanban'], 'edit'), async (req, res) => {
   const parsed = updateSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Dados inválidos.' })
   if (!Object.keys(parsed.data).length) return res.status(400).json({ error: 'Nada para atualizar.' })
@@ -151,6 +153,8 @@ leadsRouter.patch('/:id', async (req, res) => {
     })
     if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' })
 
+    await logAudit(req.user.tenantId, req.user.id, 'lead', 'update', req.params.id, parsed.data)
+
     if (parsed.data.stage && previousStage !== parsed.data.stage) {
       withTenant(req.user.tenantId, (client) =>
         client.query(
@@ -159,6 +163,7 @@ leadsRouter.patch('/:id', async (req, res) => {
           [req.user.tenantId, req.params.id, previousStage, parsed.data.stage, req.user.id]
         )
       ).catch((e) => console.warn('[leads] falha ao salvar histórico de estágio:', e.message))
+      enqueueWebhookEvent(req.user.tenantId, 'lead.stage_changed', { leadId: req.params.id, fromStage: previousStage, toStage: parsed.data.stage })
     }
 
     res.json({ lead })
@@ -169,11 +174,12 @@ leadsRouter.patch('/:id', async (req, res) => {
 })
 
 // ─── DELETE /api/leads/:id ───
-leadsRouter.delete('/:id', async (req, res) => {
+leadsRouter.delete('/:id', requirePermission(['leads', 'kanban'], 'delete'), async (req, res) => {
   try {
     await withTenant(req.user.tenantId, (client) =>
       client.query('DELETE FROM leads WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
+    await logAudit(req.user.tenantId, req.user.id, 'lead', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -222,7 +228,7 @@ leadsRouter.get('/:id/messages', async (req, res) => {
 })
 
 // ─── POST /api/leads/:id/analyze ───
-leadsRouter.post('/:id/analyze', async (req, res) => {
+leadsRouter.post('/:id/analyze', requirePermission(['leads', 'kanban'], 'edit'), async (req, res) => {
   try {
     const msgs = (
       await withTenant(req.user.tenantId, async (client) => {

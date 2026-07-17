@@ -3,7 +3,7 @@ import express from 'express'
 import request from 'supertest'
 import { createRlsMock } from '../../test-utils/rlsMock.js'
 
-const mockState = vi.hoisted(() => ({ box: {}, analyzeLead: null, logUsage: null, permCalls: [] }))
+const mockState = vi.hoisted(() => ({ box: {}, analyzeLead: null, logUsage: null, logAudit: null, permCalls: [] }))
 
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }; next() },
@@ -21,6 +21,11 @@ vi.mock('../../services/ai/analyze.js', () => ({
 
 vi.mock('../../services/usage.js', () => ({
   logUsage: (...args) => mockState.logUsage(...args),
+  logAudit: (...args) => mockState.logAudit(...args),
+}))
+
+vi.mock('../../services/webhookDelivery.js', () => ({
+  enqueueWebhookEvent: vi.fn().mockResolvedValue(undefined),
 }))
 
 const { leadsRouter } = await import('../leads.js')
@@ -46,11 +51,12 @@ describe('routes/leads', () => {
     vi.clearAllMocks()
     mockState.analyzeLead = vi.fn()
     mockState.logUsage = vi.fn().mockResolvedValue(undefined)
+    mockState.logAudit = vi.fn().mockResolvedValue(undefined)
     setRls()
   })
 
   it('exige a permissão "leads" ou "kanban" (enforcement de operador restrito) em toda a rota', () => {
-    expect(mockState.permCalls).toContainEqual(['leads', 'kanban'])
+    expect(mockState.permCalls).toContainEqual([['leads', 'kanban'], 'view'])
   })
 
   describe('GET /', () => {
@@ -143,6 +149,7 @@ describe('routes/leads', () => {
       await flush()
       const historyInsert = insertCallsMatching(/INSERT INTO lead_stage_history/)[0]
       expect(historyInsert.params).toEqual(['tenant-1', 'l1', 'Novo Lead', 'Qualificado', 'user-1'])
+      expect(mockState.logAudit).toHaveBeenCalledWith('tenant-1', 'user-1', 'lead', 'update', 'l1', { stage: 'Qualificado' })
     })
 
     it('não registra histórico quando o estágio não muda', async () => {
@@ -184,11 +191,12 @@ describe('routes/leads', () => {
     })
   })
 
-  it('DELETE /:id remove o lead', async () => {
+  it('DELETE /:id remove o lead e registra auditoria', async () => {
     rlsMock.queueRows([])
     const app = buildApp()
     const res = await request(app).delete('/api/leads/l1')
     expect(res.status).toBe(200)
+    expect(mockState.logAudit).toHaveBeenCalledWith('tenant-1', 'user-1', 'lead', 'delete', 'l1')
   })
 
   it('GET /:id/history retorna o histórico de estágio', async () => {

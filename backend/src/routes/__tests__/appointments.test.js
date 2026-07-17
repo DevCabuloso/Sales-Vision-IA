@@ -29,6 +29,10 @@ vi.mock('../../services/usage.js', () => ({
   logUsage: (...args) => mockState.logUsage(...args),
 }))
 
+vi.mock('../../services/webhookDelivery.js', () => ({
+  enqueueWebhookEvent: vi.fn().mockResolvedValue(undefined),
+}))
+
 const { appointmentsRouter } = await import('../appointments.js')
 
 function buildApp() {
@@ -60,7 +64,7 @@ describe('routes/appointments', () => {
   })
 
   it('exige a permissão "agenda" (enforcement de operador restrito) em toda a rota', () => {
-    expect(mockState.permCalls).toContainEqual(['agenda'])
+    expect(mockState.permCalls).toContainEqual(['agenda', 'view'])
   })
 
   describe('GET /', () => {

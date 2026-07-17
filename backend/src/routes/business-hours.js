@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { logAudit } from '../services/usage.js'
 
 export const businessHoursRouter = Router()
 businessHoursRouter.use(requireAuth, requireTenant)
@@ -56,6 +57,7 @@ businessHoursRouter.put('/', async (req, res) => {
       )
       return r.rows[0]
     })
+    await logAudit(req.user.tenantId, req.user.id, 'business_hours', 'update', req.user.tenantId, { enabled, timezone })
     res.json({ config: row })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })

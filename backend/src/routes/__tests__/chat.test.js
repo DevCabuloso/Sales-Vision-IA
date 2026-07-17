@@ -79,7 +79,7 @@ describe('routes/chat', () => {
   })
 
   it('exige a permissão "chat" (enforcement de operador restrito) em toda a rota', () => {
-    expect(mockState.permCalls).toContainEqual(['chat'])
+    expect(mockState.permCalls).toContainEqual(['chat', 'view'])
   })
 
   describe('GET / (listar conversas)', () => {

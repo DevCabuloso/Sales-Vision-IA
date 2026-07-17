@@ -18,6 +18,10 @@ vi.mock('../../services/orchestrator.js', () => ({
   invalidateTenantCache: (...args) => mockState.invalidateTenantCache(...args),
 }))
 
+vi.mock('../../services/usage.js', () => ({
+  logAudit: vi.fn().mockResolvedValue(undefined),
+}))
+
 const { opSettingsRouter } = await import('../op-settings.js')
 
 function buildApp() {

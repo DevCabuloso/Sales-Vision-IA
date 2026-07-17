@@ -291,4 +291,21 @@ export const api = {
   // admin — configurações
   adminSettings: () => http.get('/admin/settings').then((r) => r.data.settings),
   adminUpdateSettings: (payload) => http.put('/admin/settings', payload).then((r) => r.data),
+
+  // audit log
+  listAuditLog: (params) => http.get('/audit-log', { params }).then((r) => r.data),
+
+  // relatório semanal por e-mail
+  getReportSchedule: () => http.get('/reports/schedule').then((r) => r.data.schedule),
+  updateReportSchedule: (payload) => http.put('/reports/schedule', payload).then((r) => r.data.schedule),
+
+  // privacidade / LGPD (lead e contato são a mesma entidade)
+  eraseLeadData: (leadId) => http.post(`/privacy/erase/${leadId}`).then((r) => r.data),
+
+  // webhooks de saída (a plataforma notificando sistemas de terceiros)
+  listWebhookEndpoints: () => http.get('/webhook-endpoints').then((r) => r.data.endpoints),
+  createWebhookEndpoint: (payload) => http.post('/webhook-endpoints', payload).then((r) => r.data.endpoint),
+  updateWebhookEndpoint: (id, payload) => http.patch(`/webhook-endpoints/${id}`, payload).then((r) => r.data.endpoint),
+  regenerateWebhookEndpointSecret: (id) => http.post(`/webhook-endpoints/${id}/regenerate-secret`).then((r) => r.data.endpoint),
+  deleteWebhookEndpoint: (id) => http.delete(`/webhook-endpoints/${id}`).then((r) => r.data),
 }

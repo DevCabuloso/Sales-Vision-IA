@@ -25,7 +25,7 @@ const upload = multer({
 })
 
 export const chatRouter = Router()
-chatRouter.use(requireAuth, requireTenant, requirePermission('chat'))
+chatRouter.use(requireAuth, requireTenant, requirePermission('chat', 'view'))
 
 const isManager = (role) => role === 'owner' || role === 'admin'
 
@@ -157,7 +157,7 @@ const startSchema = z.object({
   name: z.string().max(200).optional().nullable(),
   message: z.string().max(4000).optional().nullable(),
 })
-chatRouter.post('/start', async (req, res) => {
+chatRouter.post('/start', requirePermission('chat', 'create'), async (req, res) => {
   const parsed = startSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const { phone, name, message } = parsed.data
@@ -278,7 +278,7 @@ chatRouter.get('/:leadId/group-access', async (req, res) => {
 })
 
 // PUT /api/chat/:leadId/group-access — substitui a lista de usuários com acesso ao grupo
-chatRouter.put('/:leadId/group-access', async (req, res) => {
+chatRouter.put('/:leadId/group-access', requirePermission('chat', 'edit'), async (req, res) => {
   if (!isManager(req.user.role)) return res.status(403).json({ error: 'Acesso restrito a administradores.' })
   const userIds = Array.isArray(req.body?.user_ids) ? req.body.user_ids : null
   if (!userIds) return res.status(400).json({ error: 'user_ids deve ser um array.' })
@@ -318,7 +318,7 @@ const msgSchema = z.object({
   replyToId: z.coerce.number().int().positive().optional().nullable(),
 })
 
-chatRouter.post('/:leadId/messages', async (req, res) => {
+chatRouter.post('/:leadId/messages', requirePermission('chat', 'create'), async (req, res) => {
   const parsed = msgSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   try {
@@ -417,7 +417,7 @@ const scheduleSchema = z.object({
   send_at: z.string().datetime(),
 })
 
-chatRouter.post('/:leadId/schedule', async (req, res) => {
+chatRouter.post('/:leadId/schedule', requirePermission('chat', 'create'), async (req, res) => {
   const parsed = scheduleSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
@@ -448,7 +448,7 @@ chatRouter.post('/:leadId/schedule', async (req, res) => {
 })
 
 // DELETE /api/chat/:leadId/schedule/:id — cancela mensagem agendada
-chatRouter.delete('/:leadId/schedule/:id', async (req, res) => {
+chatRouter.delete('/:leadId/schedule/:id', requirePermission('chat', 'delete'), async (req, res) => {
   try {
     const result = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
@@ -472,7 +472,7 @@ chatRouter.delete('/:leadId/schedule/:id', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/media
-chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
+chatRouter.post('/:leadId/media', requirePermission('chat', 'create'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado ou tipo não permitido.' })
   try {
     const lead = await withTenant(req.user.tenantId, async (client) => {
@@ -576,7 +576,7 @@ chatRouter.post('/:leadId/media', upload.single('file'), async (req, res) => {
 // Só funciona em canais Evolution (a Cloud API da Meta não tem endpoint de edição)
 // e só para mensagens que a própria plataforma enviou (role='agent').
 const editMsgSchema = z.object({ text: z.string().min(1).max(4000) })
-chatRouter.patch('/:leadId/messages/:messageId', async (req, res) => {
+chatRouter.patch('/:leadId/messages/:messageId', requirePermission('chat', 'edit'), async (req, res) => {
   const parsed = editMsgSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   try {
@@ -634,7 +634,7 @@ chatRouter.patch('/:leadId/messages/:messageId', async (req, res) => {
 
 // DELETE /api/chat/:leadId/messages/:messageId — apaga uma mensagem "para todos"
 // (diferente de DELETE /:leadId, que apaga a conversa inteira). Só Evolution, só mensagens próprias.
-chatRouter.delete('/:leadId/messages/:messageId', async (req, res) => {
+chatRouter.delete('/:leadId/messages/:messageId', requirePermission('chat', 'delete'), async (req, res) => {
   try {
     const check = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
@@ -682,7 +682,7 @@ chatRouter.delete('/:leadId/messages/:messageId', async (req, res) => {
 
 // POST /api/chat/:leadId/messages/:messageId/forward — encaminha uma mensagem para outro lead
 const forwardSchema = z.object({ toLeadId: z.string().min(1) })
-chatRouter.post('/:leadId/messages/:messageId/forward', async (req, res) => {
+chatRouter.post('/:leadId/messages/:messageId/forward', requirePermission('chat', 'create'), async (req, res) => {
   const parsed = forwardSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Selecione um lead de destino.' })
   try {
@@ -785,7 +785,7 @@ chatRouter.post('/:leadId/messages/:messageId/forward', async (req, res) => {
 
 // POST /api/chat/:leadId/location — envia localização (funciona em Meta e Evolution)
 const locationSchema = z.object({ latitude: z.number(), longitude: z.number() })
-chatRouter.post('/:leadId/location', async (req, res) => {
+chatRouter.post('/:leadId/location', requirePermission('chat', 'create'), async (req, res) => {
   const parsed = locationSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Localização inválida.' })
   try {
@@ -832,7 +832,7 @@ chatRouter.post('/:leadId/location', async (req, res) => {
 
 // POST /api/chat/:leadId/transfer
 const transferSchema = z.object({ human_takeover: z.boolean() })
-chatRouter.post('/:leadId/transfer', async (req, res) => {
+chatRouter.post('/:leadId/transfer', requirePermission('chat', 'edit'), async (req, res) => {
   const parsed = transferSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'human_takeover deve ser true ou false.' })
   const { human_takeover } = parsed.data
@@ -866,7 +866,7 @@ chatRouter.post('/:leadId/transfer', async (req, res) => {
 
 // POST /api/chat/:leadId/transfer-to
 const transferToSchema = z.object({ userId: z.string().min(1, 'userId obrigatório.') })
-chatRouter.post('/:leadId/transfer-to', async (req, res) => {
+chatRouter.post('/:leadId/transfer-to', requirePermission('chat', 'edit'), async (req, res) => {
   const parsed = transferToSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   const { userId } = parsed.data
@@ -908,7 +908,7 @@ chatRouter.post('/:leadId/transfer-to', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/attend
-chatRouter.post('/:leadId/attend', async (req, res) => {
+chatRouter.post('/:leadId/attend', requirePermission('chat', 'edit'), async (req, res) => {
   try {
     const row = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
@@ -931,7 +931,7 @@ chatRouter.post('/:leadId/attend', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/reopen
-chatRouter.post('/:leadId/reopen', async (req, res) => {
+chatRouter.post('/:leadId/reopen', requirePermission('chat', 'edit'), async (req, res) => {
   try {
     const row = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
@@ -954,7 +954,7 @@ chatRouter.post('/:leadId/reopen', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/return-to-queue
-chatRouter.post('/:leadId/return-to-queue', async (req, res) => {
+chatRouter.post('/:leadId/return-to-queue', requirePermission('chat', 'edit'), async (req, res) => {
   try {
     const row = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
@@ -977,7 +977,7 @@ chatRouter.post('/:leadId/return-to-queue', async (req, res) => {
 })
 
 // DELETE /api/chat/:leadId
-chatRouter.delete('/:leadId', async (req, res) => {
+chatRouter.delete('/:leadId', requirePermission('chat', 'delete'), async (req, res) => {
   if (!isManager(req.user.role)) {
     return res.status(403).json({ error: 'Apenas administradores podem deletar conversas.' })
   }
@@ -1002,7 +1002,7 @@ chatRouter.delete('/:leadId', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/resolve
-chatRouter.post('/:leadId/resolve', async (req, res) => {
+chatRouter.post('/:leadId/resolve', requirePermission('chat', 'edit'), async (req, res) => {
   try {
     const row = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
@@ -1128,7 +1128,7 @@ chatRouter.get('/:leadId/followup', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/followup/start — inicia um acompanhamento para o lead
-chatRouter.post('/:leadId/followup/start', async (req, res) => {
+chatRouter.post('/:leadId/followup/start', requirePermission('chat', 'create'), async (req, res) => {
   const { sequence_id } = req.body
   if (!sequence_id) return res.status(400).json({ error: 'sequence_id obrigatório.' })
 
@@ -1189,7 +1189,7 @@ async function stopEnrollment(client, tenantId, leadId, enrollmentId, finalStatu
 }
 
 // POST /api/chat/:leadId/followup/:enrollmentId/cancel
-chatRouter.post('/:leadId/followup/:enrollmentId/cancel', async (req, res) => {
+chatRouter.post('/:leadId/followup/:enrollmentId/cancel', requirePermission('chat', 'edit'), async (req, res) => {
   try {
     const stopped = await withTenant(req.user.tenantId, (client) =>
       stopEnrollment(client, req.user.tenantId, req.params.leadId, req.params.enrollmentId, 'cancelled')
@@ -1202,7 +1202,7 @@ chatRouter.post('/:leadId/followup/:enrollmentId/cancel', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/followup/:enrollmentId/finish
-chatRouter.post('/:leadId/followup/:enrollmentId/finish', async (req, res) => {
+chatRouter.post('/:leadId/followup/:enrollmentId/finish', requirePermission('chat', 'edit'), async (req, res) => {
   try {
     const stopped = await withTenant(req.user.tenantId, (client) =>
       stopEnrollment(client, req.user.tenantId, req.params.leadId, req.params.enrollmentId, 'completed')
@@ -1215,7 +1215,7 @@ chatRouter.post('/:leadId/followup/:enrollmentId/finish', async (req, res) => {
 })
 
 // POST /api/chat/:leadId/followup/:enrollmentId/restart
-chatRouter.post('/:leadId/followup/:enrollmentId/restart', async (req, res) => {
+chatRouter.post('/:leadId/followup/:enrollmentId/restart', requirePermission('chat', 'edit'), async (req, res) => {
   try {
     const result = await withTenant(req.user.tenantId, async (client) => {
       const enrollR = await client.query(

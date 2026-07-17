@@ -3,9 +3,10 @@ import { z } from 'zod'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant, requirePermission } from '../middleware/auth.js'
 import { chat } from '../services/ai/openai.js'
+import { logAudit } from '../services/usage.js'
 
 export const templatesRouter = Router()
-templatesRouter.use(requireAuth, requireTenant, requirePermission('templates'))
+templatesRouter.use(requireAuth, requireTenant, requirePermission('templates', 'view'))
 
 const schema = z.object({
   name:     z.string().min(1).max(200),
@@ -47,7 +48,7 @@ templatesRouter.get('/categories', async (req, res) => {
 const categorySchema = z.object({ name: z.string().min(1).max(50) })
 
 // POST /api/templates/categories
-templatesRouter.post('/categories', async (req, res) => {
+templatesRouter.post('/categories', requirePermission('templates', 'create'), async (req, res) => {
   const parsed = categorySchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   try {
@@ -66,7 +67,7 @@ templatesRouter.post('/categories', async (req, res) => {
 })
 
 // DELETE /api/templates/categories/:id
-templatesRouter.delete('/categories/:id', async (req, res) => {
+templatesRouter.delete('/categories/:id', requirePermission('templates', 'delete'), async (req, res) => {
   try {
     await withTenant(req.user.tenantId, (client) =>
       client.query('DELETE FROM template_categories WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
@@ -94,7 +95,7 @@ templatesRouter.get('/', async (req, res) => {
 })
 
 // POST /api/templates
-templatesRouter.post('/', async (req, res) => {
+templatesRouter.post('/', requirePermission('templates', 'create'), async (req, res) => {
   const parsed = schema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
@@ -113,7 +114,7 @@ templatesRouter.post('/', async (req, res) => {
 })
 
 // PATCH /api/templates/:id
-templatesRouter.patch('/:id', async (req, res) => {
+templatesRouter.patch('/:id', requirePermission('templates', 'edit'), async (req, res) => {
   const partial = schema.partial().safeParse(req.body)
   if (!partial.success) return res.status(400).json({ error: partial.error.issues[0].message })
 
@@ -131,6 +132,7 @@ templatesRouter.patch('/:id', async (req, res) => {
       )
       return r.rows[0]
     })
+    await logAudit(req.user.tenantId, req.user.id, 'template', 'update', req.params.id, partial.data)
     res.json({ template: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -138,11 +140,12 @@ templatesRouter.patch('/:id', async (req, res) => {
 })
 
 // DELETE /api/templates/:id
-templatesRouter.delete('/:id', async (req, res) => {
+templatesRouter.delete('/:id', requirePermission('templates', 'delete'), async (req, res) => {
   try {
     await withTenant(req.user.tenantId, (client) =>
       client.query('DELETE FROM templates WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
+    await logAudit(req.user.tenantId, req.user.id, 'template', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -150,7 +153,7 @@ templatesRouter.delete('/:id', async (req, res) => {
 })
 
 // POST /api/templates/:id/duplicate
-templatesRouter.post('/:id/duplicate', async (req, res) => {
+templatesRouter.post('/:id/duplicate', requirePermission('templates', 'create'), async (req, res) => {
   try {
     const row = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(

@@ -6,6 +6,9 @@ import { processBroadcast } from '../routes/broadcast.js'
 import { safeFetch } from '../utils/ssrfGuard.js'
 import { createBillingReminderNotification } from './billingNotifications.js'
 import { createAppointmentReminderNotification } from './appointmentNotifications.js'
+import { deliverPendingWebhooks } from './webhookDelivery.js'
+import { buildDailyReport } from '../routes/reports.js'
+import { sendEmail } from './email.js'
 
 const POLL_MS = 20_000
 
@@ -164,6 +167,13 @@ function hmInTimezone(date, timeZone) {
   return `${get('hour')}:${get('minute')}`
 }
 
+// Dia da semana (0=domingo..6=sábado) da DATA (não do instante) no timezone
+// do tenant — só depende dos componentes Y-M-D, não da hora, então dá pra
+// reaproveitar ymdInTimezone em vez de recalcular via Intl 'weekday'.
+function dayOfWeekInTimezone(date, timeZone) {
+  return new Date(`${ymdInTimezone(date, timeZone)}T00:00:00Z`).getUTCDay()
+}
+
 // Aviso de vencimento de mensalidade: dispara uma vez por dia, no horário
 // configurado em platform_settings, pros tenants com billing_notify_user_id
 // definido cujo next_billing_at cai exatamente N dias à frente de hoje.
@@ -242,6 +252,72 @@ async function runDueAppointmentReminders() {
   }
 }
 
+function renderWeeklyReportHtml(tenantName, fromDate, toDate, reports) {
+  const totals = reports.reduce((acc, r) => {
+    acc.newLeads += r.summary.newLeads
+    acc.qualifiedNewLeads += r.summary.qualifiedNewLeads
+    acc.conversationsResolved += r.summary.conversationsResolved
+    acc.appointmentsScheduled += r.summary.appointmentsScheduled
+    acc.messages += r.summary.messages.total
+    return acc
+  }, { newLeads: 0, qualifiedNewLeads: 0, conversationsResolved: 0, appointmentsScheduled: 0, messages: 0 })
+
+  return `
+    <h2>Relatório semanal — ${tenantName}</h2>
+    <p>Período: ${fromDate} a ${toDate}</p>
+    <ul>
+      <li>Novos leads: <strong>${totals.newLeads}</strong> (${totals.qualifiedNewLeads} qualificados)</li>
+      <li>Conversas resolvidas: <strong>${totals.conversationsResolved}</strong></li>
+      <li>Agendamentos criados: <strong>${totals.appointmentsScheduled}</strong></li>
+      <li>Mensagens trocadas: <strong>${totals.messages}</strong></li>
+    </ul>
+  `
+}
+
+// Relatório semanal por e-mail: soma os últimos 7 dias (buildDailyReport,
+// reaproveitado de routes/reports.js) e envia via services/email.js. Mesmo
+// padrão de comparação de horário/timezone do runDueBillingReminders acima —
+// dedup por dia via last_sent_at, pra não duplicar nos ~3 ticks do minuto
+// configurado.
+async function runDueScheduledReports() {
+  const schedules = unwrap(
+    await supabase.from('report_schedules')
+      .select('tenant_id, recipients, day_of_week, hour, minute, timezone, last_sent_at')
+      .eq('active', true)
+      .limit(500)
+  ) || []
+  if (!schedules.length) return
+
+  const now = new Date()
+  for (const sched of schedules) {
+    const tz = sched.timezone || 'America/Sao_Paulo'
+    const targetHm = `${String(sched.hour).padStart(2, '0')}:${String(sched.minute).padStart(2, '0')}`
+    if (hmInTimezone(now, tz) !== targetHm) continue
+    if (dayOfWeekInTimezone(now, tz) !== sched.day_of_week) continue
+    if (!sched.recipients?.length) continue
+
+    const todayStr = ymdInTimezone(now, tz)
+    if (sched.last_sent_at && ymdInTimezone(new Date(sched.last_sent_at), tz) === todayStr) continue
+
+    try {
+      const tenantRows = unwrap(
+        await supabase.from('tenants').select('name').eq('id', sched.tenant_id).limit(1)
+      ) || []
+      const tenantName = tenantRows[0]?.name || 'sua operação'
+
+      const days = []
+      for (let i = 6; i >= 0; i--) days.push(ymdInTimezone(new Date(now.getTime() - i * 86400000), tz))
+      const reports = await Promise.all(days.map((d) => buildDailyReport(sched.tenant_id, d)))
+      const html = renderWeeklyReportHtml(tenantName, days[0], days[days.length - 1], reports)
+
+      await sendEmail({ to: sched.recipients.join(','), subject: `Relatório semanal — ${tenantName}`, html })
+      await supabase.from('report_schedules').update({ last_sent_at: now.toISOString() }).eq('tenant_id', sched.tenant_id)
+    } catch (e) {
+      console.error('[scheduler] falha ao enviar relatório agendado:', e.message)
+    }
+  }
+}
+
 let running = false
 async function tick() {
   if (running) return
@@ -252,6 +328,8 @@ async function tick() {
     await runDueFollowupMessages()
     await runDueBillingReminders()
     await runDueAppointmentReminders()
+    await deliverPendingWebhooks()
+    await runDueScheduledReports()
   } catch (e) {
     console.error('[scheduler] erro no ciclo:', e.message)
   } finally {

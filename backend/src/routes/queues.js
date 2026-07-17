@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { logAudit } from '../services/usage.js'
 
 export const queuesRouter = Router()
 queuesRouter.use(requireAuth, requireTenant)
@@ -117,6 +118,7 @@ queuesRouter.patch('/:id', async (req, res) => {
       const updatedOps = await fetchOperators(client, [req.params.id])
       return { ...row, operators: updatedOps.map((o) => ({ id: o.id, name: o.name, email: o.email })) }
     })
+    await logAudit(req.user.tenantId, req.user.id, 'queue', 'update', req.params.id, p.data)
     res.json({ queue: result })
   } catch (e) { res.status(e.status || 500).json({ error: e.message }) }
 })
@@ -126,6 +128,7 @@ queuesRouter.delete('/:id', async (req, res) => {
     await withTenant(req.user.tenantId, (client) =>
       client.query('DELETE FROM queues WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
+    await logAudit(req.user.tenantId, req.user.id, 'queue', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })

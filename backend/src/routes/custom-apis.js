@@ -4,6 +4,7 @@ import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { encrypt, decryptJSON } from '../services/crypto.js'
 import { assertPublicUrl, safeFetch } from '../utils/ssrfGuard.js'
+import { logAudit } from '../services/usage.js'
 
 export const customApisRouter = Router()
 customApisRouter.use(requireAuth, requireTenant)
@@ -90,6 +91,7 @@ customApisRouter.patch('/:id', async (req, res) => {
       )
       return r.rows[0]
     })
+    await logAudit(req.user.tenantId, req.user.id, 'custom_api', 'update', req.params.id, { name: rest.name, provider: rest.provider, active: rest.active })
     res.json({ api: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -102,6 +104,7 @@ customApisRouter.delete('/:id', async (req, res) => {
     await withTenant(req.user.tenantId, (client) =>
       client.query('DELETE FROM custom_apis WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
+    await logAudit(req.user.tenantId, req.user.id, 'custom_api', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

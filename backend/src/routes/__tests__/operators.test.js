@@ -4,7 +4,7 @@ import request from 'supertest'
 import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 import { createRlsMock } from '../../test-utils/rlsMock.js'
 
-const mockState = vi.hoisted(() => ({ box: {}, user: null, hashPassword: null, logUsage: null }))
+const mockState = vi.hoisted(() => ({ box: {}, user: null, hashPassword: null, logAudit: null }))
 
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = mockState.user; next() },
@@ -29,7 +29,7 @@ vi.mock('../../services/auth.js', () => ({
 }))
 
 vi.mock('../../services/usage.js', () => ({
-  logUsage: (...args) => mockState.logUsage(...args),
+  logAudit: (...args) => mockState.logAudit(...args),
 }))
 
 const { operatorsRouter } = await import('../operators.js')
@@ -60,7 +60,7 @@ describe('routes/operators', () => {
     vi.clearAllMocks()
     mockState.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }
     mockState.hashPassword = vi.fn().mockResolvedValue('hashed-pw')
-    mockState.logUsage = vi.fn().mockResolvedValue(undefined)
+    mockState.logAudit = vi.fn().mockResolvedValue(undefined)
     setSupabase({})
     setRls()
   })
@@ -136,7 +136,15 @@ describe('routes/operators', () => {
       expect(insert.params).toContain('bia@ex.com')
       expect(insert.params).toContain('hashed-pw')
       const perms = JSON.parse(insert.params.find((p) => typeof p === 'string' && p.includes('broadcast')))
-      expect(perms.broadcast).toBe(true)
+      expect(perms.broadcast).toEqual({ view: true, create: true, edit: true, delete: true })
+    })
+
+    it('registra um evento de auditoria na criação', async () => {
+      setSupabase({ users: [{ data: [], error: null }] })
+      rlsMock.queueRows([{ id: 'u1', role: 'agent' }])
+      const app = buildApp()
+      await request(app).post('/api/operators').send({ name: 'Bia', email: 'bia@ex.com', password: 'senha123' })
+      expect(mockState.logAudit).toHaveBeenCalledWith('tenant-1', 'user-1', 'operator', 'create', 'u1', { role: 'agent' })
     })
   })
 
@@ -167,9 +175,8 @@ describe('routes/operators', () => {
       const app = buildApp()
       const res = await request(app).patch('/api/operators/u1').send({ role: 'admin' })
       expect(res.status).toBe(200)
-      expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'operator_permissions_changed', {
-        targetUserId: 'u1',
-        changes: { role: 'admin', permissions: expect.any(Object) },
+      expect(mockState.logAudit).toHaveBeenCalledWith('tenant-1', 'user-1', 'operator', 'update', 'u1', {
+        role: 'admin', permissions: expect.any(Object),
       })
     })
 
@@ -177,7 +184,7 @@ describe('routes/operators', () => {
       mockState.invalidateUserCache = vi.fn()
       rlsMock.queueRows([{ id: 'u1', role: 'agent' }])
       const app = buildApp()
-      await request(app).patch('/api/operators/u1').send({ is_restricted: true, permissions: { chat: false } })
+      await request(app).patch('/api/operators/u1').send({ is_restricted: true, permissions: { chat: { view: false, create: false, edit: false, delete: false } } })
       expect(mockState.invalidateUserCache).toHaveBeenCalledWith('u1')
     })
 
@@ -194,7 +201,7 @@ describe('routes/operators', () => {
       const app = buildApp()
       const res = await request(app).patch('/api/operators/u1').send({ name: 'Novo' })
       expect(res.status).toBe(200)
-      expect(mockState.logUsage).not.toHaveBeenCalled()
+      expect(mockState.logAudit).not.toHaveBeenCalled()
     })
   })
 
@@ -210,7 +217,7 @@ describe('routes/operators', () => {
       const res = await request(app).post('/api/operators/u1/reset-password').send({ password: 'novasenha123' })
       expect(res.status).toBe(200)
       expect(res.body).toEqual({ reset: true })
-      expect(mockState.logUsage).toHaveBeenCalledWith('tenant-1', 'user-1', 'operator_password_reset', { targetUserId: 'u1' })
+      expect(mockState.logAudit).toHaveBeenCalledWith('tenant-1', 'user-1', 'operator', 'password_reset', 'u1')
     })
   })
 
@@ -232,6 +239,12 @@ describe('routes/operators', () => {
       const app = buildApp()
       await request(app).delete('/api/operators/u2')
       expect(mockState.invalidateUserCache).toHaveBeenCalledWith('u2')
+    })
+
+    it('registra um evento de auditoria na exclusão', async () => {
+      const app = buildApp()
+      await request(app).delete('/api/operators/u2')
+      expect(mockState.logAudit).toHaveBeenCalledWith('tenant-1', 'user-1', 'operator', 'delete', 'u2')
     })
   })
 })

@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
 import { useToast } from '@/composables/useToast'
 
-const mockState = vi.hoisted(() => ({ listContacts: null, deleteContact: null, deduplicateContacts: null, httpGet: null }))
+const mockState = vi.hoisted(() => ({ listContacts: null, deleteContact: null, deduplicateContacts: null, httpGet: null, eraseLeadData: null }))
 
 vi.mock('@/services/api', () => ({
   api: {
@@ -13,6 +13,7 @@ vi.mock('@/services/api', () => ({
     deleteContact: (...a) => mockState.deleteContact(...a),
     deduplicateContacts: (...a) => mockState.deduplicateContacts(...a),
     importContacts: vi.fn(),
+    eraseLeadData: (...a) => mockState.eraseLeadData(...a),
   },
   http: {
     get: (...a) => mockState.httpGet(...a),
@@ -28,6 +29,7 @@ describe('ContactsView', () => {
     mockState.deleteContact = vi.fn().mockResolvedValue({ deleted: true })
     mockState.deduplicateContacts = vi.fn().mockResolvedValue({ removed: 0 })
     mockState.httpGet = vi.fn().mockResolvedValue({ data: { labels: [] } })
+    mockState.eraseLeadData = vi.fn().mockResolvedValue({ erased: true, erasedAt: '2026-07-17T10:00:00Z' })
   })
 
   it('carrega e lista os contatos ao montar', async () => {
@@ -98,6 +100,48 @@ describe('ContactsView', () => {
 
     const { state } = useToast()
     expect(state.text).toContain('Erro ao exportar')
+  })
+
+  it('exporta os dados pessoais de um contato via /privacy/export/:id (LGPD)', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:mock-url')
+    URL.revokeObjectURL = vi.fn()
+    mockState.listContacts.mockResolvedValue([{ id: 'c1', name: 'Ana', phone: '11988887777', stage: 'Novo Lead', tags: [] }])
+    mockState.httpGet = vi.fn().mockImplementation((url) => {
+      if (url === '/privacy/export/c1') return Promise.resolve({ data: new Blob(['{}']) })
+      return Promise.resolve({ data: { labels: [] } })
+    })
+    const wrapper = mount(ContactsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    document.body.querySelector('.mdi-dots-vertical').closest('button').click()
+    await flushPromises()
+    const exportItem = [...document.body.querySelectorAll('.v-list-item')].find((i) => /Exportar dados/.test(i.textContent))
+    exportItem.click()
+    await flushPromises()
+
+    expect(mockState.httpGet).toHaveBeenCalledWith('/privacy/export/c1', { responseType: 'blob' })
+    expect(URL.createObjectURL).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('exclui os dados pessoais de um contato (LGPD) ao confirmar', async () => {
+    mockState.listContacts.mockResolvedValue([{ id: 'c1', name: 'Ana', phone: '11988887777', stage: 'Novo Lead', tags: [] }])
+    const wrapper = mount(ContactsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    document.body.querySelector('.mdi-dots-vertical').closest('button').click()
+    await flushPromises()
+    const eraseItem = [...document.body.querySelectorAll('.v-list-item')].find((i) => /Excluir dados/.test(i.textContent))
+    eraseItem.click()
+    await flushPromises()
+
+    const confirmBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Excluir dados')
+    confirmBtn.click()
+    await flushPromises()
+
+    expect(mockState.eraseLeadData).toHaveBeenCalledWith('c1')
+    expect(wrapper.text()).toContain('dados removidos')
+    wrapper.unmount()
   })
 
   it('não salva quando o e-mail informado é inválido', async () => {

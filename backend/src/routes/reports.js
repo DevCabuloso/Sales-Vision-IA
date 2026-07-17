@@ -1,9 +1,17 @@
 import { Router } from 'express'
+import { z } from 'zod'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 
 export const reportsRouter = Router()
 reportsRouter.use(requireAuth, requireTenant)
+
+function requireAdmin(req, res, next) {
+  if (req.user.role !== 'admin' && req.user.role !== 'owner') {
+    return res.status(403).json({ error: 'Acesso restrito a administradores.' })
+  }
+  next()
+}
 
 const TENANT_TZ_OFFSET_HOURS = 3 // America/Sao_Paulo (GMT-3), sem horário de verão
 
@@ -19,15 +27,14 @@ function dayRangeUtc(dateStr) {
   return { start: start.toISOString(), end: end.toISOString() }
 }
 
-// GET /api/reports/daily?date=YYYY-MM-DD
-reportsRouter.get('/daily', async (req, res) => {
-  const tenantId = req.user.tenantId
-  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : todayDateStr()
+// Agregação do dia (summary/byUser/funnel), extraída pra ser reaproveitada
+// tanto pela rota GET /daily quanto pelo job de relatório agendado por
+// e-mail (scheduler.js runDueScheduledReports, que soma vários dias).
+export async function buildDailyReport(tenantId, dateStr) {
   const { start, end } = dayRangeUtc(dateStr)
 
-  try {
-    const { users, ticketLogs, leadsToday, messagesToday, apptsToday, usageEvents, stageCountRows, touchedLeads } =
-      await withTenant(tenantId, async (client) => {
+  const { users, ticketLogs, leadsToday, messagesToday, apptsToday, usageEvents, stageCountRows, touchedLeads } =
+    await withTenant(tenantId, async (client) => {
         const [usersR, ticketLogsR, leadsTodayR, messagesTodayR, apptsTodayR, usageEventsR, stageCountR] = await Promise.all([
           client.query(
             "SELECT id, name, email, role FROM users WHERE tenant_id = $1 AND role != 'owner'",
@@ -174,7 +181,63 @@ reportsRouter.get('/daily', async (req, res) => {
       },
     }
 
-    res.json({ date: dateStr, summary, byUser, funnel })
+  return { date: dateStr, summary, byUser, funnel }
+}
+
+// GET /api/reports/daily?date=YYYY-MM-DD
+reportsRouter.get('/daily', async (req, res) => {
+  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : todayDateStr()
+  try {
+    const report = await buildDailyReport(req.user.tenantId, dateStr)
+    res.json(report)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+const DEFAULT_SCHEDULE = { active: false, recipients: [], day_of_week: 1, hour: 8, minute: 0, timezone: 'America/Sao_Paulo' }
+
+const scheduleSchema = z.object({
+  active:      z.boolean().optional(),
+  recipients:  z.array(z.string().email()).max(20).optional(),
+  day_of_week: z.number().int().min(0).max(6).optional(),
+  hour:        z.number().int().min(0).max(23).optional(),
+  minute:      z.number().int().min(0).max(59).optional(),
+  timezone:    z.string().min(1).optional(),
+})
+
+// GET /api/reports/schedule — configuração do relatório semanal por e-mail
+reportsRouter.get('/schedule', requireAdmin, async (req, res) => {
+  try {
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query('SELECT * FROM report_schedules WHERE tenant_id = $1 LIMIT 1', [req.user.tenantId])
+      return r.rows[0]
+    })
+    res.json({ schedule: row || { tenant_id: req.user.tenantId, ...DEFAULT_SCHEDULE } })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// PUT /api/reports/schedule
+reportsRouter.put('/schedule', requireAdmin, async (req, res) => {
+  const parsed = scheduleSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
+  try {
+    const data = { ...DEFAULT_SCHEDULE, ...parsed.data }
+    const row = await withTenant(req.user.tenantId, async (client) => {
+      const r = await client.query(
+        `INSERT INTO report_schedules (tenant_id, active, recipients, day_of_week, hour, minute, timezone, updated_at)
+         VALUES ($1, $2, $3::text[], $4, $5, $6, $7, now())
+         ON CONFLICT (tenant_id) DO UPDATE SET
+           active = EXCLUDED.active, recipients = EXCLUDED.recipients, day_of_week = EXCLUDED.day_of_week,
+           hour = EXCLUDED.hour, minute = EXCLUDED.minute, timezone = EXCLUDED.timezone, updated_at = now()
+         RETURNING *`,
+        [req.user.tenantId, data.active, data.recipients, data.day_of_week, data.hour, data.minute, data.timezone]
+      )
+      return r.rows[0]
+    })
+    res.json({ schedule: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

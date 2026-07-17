@@ -66,6 +66,7 @@ const routes = [
       { path: '/flows',        name: 'flows',        component: () => import('@/views/app/FlowsView.vue') },
       { path: '/flows/:id',    name: 'flow-editor',  component: () => import('@/views/app/FlowEditorView.vue'), props: true },
       { path: '/ajuda',        name: 'ajuda',        component: () => import('@/views/app/HelpView.vue') },
+      { path: '/auditoria',    name: 'auditoria',    component: () => import('@/views/app/AuditLogView.vue') },
     ],
   },
   {

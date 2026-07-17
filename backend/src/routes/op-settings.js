@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { invalidateTenantCache } from '../services/orchestrator.js'
+import { logAudit } from '../services/usage.js'
 
 export const opSettingsRouter = Router()
 opSettingsRouter.use(requireAuth, requireTenant)
@@ -85,6 +86,7 @@ opSettingsRouter.put('/', async (req, res) => {
       )
     )
     invalidateTenantCache(req.user.tenantId)
+    await logAudit(req.user.tenantId, req.user.id, 'op_settings', 'update', req.user.tenantId, patch)
     res.json({ settings: { ...DEFAULTS, ...patch } })
   } catch (e) {
     res.status(500).json({ error: e.message })

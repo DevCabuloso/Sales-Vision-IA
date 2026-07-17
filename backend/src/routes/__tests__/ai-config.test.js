@@ -32,6 +32,10 @@ vi.mock('../../services/orchestrator.js', () => ({
   invalidateTenantCache: (...args) => mockState.invalidateTenantCache(...args),
 }))
 
+vi.mock('../../services/usage.js', () => ({
+  logAudit: vi.fn().mockResolvedValue(undefined),
+}))
+
 const { aiConfigRouter } = await import('../ai-config.js')
 
 function buildApp() {

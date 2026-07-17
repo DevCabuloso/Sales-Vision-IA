@@ -3,7 +3,7 @@ import { createSupabaseMock } from '../../test-utils/supabaseMock.js'
 
 const POLL_MS = 20_000
 
-const mockState = vi.hoisted(() => ({ box: {}, sendText: null, sendMedia: null, markSentByPlatform: null, logUsage: null, processBroadcast: null, dnsLookup: null }))
+const mockState = vi.hoisted(() => ({ box: {}, sendText: null, sendMedia: null, markSentByPlatform: null, logUsage: null, processBroadcast: null, dnsLookup: null, buildDailyReport: null, sendEmail: null }))
 
 vi.mock('node:dns/promises', () => ({
   default: { lookup: (...args) => mockState.dnsLookup(...args) },
@@ -34,6 +34,14 @@ vi.mock('../../routes/broadcast.js', () => ({
   processBroadcast: (...args) => mockState.processBroadcast(...args),
 }))
 
+vi.mock('../../routes/reports.js', () => ({
+  buildDailyReport: (...args) => mockState.buildDailyReport(...args),
+}))
+
+vi.mock('../email.js', () => ({
+  sendEmail: (...args) => mockState.sendEmail(...args),
+}))
+
 const { startScheduler } = await import('../scheduler.js')
 
 let supabaseMock
@@ -55,6 +63,8 @@ const emptyOtherQueues = {
   scheduled_messages: [{ data: [], error: null }],
   followup_enrollment_messages: [{ data: [], error: null }],
   appointment_reminders: [{ data: [], error: null }],
+  webhook_deliveries: [{ data: [], error: null }],
+  report_schedules: [{ data: [], error: null }],
 }
 
 describe('scheduler', () => {
@@ -66,6 +76,12 @@ describe('scheduler', () => {
     mockState.logUsage = vi.fn().mockResolvedValue(undefined)
     mockState.processBroadcast = vi.fn().mockResolvedValue(undefined)
     mockState.dnsLookup = vi.fn().mockResolvedValue({ address: '93.184.216.34' })
+    mockState.buildDailyReport = vi.fn().mockResolvedValue({
+      date: '2026-01-01',
+      summary: { newLeads: 1, qualifiedNewLeads: 1, conversationsResolved: 1, appointmentsScheduled: 1, messages: { total: 5 } },
+      byUser: [], funnel: [],
+    })
+    mockState.sendEmail = vi.fn().mockResolvedValue({ sent: true })
   })
 
   afterEach(() => {
@@ -293,6 +309,74 @@ describe('scheduler', () => {
       await runOneTick()
 
       expect(insertCallsFor('notifications')).toHaveLength(0)
+    })
+  })
+
+  describe('relatório semanal por e-mail (report_schedules)', () => {
+    it('não envia quando o horário atual não bate com o configurado', async () => {
+      vi.setSystemTime(new Date('2026-07-14T11:00:00.000Z')) // 08:00 em SP, config é 09:00
+      setSupabase({
+        ...emptyOtherQueues,
+        report_schedules: [{ data: [{ tenant_id: 'tenant-1', recipients: ['dono@ex.com'], day_of_week: 2, hour: 9, minute: 0, timezone: 'America/Sao_Paulo', last_sent_at: null }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(mockState.sendEmail).not.toHaveBeenCalled()
+    })
+
+    it('não envia quando o dia da semana não bate', async () => {
+      vi.setSystemTime(new Date('2026-07-14T12:00:00.000Z')) // terça (2) em SP
+      setSupabase({
+        ...emptyOtherQueues,
+        report_schedules: [{ data: [{ tenant_id: 'tenant-1', recipients: ['dono@ex.com'], day_of_week: 1, hour: 9, minute: 0, timezone: 'America/Sao_Paulo', last_sent_at: null }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(mockState.sendEmail).not.toHaveBeenCalled()
+    })
+
+    it('não envia quando não há destinatários configurados', async () => {
+      vi.setSystemTime(new Date('2026-07-14T12:00:00.000Z'))
+      setSupabase({
+        ...emptyOtherQueues,
+        report_schedules: [{ data: [{ tenant_id: 'tenant-1', recipients: [], day_of_week: 2, hour: 9, minute: 0, timezone: 'America/Sao_Paulo', last_sent_at: null }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(mockState.sendEmail).not.toHaveBeenCalled()
+    })
+
+    it('não duplica quando já foi enviado hoje (last_sent_at)', async () => {
+      vi.setSystemTime(new Date('2026-07-14T12:00:00.000Z'))
+      setSupabase({
+        ...emptyOtherQueues,
+        report_schedules: [{ data: [{ tenant_id: 'tenant-1', recipients: ['dono@ex.com'], day_of_week: 2, hour: 9, minute: 0, timezone: 'America/Sao_Paulo', last_sent_at: '2026-07-14T09:00:05.000Z' }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(mockState.sendEmail).not.toHaveBeenCalled()
+    })
+
+    it('monta e envia o relatório somando 7 dias, e atualiza last_sent_at', async () => {
+      vi.setSystemTime(new Date('2026-07-14T12:00:00.000Z'))
+      setSupabase({
+        ...emptyOtherQueues,
+        report_schedules: [{ data: [{ tenant_id: 'tenant-1', recipients: ['dono@ex.com'], day_of_week: 2, hour: 9, minute: 0, timezone: 'America/Sao_Paulo', last_sent_at: null }], error: null }],
+        tenants: [{ data: [{ name: 'Empresa X' }], error: null }],
+      })
+
+      await runOneTick()
+
+      expect(mockState.buildDailyReport).toHaveBeenCalledTimes(7)
+      expect(mockState.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+        to: 'dono@ex.com', subject: expect.stringContaining('Empresa X'),
+      }))
+      const scheduleUpdate = updateCallsFor('report_schedules').find((c) => c.args[0]?.last_sent_at)
+      expect(scheduleUpdate).toBeTruthy()
     })
   })
 

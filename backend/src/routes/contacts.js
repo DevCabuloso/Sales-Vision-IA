@@ -5,9 +5,10 @@ import { requireAuth, requireTenant, requirePermission } from '../middleware/aut
 import multer from 'multer'
 import * as XLSX from 'xlsx'
 import { normalizePhone } from '../utils/phone.js'
+import { logAudit } from '../services/usage.js'
 
 export const contactsRouter = Router()
-contactsRouter.use(requireAuth, requireTenant, requirePermission('contatos'))
+contactsRouter.use(requireAuth, requireTenant, requirePermission('contatos', 'view'))
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
 
@@ -66,7 +67,7 @@ contactsRouter.get('/', async (req, res) => {
 })
 
 // POST /api/contacts
-contactsRouter.post('/', async (req, res) => {
+contactsRouter.post('/', requirePermission('contatos', 'create'), async (req, res) => {
   const parsed = schema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   try {
@@ -94,7 +95,7 @@ contactsRouter.post('/', async (req, res) => {
 })
 
 // PUT /api/contacts/:id
-contactsRouter.put('/:id', async (req, res) => {
+contactsRouter.put('/:id', requirePermission('contatos', 'edit'), async (req, res) => {
   const parsed = updateSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
   try {
@@ -112,6 +113,7 @@ contactsRouter.put('/:id', async (req, res) => {
       )
       return r.rows[0]
     })
+    await logAudit(req.user.tenantId, req.user.id, 'lead', 'update', req.params.id, parsed.data)
     res.json({ contact: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -119,11 +121,12 @@ contactsRouter.put('/:id', async (req, res) => {
 })
 
 // DELETE /api/contacts/:id
-contactsRouter.delete('/:id', async (req, res) => {
+contactsRouter.delete('/:id', requirePermission('contatos', 'delete'), async (req, res) => {
   try {
     await withTenant(req.user.tenantId, (client) =>
       client.query('DELETE FROM leads WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
+    await logAudit(req.user.tenantId, req.user.id, 'lead', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -163,7 +166,7 @@ contactsRouter.get('/export', async (req, res) => {
 })
 
 // POST /api/contacts/import — importa CSV ou XLSX
-contactsRouter.post('/import', upload.single('file'), async (req, res) => {
+contactsRouter.post('/import', requirePermission('contatos', 'create'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' })
   try {
     const ext = req.file.originalname.split('.').pop().toLowerCase()
@@ -236,7 +239,7 @@ contactsRouter.post('/import', upload.single('file'), async (req, res) => {
 })
 
 // POST /api/contacts/deduplicate — remove duplicados por telefone
-contactsRouter.post('/deduplicate', async (req, res) => {
+contactsRouter.post('/deduplicate', requirePermission('contatos', 'delete'), async (req, res) => {
   try {
     const removed = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
@@ -254,6 +257,7 @@ contactsRouter.post('/deduplicate', async (req, res) => {
       }
       return toDelete.length
     })
+    await logAudit(req.user.tenantId, req.user.id, 'lead', 'bulk_delete', null, { removed, reason: 'deduplicate' })
     res.json({ removed })
   } catch (e) {
     res.status(500).json({ error: e.message })

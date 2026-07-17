@@ -100,4 +100,16 @@ export const config = {
     trialPlanPriceCents: parseInt(process.env.TRIAL_PLAN_PRICE_CENTS || '39700', 10),
     trialDays: parseInt(process.env.TRIAL_DAYS || '7', 10),
   },
+
+  // SMTP genérico usado pelo relatório agendado por e-mail (services/email.js).
+  // Sem SMTP_HOST configurado, o envio vira um no-op logado — feature fica
+  // pronta no código, mas só envia de verdade depois de credenciais reais.
+  smtp: {
+    host:   process.env.SMTP_HOST || '',
+    port:   parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_SECURE === 'true',
+    user:   process.env.SMTP_USER || '',
+    pass:   process.env.SMTP_PASS || '',
+    from:   process.env.SMTP_FROM || '',
+  },
 }

@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { logAudit } from '../services/usage.js'
 
 export const labelsRouter = Router()
 labelsRouter.use(requireAuth, requireTenant)
@@ -60,6 +61,7 @@ labelsRouter.patch('/:id', async (req, res) => {
       if (!r.rows[0]) throw new Error('Etiqueta não encontrada.')
       return r.rows[0]
     })
+    await logAudit(req.user.tenantId, req.user.id, 'label', 'update', req.params.id, p.data)
     res.json({ label: row })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
@@ -69,6 +71,7 @@ labelsRouter.delete('/:id', async (req, res) => {
     await withTenant(req.user.tenantId, (client) =>
       client.query('DELETE FROM labels WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
+    await logAudit(req.user.tenantId, req.user.id, 'label', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })

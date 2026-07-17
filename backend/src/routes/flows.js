@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
+import { logAudit } from '../services/usage.js'
 
 export const flowsRouter = Router()
 flowsRouter.use(requireAuth, requireTenant)
@@ -136,6 +137,7 @@ flowsRouter.patch('/:id', async (req, res) => {
       return r.rows[0]
     })
     if (!row) return res.status(404).json({ error: 'Fluxo não encontrado.' })
+    await logAudit(req.user.tenantId, req.user.id, 'flow', 'update', req.params.id, { name, status, channel_id, trigger_keywords, timeout_minutes, fallback_text })
     res.json({ flow: row })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -148,6 +150,7 @@ flowsRouter.delete('/:id', async (req, res) => {
     await withTenant(req.user.tenantId, (client) =>
       client.query('DELETE FROM flows WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])
     )
+    await logAudit(req.user.tenantId, req.user.id, 'flow', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

@@ -9,6 +9,7 @@ import { chat } from '../services/ai/openai.js'
 import { buildSystemContent } from '../services/ai/agent.js'
 import { encrypt, decryptJSON } from '../services/crypto.js'
 import { invalidateTenantCache } from '../services/orchestrator.js'
+import { logAudit } from '../services/usage.js'
 
 export const aiConfigRouter = Router()
 aiConfigRouter.use(requireAuth, requireTenant)
@@ -102,6 +103,7 @@ aiConfigRouter.put('/', async (req, res) => {
       payload.openai_api_key = openai_api_key ? encrypt(openai_api_key) : null
     }
     const row = await withTenant(req.user.tenantId, (client) => upsertAiConfig(client, payload))
+    await logAudit(req.user.tenantId, req.user.id, 'ai_config', 'update', req.user.tenantId, data)
     res.json({ config: sanitizeConfig(row) })
   } catch (e) {
     res.status(500).json({ error: e.message })

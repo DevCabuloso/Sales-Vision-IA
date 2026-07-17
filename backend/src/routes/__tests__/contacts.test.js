@@ -4,7 +4,7 @@ import request from 'supertest'
 import * as XLSX from 'xlsx'
 import { createRlsMock } from '../../test-utils/rlsMock.js'
 
-const mockState = vi.hoisted(() => ({ box: {}, permCalls: [] }))
+const mockState = vi.hoisted(() => ({ box: {}, permCalls: [], logAudit: null }))
 
 vi.mock('../../middleware/auth.js', () => ({
   requireAuth: (req, res, next) => { req.user = { id: 'user-1', tenantId: 'tenant-1', role: 'admin' }; next() },
@@ -14,6 +14,10 @@ vi.mock('../../middleware/auth.js', () => ({
 
 vi.mock('../../db/rls.js', () => ({
   withTenant: (...args) => mockState.box.withTenant(...args),
+}))
+
+vi.mock('../../services/usage.js', () => ({
+  logAudit: (...args) => mockState.logAudit(...args),
 }))
 
 const { contactsRouter } = await import('../contacts.js')
@@ -37,11 +41,12 @@ function deleteCallsMatching(pattern) { return rlsMock.calls.filter((c) => patte
 describe('routes/contacts', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockState.logAudit = vi.fn().mockResolvedValue(undefined)
     setRls()
   })
 
   it('exige a permissão "contatos" (enforcement de operador restrito) em toda a rota', () => {
-    expect(mockState.permCalls).toContainEqual(['contatos'])
+    expect(mockState.permCalls).toContainEqual(['contatos', 'view'])
   })
 
   describe('GET /', () => {

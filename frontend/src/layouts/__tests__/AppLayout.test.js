@@ -88,6 +88,20 @@ describe('layouts/AppLayout.vue (smoke)', () => {
     wrapper.unmount()
   })
 
+  it('esconde/mostra itens de navegação com o formato de permissão por ação ({view,create,edit,delete})', async () => {
+    mockState.auth.user.role = 'agent'
+    mockState.auth.user.is_restricted = true
+    mockState.auth.user.permissions = {
+      chat: { view: true, create: true, edit: true, delete: false },
+      kanban: { view: false, create: false, edit: false, delete: false },
+    }
+    const wrapper = mountLayout()
+    await flushPromises()
+    expect(wrapper.text()).toContain('chat')
+    expect(wrapper.text()).not.toContain('kanban')
+    wrapper.unmount()
+  })
+
   it('não restringe a navegação quando is_restricted é false, mesmo com permissions restritivas', async () => {
     mockState.auth.user.role = 'agent'
     mockState.auth.user.is_restricted = false

@@ -23,6 +23,10 @@ vi.mock('node:dns/promises', () => ({
   default: { lookup: (...args) => mockState.dnsLookup(...args) },
 }))
 
+vi.mock('../../services/usage.js', () => ({
+  logAudit: vi.fn().mockResolvedValue(undefined),
+}))
+
 const { customApisRouter } = await import('../custom-apis.js')
 
 function buildApp() {

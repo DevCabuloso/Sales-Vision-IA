@@ -284,7 +284,9 @@ function feat(key) {
 function perm(key) {
   if (!auth.user?.is_restricted) return true
   if (auth.user?.role === 'admin' || auth.user?.role === 'owner') return true
-  return auth.user?.permissions?.[key] === true
+  const areaPerms = auth.user?.permissions?.[key]
+  if (areaPerms === true) return true // compat: formato antigo (booleano único)
+  return areaPerms?.view === true
 }
 
 const navMain = computed(() => [
@@ -313,6 +315,7 @@ const navSystem = computed(() => {
     { title: t('nav.ia'),            icon: 'mdi-robot-outline',      to: '/ia-config',    show: feat('ia_config') },
     { title: t('nav.apis'),          icon: 'mdi-api',                to: '/apis',         show: feat('custom_apis') },
     { title: t('nav.integracoes'),   icon: 'mdi-puzzle-outline',     to: '/integracoes',  show: feat('google_cal') || feat('meta_api') },
+    { title: t('nav.auditoria'),     icon: 'mdi-history',            to: '/auditoria' },
     { title: t('nav.configuracoes'), icon: 'mdi-cog-outline',        to: '/configuracoes' },
   ].filter((i) => i.show !== false)
 })

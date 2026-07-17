@@ -23,6 +23,7 @@
       >
         <template #item.name="{ item }">
           <span class="font-weight-medium">{{ item.name || '—' }}</span>
+          <v-chip v-if="item.erased_at" size="x-small" color="warning" variant="tonal" class="ml-1">dados removidos</v-chip>
         </template>
         <template #item.stage="{ item }">
           <v-chip
@@ -41,6 +42,18 @@
             <v-btn icon variant="text" size="small" color="error" @click="remove(item)">
               <v-icon icon="mdi-delete-outline" size="18" />
             </v-btn>
+            <v-menu location="bottom end">
+              <template #activator="{ props }">
+                <v-btn icon variant="text" size="small" v-bind="props" title="Mais ações"><v-icon icon="mdi-dots-vertical" size="16" /></v-btn>
+              </template>
+              <v-list density="compact" min-width="220" class="glass">
+                <v-list-item prepend-icon="mdi-shield-lock-outline" title="Exportar dados (LGPD)" @click="exportPrivacyData(item)" />
+                <v-list-item
+                  prepend-icon="mdi-shield-off-outline" title="Excluir dados (LGPD)"
+                  class="text-error" :disabled="!!item.erased_at" @click="confirmErase(item)"
+                />
+              </v-list>
+            </v-menu>
           </div>
         </template>
         <template #no-data>
@@ -66,12 +79,29 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Dialog: excluir dados (LGPD) -->
+    <v-dialog v-model="eraseDialog" max-width="440">
+      <v-card class="glass pa-2" border>
+        <v-card-title class="text-h6 font-weight-bold">Excluir dados (LGPD)</v-card-title>
+        <v-card-text>
+          Isso anonimiza permanentemente nome, telefone, e-mail e o histórico de mensagens de
+          <strong>{{ eraseTarget?.name || eraseTarget?.phone }}</strong>. O registro não é apagado (fica só sem dados
+          pessoais), então relatórios continuam funcionando. <strong>Irreversível.</strong>
+        </v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="eraseDialog = false">Cancelar</v-btn>
+          <v-btn color="error" :loading="erasing" @click="doErase">Excluir dados</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { api } from '@/services/api'
+import { api, http } from '@/services/api'
 import { useToast } from '@/composables/useToast'
 import { useRealtime } from '@/composables/useRealtime'
 import { useAuthStore } from '@/stores/auth'
@@ -88,6 +118,9 @@ const search = ref('')
 const dialog = ref(false)
 const formError = ref('')
 const form = reactive({ name: '', phone: '', intention: '' })
+const eraseDialog = ref(false)
+const erasing = ref(false)
+const eraseTarget = ref(null)
 
 const headers = [
   { title: 'Nome', key: 'name' },
@@ -141,6 +174,26 @@ async function analyze(lead) {
 async function remove(lead) {
   try { await api.deleteLead(lead.id); await load() }
   catch (e) { toast.error(e.message) }
+}
+
+async function exportPrivacyData(item) {
+  try {
+    const r = await http.get(`/privacy/export/${item.id}`, { responseType: 'blob' })
+    const burl = URL.createObjectURL(r.data)
+    const a = document.createElement('a'); a.href = burl; a.download = `dados-lead-${item.id}.json`; document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(burl), 3000)
+  } catch (e) { toast.error('Erro ao exportar: ' + e.message) }
+}
+
+function confirmErase(item) { eraseTarget.value = item; eraseDialog.value = true }
+async function doErase() {
+  erasing.value = true
+  try {
+    await api.eraseLeadData(eraseTarget.value.id)
+    eraseDialog.value = false
+    toast.success('Dados removidos.')
+    await load()
+  } catch (e) { toast.error(e.message) } finally { erasing.value = false }
 }
 
 onMounted(async () => { try { await load() } finally { loading.value = false } })

@@ -5,7 +5,7 @@ import { requireAuth, requireTenant, requirePermission } from '../middleware/aut
 import { normalizePhone } from '../utils/phone.js'
 
 export const broadcastRouter = Router()
-broadcastRouter.use(requireAuth, requireTenant, requirePermission('broadcast'))
+broadcastRouter.use(requireAuth, requireTenant, requirePermission('broadcast', 'view'))
 
 const campaignBaseSchema = z.object({
   name:         z.string().min(1).max(200),
@@ -47,7 +47,7 @@ function statusForSchedule(scheduledAt) {
 }
 
 // POST /api/broadcast/campaigns
-broadcastRouter.post('/campaigns', async (req, res) => {
+broadcastRouter.post('/campaigns', requirePermission('broadcast', 'create'), async (req, res) => {
   const parsed = campaignSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
@@ -71,7 +71,7 @@ broadcastRouter.post('/campaigns', async (req, res) => {
 const campaignPatchSchema = campaignBaseSchema.partial().refine(intervalRefine, intervalRefineOpts)
 
 // PATCH /api/broadcast/campaigns/:id
-broadcastRouter.patch('/campaigns/:id', async (req, res) => {
+broadcastRouter.patch('/campaigns/:id', requirePermission('broadcast', 'edit'), async (req, res) => {
   const partial = campaignPatchSchema.safeParse(req.body)
   if (!partial.success) return res.status(400).json({ error: partial.error.issues[0].message })
 
@@ -108,7 +108,7 @@ broadcastRouter.patch('/campaigns/:id', async (req, res) => {
 })
 
 // DELETE /api/broadcast/campaigns/:id
-broadcastRouter.delete('/campaigns/:id', async (req, res) => {
+broadcastRouter.delete('/campaigns/:id', requirePermission('broadcast', 'delete'), async (req, res) => {
   try {
     const blocked = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
@@ -161,7 +161,7 @@ const contactSchema = z.object({
 })
 
 // POST /api/broadcast/campaigns/:id/contacts
-broadcastRouter.post('/campaigns/:id/contacts', async (req, res) => {
+broadcastRouter.post('/campaigns/:id/contacts', requirePermission('broadcast', 'create'), async (req, res) => {
   const parsed = contactSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
@@ -211,7 +211,7 @@ async function assertCampaignEditable(client, tenantId, campaignId) {
 }
 
 // DELETE /api/broadcast/campaigns/:id/contacts/:contactId — remove um contato da lista
-broadcastRouter.delete('/campaigns/:id/contacts/:contactId', async (req, res) => {
+broadcastRouter.delete('/campaigns/:id/contacts/:contactId', requirePermission('broadcast', 'delete'), async (req, res) => {
   try {
     const err = await withTenant(req.user.tenantId, async (client) => {
       const editErr = await assertCampaignEditable(client, req.user.tenantId, req.params.id)
@@ -230,7 +230,7 @@ broadcastRouter.delete('/campaigns/:id/contacts/:contactId', async (req, res) =>
 })
 
 // DELETE /api/broadcast/campaigns/:id/contacts — limpa toda a lista de contatos
-broadcastRouter.delete('/campaigns/:id/contacts', async (req, res) => {
+broadcastRouter.delete('/campaigns/:id/contacts', requirePermission('broadcast', 'delete'), async (req, res) => {
   try {
     const err = await withTenant(req.user.tenantId, async (client) => {
       const editErr = await assertCampaignEditable(client, req.user.tenantId, req.params.id)
@@ -257,7 +257,7 @@ const importLeadsSchema = z.object({
 
 // POST /api/broadcast/campaigns/:id/import-leads — importa da base de contatos/leads,
 // opcionalmente filtrando por fila, etiqueta e etapa. Sem filtros, importa todos os leads do tenant.
-broadcastRouter.post('/campaigns/:id/import-leads', async (req, res) => {
+broadcastRouter.post('/campaigns/:id/import-leads', requirePermission('broadcast', 'create'), async (req, res) => {
   const parsed = importLeadsSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message })
 
@@ -312,7 +312,7 @@ broadcastRouter.post('/campaigns/:id/import-leads', async (req, res) => {
 })
 
 // POST /api/broadcast/campaigns/:id/send — inicia envio
-broadcastRouter.post('/campaigns/:id/send', async (req, res) => {
+broadcastRouter.post('/campaigns/:id/send', requirePermission('broadcast', 'edit'), async (req, res) => {
   try {
     const camp = await withTenant(req.user.tenantId, async (client) => {
       const r = await client.query(
@@ -412,7 +412,7 @@ export async function processBroadcast(tenantId, campaign) {
 }
 
 // POST /api/broadcast/campaigns/:id/cancel
-broadcastRouter.post('/campaigns/:id/cancel', async (req, res) => {
+broadcastRouter.post('/campaigns/:id/cancel', requirePermission('broadcast', 'edit'), async (req, res) => {
   try {
     await withTenant(req.user.tenantId, (client) =>
       client.query(

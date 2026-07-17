@@ -14,6 +14,10 @@ vi.mock('../../db/rls.js', () => ({
   withTenant: (...args) => mockState.box.withTenant(...args),
 }))
 
+vi.mock('../../services/usage.js', () => ({
+  logAudit: vi.fn().mockResolvedValue(undefined),
+}))
+
 const { businessHoursRouter, isWithinBusinessHours, getTenantTimezone, getOffMessage } = await import('../business-hours.js')
 
 function buildApp() {

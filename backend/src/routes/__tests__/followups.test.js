@@ -18,6 +18,10 @@ vi.mock('../../services/mediaStorage.js', () => ({
   uploadChatMedia: (...args) => mockState.uploadChatMedia(...args),
 }))
 
+vi.mock('../../services/usage.js', () => ({
+  logAudit: vi.fn().mockResolvedValue(undefined),
+}))
+
 const { followupsRouter } = await import('../followups.js')
 
 function buildApp() {

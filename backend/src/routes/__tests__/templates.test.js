@@ -19,6 +19,10 @@ vi.mock('../../services/ai/openai.js', () => ({
   chat: (...args) => mockState.chat(...args),
 }))
 
+vi.mock('../../services/usage.js', () => ({
+  logAudit: vi.fn().mockResolvedValue(undefined),
+}))
+
 const { templatesRouter } = await import('../templates.js')
 
 function buildApp() {
@@ -44,7 +48,7 @@ describe('routes/templates', () => {
   })
 
   it('exige a permissão "templates" (enforcement de operador restrito) em toda a rota', () => {
-    expect(mockState.permCalls).toContainEqual(['templates'])
+    expect(mockState.permCalls).toContainEqual(['templates', 'view'])
   })
 
   describe('categorias', () => {

@@ -124,8 +124,15 @@
               <v-expansion-panel>
                 <v-expansion-panel-title prepend-icon="mdi-menu" class="text-body-2 font-weight-bold">Permissões de Menu</v-expansion-panel-title>
                 <v-expansion-panel-text>
-                  <div class="d-flex flex-wrap ga-3 pt-2">
-                    <v-checkbox v-for="perm in permissionItems" :key="perm.key" v-model="editForm.permissions[perm.key]" :label="perm.label" color="primary" hide-details density="compact" />
+                  <div class="pt-2">
+                    <div v-for="perm in permissionItems" :key="perm.key" class="d-flex align-center flex-wrap ga-3 py-1 perm-row">
+                      <div class="text-body-2 font-weight-medium" style="min-width:110px">{{ perm.label }}</div>
+                      <v-checkbox
+                        v-for="action in actionItems" :key="action.key"
+                        v-model="editForm.permissions[perm.key][action.key]"
+                        :label="action.label" color="primary" hide-details density="compact"
+                      />
+                    </div>
                   </div>
                 </v-expansion-panel-text>
               </v-expansion-panel>
@@ -198,11 +205,31 @@ const editDialog = ref(false)
 const editMode = ref(false)
 const editTarget = ref(null)
 const editError = ref('')
-const DEFAULT_PERMISSIONS = { chat: true, kanban: true, contatos: true, leads: true, agenda: true, templates: true, broadcast: true }
-const editForm = reactive({ name: '', email: '', password: '', phone: '', role: 'agent', is_restricted: false, permissions: { ...DEFAULT_PERMISSIONS } })
+// Cada área controla 4 ações independentes (ver/criar/editar/excluir) — ver
+// middleware/auth.js requirePermission() no backend, mesma convenção.
+const FULL_ACCESS = { view: true, create: true, edit: true, delete: true }
+const NO_ACCESS = { view: false, create: false, edit: false, delete: false }
+const AREA_KEYS = ['chat', 'kanban', 'contatos', 'leads', 'agenda', 'templates', 'broadcast']
+function defaultPermissions() {
+  return Object.fromEntries(AREA_KEYS.map((k) => [k, { ...FULL_ACCESS }]))
+}
+// Normaliza o que vem da API: formato antigo (booleano único por área) vira
+// acesso total/nenhum; formato novo (objeto parcial) é completado com NO_ACCESS.
+function normalizePermissions(raw) {
+  return Object.fromEntries(AREA_KEYS.map((key) => {
+    const val = raw?.[key]
+    if (val === true) return [key, { ...FULL_ACCESS }]
+    if (val && typeof val === 'object') return [key, { ...NO_ACCESS, ...val }]
+    return [key, { ...NO_ACCESS }]
+  }))
+}
+const editForm = reactive({ name: '', email: '', password: '', phone: '', role: 'agent', is_restricted: false, permissions: defaultPermissions() })
 const permissionItems = [
   { key: 'chat', label: 'Chat SDR' }, { key: 'kanban', label: 'CRM Kanban' }, { key: 'contatos', label: 'Contatos' },
   { key: 'leads', label: 'Leads' }, { key: 'agenda', label: 'Agenda' }, { key: 'templates', label: 'Templates' }, { key: 'broadcast', label: 'Broadcast' },
+]
+const actionItems = [
+  { key: 'view', label: 'Ver' }, { key: 'create', label: 'Criar' }, { key: 'edit', label: 'Editar' }, { key: 'delete', label: 'Excluir' },
 ]
 
 const resetDialog = ref(false); const resetTarget = ref(null); const newPassword = ref('')
@@ -223,8 +250,8 @@ async function load() { loading.value = true; try { const { operators: ops } = a
 async function loadDashboard() { loadingDash.value = true; try { const { metrics: m } = await api.operatorsDashboard(); metrics.value = m } catch (e) { toast.error(e.message) } finally { loadingDash.value = false } }
 function onDashTab() { if (!metrics.value.length) loadDashboard() }
 
-function openCreate() { editMode.value = false; editTarget.value = null; editError.value = ''; showPass.value = false; Object.assign(editForm, { name: '', email: '', password: '', phone: '', role: 'agent', is_restricted: false, permissions: { ...DEFAULT_PERMISSIONS } }); editDialog.value = true }
-function openEdit(op) { editMode.value = true; editTarget.value = op; editError.value = ''; Object.assign(editForm, { name: op.name || '', email: op.email, phone: op.phone || '', role: op.role, is_restricted: op.is_restricted ?? false, permissions: { ...DEFAULT_PERMISSIONS, ...(op.permissions || {}) } }); editDialog.value = true }
+function openCreate() { editMode.value = false; editTarget.value = null; editError.value = ''; showPass.value = false; Object.assign(editForm, { name: '', email: '', password: '', phone: '', role: 'agent', is_restricted: false, permissions: defaultPermissions() }); editDialog.value = true }
+function openEdit(op) { editMode.value = true; editTarget.value = op; editError.value = ''; Object.assign(editForm, { name: op.name || '', email: op.email, phone: op.phone || '', role: op.role, is_restricted: op.is_restricted ?? false, permissions: normalizePermissions(op.permissions) }); editDialog.value = true }
 
 async function saveOp() {
   editError.value = ''
@@ -233,7 +260,7 @@ async function saveOp() {
   if (!editMode.value && !check.data.password) { editError.value = 'Senha obrigatória.'; return }
   saving.value = true
   try {
-    const payload = { name: check.data.name, email: check.data.email, phone: editForm.phone || null, role: editForm.role, is_restricted: editForm.is_restricted, permissions: editForm.role === 'admin' ? DEFAULT_PERMISSIONS : { ...editForm.permissions } }
+    const payload = { name: check.data.name, email: check.data.email, phone: editForm.phone || null, role: editForm.role, is_restricted: editForm.is_restricted, permissions: editForm.role === 'admin' ? defaultPermissions() : { ...editForm.permissions } }
     if (!editMode.value) payload.password = check.data.password
     if (editMode.value) { const { operator } = await api.updateOperator(editTarget.value.id, payload); const idx = operators.value.findIndex((o) => o.id === editTarget.value.id); if (idx >= 0) operators.value[idx] = { ...operators.value[idx], ...operator } }
     else { const { operator } = await api.createOperator(payload); operators.value.unshift(operator) }

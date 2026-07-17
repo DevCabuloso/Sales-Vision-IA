@@ -5,9 +5,10 @@ import { requireAuth, requireTenant, requirePermission } from '../middleware/aut
 import { createEvent, cancelEvent, listEvents, updateEvent, isConnected } from '../services/googleCalendar.js'
 import { expandRecurrence, ruleToGoogleRRule } from '../services/recurrence.js'
 import { logUsage } from '../services/usage.js'
+import { enqueueWebhookEvent } from '../services/webhookDelivery.js'
 
 export const appointmentsRouter = Router()
-appointmentsRouter.use(requireAuth, requireTenant, requirePermission('agenda'))
+appointmentsRouter.use(requireAuth, requireTenant, requirePermission('agenda', 'view'))
 
 const WEEKDAY_CODES = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA']
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000
@@ -113,7 +114,7 @@ async function syncFromGoogle(tenantId) {
 }
 
 // ─── POST /api/appointments/sync ─── importa eventos do Google Calendar
-appointmentsRouter.post('/sync', async (req, res) => {
+appointmentsRouter.post('/sync', requirePermission('agenda', 'edit'), async (req, res) => {
   try {
     const synced = await syncFromGoogle(req.user.tenantId)
     res.json({ synced })
@@ -195,7 +196,7 @@ const createSchema = z.object({
   recurrence: recurrenceSchema,
 })
 
-appointmentsRouter.post('/', async (req, res) => {
+appointmentsRouter.post('/', requirePermission('agenda', 'create'), async (req, res) => {
   const parsed = createSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Dados inválidos.' })
   const d = parsed.data
@@ -288,6 +289,7 @@ appointmentsRouter.post('/', async (req, res) => {
     if (!rows.length) throw new Error('Nenhum agendamento foi criado.')
     await createReminders(req.user.tenantId, rows, d.reminders)
     await logUsage(req.user.tenantId, req.user.id, 'appointment_created')
+    enqueueWebhookEvent(req.user.tenantId, 'appointment.created', { appointmentId: rows[0].id, title: rows[0].title, startTime: rows[0].start_time, leadId: rows[0].lead_id })
 
     res.status(201).json({
       appointment: rows[0],
@@ -316,7 +318,7 @@ const rescheduleSchema = z.object({
   { message: 'Informe ao menos um campo para atualizar.' }
 )
 
-appointmentsRouter.patch('/:id', async (req, res) => {
+appointmentsRouter.patch('/:id', requirePermission('agenda', 'edit'), async (req, res) => {
   const parsed = rescheduleSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Dados inválidos.' })
   const d = parsed.data
@@ -414,7 +416,7 @@ appointmentsRouter.patch('/:id', async (req, res) => {
 })
 
 // ─── POST /api/appointments/:id/cancel ───
-appointmentsRouter.post('/:id/cancel', async (req, res) => {
+appointmentsRouter.post('/:id/cancel', requirePermission('agenda', 'delete'), async (req, res) => {
   const scope = ['this', 'following', 'all'].includes(req.body?.scope) ? req.body.scope : 'this'
 
   const current = await withTenant(req.user.tenantId, async (client) => {

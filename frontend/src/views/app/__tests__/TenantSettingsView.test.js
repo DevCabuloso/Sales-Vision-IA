@@ -2,14 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { pluginOptions } from '@/test-utils/mountWithPlugins.js'
 
-const mockState = vi.hoisted(() => ({ post: null }))
+const mockState = vi.hoisted(() => ({ post: null, getReportSchedule: null, updateReportSchedule: null, user: null }))
 
 vi.mock('@/services/api', () => ({
   http: { post: (...a) => mockState.post(...a) },
+  api: {
+    getReportSchedule: (...a) => mockState.getReportSchedule(...a),
+    updateReportSchedule: (...a) => mockState.updateReportSchedule(...a),
+  },
 }))
 
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({ user: { tenantName: 'Empresa Ana', tenantSlug: 'empresa-ana', email: 'ana@ex.com', role: 'admin' } }),
+  useAuthStore: () => ({ user: mockState.user }),
 }))
 
 vi.mock('@/stores/locale.js', () => ({
@@ -24,6 +28,9 @@ const TenantSettingsView = (await import('../TenantSettingsView.vue')).default
 describe('TenantSettingsView', () => {
   beforeEach(() => {
     mockState.post = vi.fn().mockResolvedValue({ data: { changed: true } })
+    mockState.user = { tenantName: 'Empresa Ana', tenantSlug: 'empresa-ana', email: 'ana@ex.com', role: 'admin' }
+    mockState.getReportSchedule = vi.fn().mockResolvedValue({ active: false, recipients: [], day_of_week: 1, hour: 8, minute: 0 })
+    mockState.updateReportSchedule = vi.fn()
     localStorage.clear()
   })
 
@@ -78,5 +85,39 @@ describe('TenantSettingsView', () => {
     await btn.trigger('click')
 
     expect(wrapper.text()).toContain('não confere')
+  })
+
+  it('mostra o painel de relatório semanal por e-mail pra admin/owner e carrega a configuração salva', async () => {
+    mockState.getReportSchedule.mockResolvedValue({ active: true, recipients: ['dono@ex.com'], day_of_week: 5, hour: 9, minute: 30 })
+    const wrapper = mount(TenantSettingsView, pluginOptions())
+    await flushPromises()
+    expect(wrapper.text()).toContain('Relatório Semanal por E-mail')
+    expect(wrapper.text()).toContain('dono@ex.com')
+  })
+
+  it('não mostra o painel de relatório semanal pra um agente comum', async () => {
+    mockState.user = { tenantName: 'Empresa Ana', tenantSlug: 'empresa-ana', email: 'ana@ex.com', role: 'agent' }
+    const wrapper = mount(TenantSettingsView, pluginOptions())
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('Relatório Semanal por E-mail')
+    expect(mockState.getReportSchedule).not.toHaveBeenCalled()
+  })
+
+  it('salva a configuração do relatório semanal', async () => {
+    mockState.updateReportSchedule.mockResolvedValue({ active: true, recipients: ['dono@ex.com'], day_of_week: 1, hour: 8, minute: 0 })
+    const wrapper = mount(TenantSettingsView, { attachTo: document.body, ...pluginOptions() })
+    await flushPromises()
+
+    const switchInput = [...document.body.querySelectorAll('.v-switch input[type="checkbox"]')].find((i) => i.closest('.v-card')?.textContent.includes('Relatório Semanal'))
+    switchInput.click()
+    await flushPromises()
+
+    const saveBtn = [...document.body.querySelectorAll('button')].find((b) => b.closest('.v-card')?.textContent.includes('Relatório Semanal') && /^Salvar$/.test(b.textContent.trim()))
+    saveBtn.click()
+    await flushPromises()
+
+    expect(mockState.updateReportSchedule).toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Configuração salva!')
+    wrapper.unmount()
   })
 })

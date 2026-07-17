@@ -4,6 +4,7 @@ import multer from 'multer'
 import { withTenant } from '../db/rls.js'
 import { requireAuth, requireTenant } from '../middleware/auth.js'
 import { uploadChatMedia } from '../services/mediaStorage.js'
+import { logAudit } from '../services/usage.js'
 
 const ALLOWED_MIMETYPES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif',
@@ -186,6 +187,7 @@ followupsRouter.patch('/:id', async (req, res) => {
       return { sequence, steps }
     })
     if (!result) return res.status(404).json({ error: 'Acompanhamento não encontrado.' })
+    await logAudit(req.user.tenantId, req.user.id, 'followup', 'update', req.params.id, { name: parsed.data.name })
     res.json(result)
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -212,6 +214,7 @@ followupsRouter.delete('/:id', async (req, res) => {
     if (blocked) {
       return res.status(400).json({ error: 'Não é possível excluir uma sequência com contatos inscritos. Duplique-a ou remova as inscrições antes.' })
     }
+    await logAudit(req.user.tenantId, req.user.id, 'followup', 'delete', req.params.id)
     res.json({ deleted: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

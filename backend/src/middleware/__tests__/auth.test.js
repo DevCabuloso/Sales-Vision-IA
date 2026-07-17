@@ -205,6 +205,47 @@ describe('middleware/auth', () => {
       requirePermission('leads')(req, res, next)
       expect(res.status).toHaveBeenCalledWith(403)
     })
+
+    it('formato por ação: chama next() quando a área tem a ação específica liberada', () => {
+      const req = { user: { role: 'agent', isRestricted: true, permissions: { leads: { view: true, create: false, edit: false, delete: false } } } }
+      const res = makeRes()
+      const next = vi.fn()
+      requirePermission('leads', 'view')(req, res, next)
+      expect(next).toHaveBeenCalled()
+    })
+
+    it('formato por ação: retorna 403 quando a área existe mas a ação específica está desligada', () => {
+      const req = { user: { role: 'agent', isRestricted: true, permissions: { leads: { view: true, create: false, edit: false, delete: false } } } }
+      const res = makeRes()
+      const next = vi.fn()
+      requirePermission('leads', 'delete')(req, res, next)
+      expect(res.status).toHaveBeenCalledWith(403)
+      expect(next).not.toHaveBeenCalled()
+    })
+
+    it('aceita um array de áreas e libera se QUALQUER uma delas tiver a ação (comportamento leads/kanban)', () => {
+      const req = {
+        user: {
+          role: 'agent', isRestricted: true,
+          permissions: {
+            leads: { view: false, create: false, edit: false, delete: false },
+            kanban: { view: true, create: false, edit: false, delete: false },
+          },
+        },
+      }
+      const res = makeRes()
+      const next = vi.fn()
+      requirePermission(['leads', 'kanban'], 'view')(req, res, next)
+      expect(next).toHaveBeenCalled()
+    })
+
+    it('compatibilidade: área ainda no formato booleano antigo (true) libera qualquer ação', () => {
+      const req = { user: { role: 'agent', isRestricted: true, permissions: { chat: true } } }
+      const res = makeRes()
+      const next = vi.fn()
+      requirePermission('chat', 'delete')(req, res, next)
+      expect(next).toHaveBeenCalled()
+    })
   })
 
   describe('invalidateUserCache', () => {

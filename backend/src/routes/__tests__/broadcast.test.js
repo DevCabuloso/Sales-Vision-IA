@@ -54,7 +54,7 @@ describe('routes/broadcast', () => {
   })
 
   it('exige a permissão "broadcast" (enforcement de operador restrito) em toda a rota', () => {
-    expect(mockState.permCalls).toContainEqual(['broadcast'])
+    expect(mockState.permCalls).toContainEqual(['broadcast', 'view'])
   })
 
   describe('POST /campaigns', () => {
